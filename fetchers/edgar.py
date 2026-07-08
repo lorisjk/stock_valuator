@@ -1,6 +1,7 @@
 import os
 import json
 import requests
+from datetime import date
 
 
 def fetch_or_cache(url: str, cache_path: str, headers: dict) -> dict:
@@ -38,26 +39,22 @@ def get_company_info(ticker: str, cik : str, user_agent: str) -> dict:
     )
 
 def extract_annual_values(concept_data: dict) -> list[dict]:
-    # Zwischenspeicher als DICT (nicht Liste!), weil wir pro end_date
-    # gezielt nachschlagen und ggf. überschreiben wollen - das geht
-    # nur mit einem Dict, das end_date als Key nutzt.
     annual_values = {}
 
     for item in concept_data.get("units", {}).get("USD", []):
-        # Nur Jahreswerte behalten, keine Quartalswerte
-        if item.get("fp") == "FY":
-            end_date = item["end"]
+        # Kein "start" vorhanden? -> Stichtagswert (z.B. Bilanzposition), kein Zeitraum, überspringen
+        if "start" not in item:
+            continue
 
-            # Zwei Fälle, in denen wir den aktuellen Eintrag übernehmen:
-            # (a) end_date ist komplett neu -> auf jeden Fall aufnehmen
-            # (b) end_date existiert schon, aber item wurde SPÄTER
-            #     eingereicht (filed) -> das ist die korrigierte/
-            #     aktuellere Fassung, die alte überschreiben
+        start = date.fromisoformat(item["start"])
+        end = date.fromisoformat(item["end"])
+        days_diff = (end - start).days
+
+        if item.get("fp") == "FY" and 350 <= days_diff <= 380:
+            end_date = item["end"]
             if end_date not in annual_values or item["filed"] > annual_values[end_date]["filed"]:
                 annual_values[end_date] = {"value": item["val"], "filed": item["filed"]}
 
-    # Am Ende das Dict wieder in eine flache Liste von Dicts umwandeln,
-    # weil das die Form ist, die wir später gut in ein DataFrame packen können.
     return [
         {"end": end, "value": data["value"], "filed": data["filed"]}
         for end, data in annual_values.items()
