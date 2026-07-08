@@ -17,9 +17,15 @@ def fetch_or_cache(url: str, cache_path: str, headers: dict) -> dict:
     return data
 
 
-mapping = fetch_or_cache(
-    url="https://www.sec.gov/files/company_tickers.json",
-    cache_path="cache/ticker_mapping.json",
-    headers={"User-Agent": "Loris loris2006@gmx.de"}
-)
-print(mapping)
+def build_ticker_to_cik(mapping: dict) -> dict:
+    cik_mapping = {}
+    for entry in mapping.values():
+        cik_mapping[entry["ticker"]] = str(entry["cik_str"]).zfill(10)
+    return cik_mapping
+
+
+def get_cik(ticker: str, cik_mapping: dict) -> str:
+    if ticker not in cik_mapping:
+        raise ValueError(f"Ticker {ticker} not found in mapping.")
+    return cik_mapping[ticker]
+ 
