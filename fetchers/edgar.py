@@ -2,6 +2,7 @@ import os
 import json
 import requests
 
+
 def fetch_or_cache(url: str, cache_path: str, headers: dict) -> dict:
     if os.path.exists(cache_path):
         with open(cache_path, "r") as f:
@@ -29,3 +30,35 @@ def get_cik(ticker: str, cik_mapping: dict) -> str:
         raise ValueError(f"Ticker {ticker} not found in mapping.")
     return cik_mapping[ticker]
  
+def get_company_info(ticker: str, cik : str, user_agent: str) -> dict:
+    return fetch_or_cache(
+        url=f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json",
+        cache_path=f"cache/{ticker}_company_info.json",
+        headers={"User-Agent": user_agent}
+    )
+
+def extract_annual_values(concept_data: dict) -> list[dict]:
+    # Zwischenspeicher als DICT (nicht Liste!), weil wir pro end_date
+    # gezielt nachschlagen und ggf. überschreiben wollen - das geht
+    # nur mit einem Dict, das end_date als Key nutzt.
+    annual_values = {}
+
+    for item in concept_data.get("units", {}).get("USD", []):
+        # Nur Jahreswerte behalten, keine Quartalswerte
+        if item.get("fp") == "FY":
+            end_date = item["end"]
+
+            # Zwei Fälle, in denen wir den aktuellen Eintrag übernehmen:
+            # (a) end_date ist komplett neu -> auf jeden Fall aufnehmen
+            # (b) end_date existiert schon, aber item wurde SPÄTER
+            #     eingereicht (filed) -> das ist die korrigierte/
+            #     aktuellere Fassung, die alte überschreiben
+            if end_date not in annual_values or item["filed"] > annual_values[end_date]["filed"]:
+                annual_values[end_date] = {"value": item["val"], "filed": item["filed"]}
+
+    # Am Ende das Dict wieder in eine flache Liste von Dicts umwandeln,
+    # weil das die Form ist, die wir später gut in ein DataFrame packen können.
+    return [
+        {"end": end, "value": data["value"], "filed": data["filed"]}
+        for end, data in annual_values.items()
+    ]
