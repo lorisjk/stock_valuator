@@ -51,6 +51,16 @@ CONCEPT_CANDIDATES = {
     "point_in_time": True,
     "mode": "fallback",
     },
+     "DepreciationAndAmortization": {
+        "tags": [ "DepreciationDepletionAndAmortization", "DepreciationAndAmortization", "Depreciation" ],
+        "point_in_time": False,
+        "mode": "fallback",
+    },
+    "DividendsPerShare": {
+    "tags": [ "CommonStockDividendsPerShareDeclared", "CommonStockDividendsPerShareCashPaid" ],
+    "point_in_time": False,
+    "mode": "fallback",
+    }
 }
 
 

@@ -17,7 +17,7 @@ def main():
     for ticker in TICKERS:
         cik = get_cik(ticker, cik_mapping)
         company_info = get_company_info(ticker, cik, EDGAR_USER_AGENT)
-
+        
         df = build_dataframe(ticker, company_info, CONCEPT_CANDIDATES)
         all_dfs.append(df)
 
@@ -26,6 +26,7 @@ def main():
     if not duplicates.empty:
         print("Warnung: Duplikate gefunden!")
         print(duplicates)
+    print(final_df.groupby(["ticker", "concept"]).size())
 
     os.makedirs(DATA_DIR, exist_ok=True)
     output_path = os.path.join(DATA_DIR, "historical_facts.csv")
