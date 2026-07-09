@@ -1,5 +1,7 @@
 from fetchers.edgar import extract_annual_values, fetch_or_cache, build_ticker_to_cik, get_cik, get_company_info
-from config import EDGAR_USER_AGENT, TICKERS
+from parsers.parse_edgar import build_dataframe, extract_merged_annual_values
+from config import EDGAR_USER_AGENT, TICKERS, CONCEPT_CANDIDATES
+import pandas as pd
 
 
 def main():
@@ -10,12 +12,20 @@ def main():
     )
     cik_mapping = build_ticker_to_cik(mapping)
 
+    all_dfs = []
     for ticker in TICKERS:
         cik = get_cik(ticker, cik_mapping)
         company_info = get_company_info(ticker, cik, EDGAR_USER_AGENT)
-        net_income = company_info["facts"]["us-gaap"]["NetIncomeLoss"]
-        result = extract_annual_values(net_income)
-        for r in result:
-            print(r)
+        df = build_dataframe(ticker, company_info, CONCEPT_CANDIDATES)
+        all_dfs.append(df)
+
+    final_df = pd.concat(all_dfs, ignore_index=True)
+    duplicates = df[df.duplicated(subset=["ticker", "concept", "end"], keep=False)]
+    if not duplicates.empty:
+        print("Warnung: Duplikate gefunden!")
+        print(duplicates)
+    print(final_df.head(50))
+
+
 if __name__ == "__main__":
     main()
