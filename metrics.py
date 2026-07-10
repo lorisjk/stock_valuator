@@ -92,3 +92,9 @@ def calculate_sum_from_dfs(
     )
 
     return df_merged[["ticker", "end", result_name]]
+
+def get_latest_value(df: pd.DataFrame, concept: str) -> pd.DataFrame:
+    filtered_df = df[df["concept"] == concept]
+    latest = filtered_df.loc[filtered_df.groupby("ticker")["end"].idxmax()]
+    return latest[["ticker", "end", "value"]]
+

@@ -1,7 +1,8 @@
 from fetchers.edgar import extract_annual_values, fetch_or_cache, build_ticker_to_cik, get_cik, get_company_info
+from fetchers.yfinance_fetcher import get_current_price_and_shares, get_price_history
 from parsers.parse_edgar import build_dataframe, extract_merged_annual_values
 from config import EDGAR_USER_AGENT, TICKERS, CONCEPT_CANDIDATES, DATA_DIR
-from metrics import calculate_yoy_growth, calculate_ratio, calculate_difference, calculate_ratio_from_dfs, calculate_sum_from_dfs
+from metrics import calculate_yoy_growth, calculate_ratio, calculate_difference, calculate_ratio_from_dfs, calculate_sum_from_dfs, get_latest_value
 import os
 import pandas as pd
 
@@ -27,7 +28,7 @@ def main():
     if not duplicates.empty:
         print("Warnung: Duplikate gefunden!")
         print(duplicates)
-    #print(final_df.groupby(["ticker", "concept"]).size())
+
 
     os.makedirs(DATA_DIR, exist_ok=True)
     output_path = os.path.join(DATA_DIR, "historical_facts.csv")
@@ -45,7 +46,34 @@ def main():
     fcf_margin = calculate_ratio_from_dfs(fcf, final_df[final_df["concept"] == "Revenue"][["ticker", "end", "value"]], "fcf", "value", "fcf_margin" )
     net_debt_to_ebitda = calculate_ratio_from_dfs(net_debt, ebitda, "net_debt", "ebitda", "net_debt_to_ebitda")
     rule_of_40 = calculate_sum_from_dfs(revenue_growth, fcf_margin, "yoy_growth", "fcf_margin", "rule_of_40")
-    print(rule_of_40)
+
+    shares_outstanding_historical = calculate_ratio(final_df, "NetIncomeLoss", "EPS", "shares_outstanding")
+    
+    price_rows = []
+    for ticker in TICKERS:
+        price_data = get_current_price_and_shares(ticker)
+        price_data["ticker"] = ticker
+        price_rows.append(price_data)
+    price_df = pd.DataFrame(price_rows)
+   
+    price_histories = []
+    for ticker in TICKERS:
+        price_histories.append(get_price_history(ticker))
+    price_history_df = pd.concat(price_histories, ignore_index=True)
+   
+    price_history_df["date"] = price_history_df["date"].dt.tz_localize(None).astype("datetime64[ns]")
+    final_df["end"] = pd.to_datetime(final_df["end"]).astype("datetime64[ns]")
+
+    final_df_with_price = pd.merge_asof(
+        final_df.sort_values("end"),
+        price_history_df.sort_values("date"),
+        left_on="end",
+        right_on="date",
+        by="ticker",
+        direction="backward"
+    )
+
+    print(final_df_with_price.head(20))
 
 
 if __name__ == "__main__":
