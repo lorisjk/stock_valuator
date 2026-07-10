@@ -1,7 +1,7 @@
 from fetchers.edgar import extract_annual_values, fetch_or_cache, build_ticker_to_cik, get_cik, get_company_info
 from parsers.parse_edgar import build_dataframe, extract_merged_annual_values
 from config import EDGAR_USER_AGENT, TICKERS, CONCEPT_CANDIDATES, DATA_DIR
-from metrics import calculate_yoy_growth, calculate_ratio
+from metrics import calculate_yoy_growth, calculate_ratio, calculate_difference, calculate_ratio_from_dfs, calculate_sum_from_dfs
 import os
 import pandas as pd
 
@@ -36,7 +36,17 @@ def main():
     revenue_growth = calculate_yoy_growth(final_df, "Revenue")
     income_growth = calculate_yoy_growth(final_df, "NetIncomeLoss")
     operating_margin = calculate_ratio(final_df, "OperatingIncomeLoss", "Revenue", "operating_margin")
-    print(operating_margin)
-    
+    roe = calculate_ratio(final_df, "NetIncomeLoss", "StockholdersEquity", "roe")
+    fcf = calculate_difference(final_df, "OperatingCashFlow", "Capex", "fcf", "-")
+    ebitda = calculate_difference(final_df, "OperatingIncomeLoss", "DepreciationAndAmortization", "ebitda", "+")
+    net_debt = calculate_difference(final_df, "LongTermDebt", "CashAndEquivalents", "net_debt", "-")
+    debt_to_equity = calculate_ratio(final_df, "LongTermDebt", "StockholdersEquity", "debt_to_equity")
+    payout_ratio = calculate_ratio(final_df, "DividendsPerShare", "EPS", "payout_ratio")
+    fcf_margin = calculate_ratio_from_dfs(fcf, final_df[final_df["concept"] == "Revenue"][["ticker", "end", "value"]], "fcf", "value", "fcf_margin" )
+    net_debt_to_ebitda = calculate_ratio_from_dfs(net_debt, ebitda, "net_debt", "ebitda", "net_debt_to_ebitda")
+    rule_of_40 = calculate_sum_from_dfs(revenue_growth, fcf_margin, "yoy_growth", "fcf_margin", "rule_of_40")
+    print(rule_of_40)
+
+
 if __name__ == "__main__":
     main()

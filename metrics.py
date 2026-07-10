@@ -30,3 +30,65 @@ def calculate_ratio(df: pd.DataFrame, numerator_concept: str, denominator_concep
     df_merged[result_name] = df_merged[numerator_col] / df_merged[denominator_col]
     
     return df_merged[["ticker", "end", result_name]]
+
+def calculate_difference(df : pd.DataFrame, variable_1_concept : str, variable_2_concept : str , result_name : str, sign : str) -> pd.DataFrame:
+    filtered_variable_1_df = df[df["concept"] == variable_1_concept].copy()
+    filtered_variable_2_df = df[df["concept"] == variable_2_concept].copy()
+    
+    df_merged = pd.merge(
+        filtered_variable_1_df, filtered_variable_2_df,
+        on=["ticker", "end"],
+        suffixes=(f"_{variable_1_concept}", f"_{variable_2_concept}")
+    )
+    
+    var1_col = f"value_{variable_1_concept}"
+    var2_col = f"value_{variable_2_concept}"
+    if sign == "+": 
+        df_merged[result_name] = df_merged[var1_col] + df_merged[var2_col]
+    
+    else: 
+        df_merged[result_name] = df_merged[var1_col] - df_merged[var2_col]
+    
+    return df_merged[["ticker", "end", result_name]]
+
+def calculate_ratio_from_dfs(
+    numerator_df: pd.DataFrame,
+    denominator_df: pd.DataFrame,
+    numerator_column: str,
+    denominator_column: str,
+    result_name: str,
+) -> pd.DataFrame:
+    
+    df_merged = pd.merge(
+        numerator_df,
+        denominator_df,
+        on=["ticker", "end"],
+    )
+    
+    df_merged[result_name] = (
+        df_merged[numerator_column] /
+        df_merged[denominator_column]
+    )
+    
+    return df_merged[["ticker", "end", result_name]]
+
+def calculate_sum_from_dfs(
+    df1: pd.DataFrame,
+    df2: pd.DataFrame,
+    column1: str,
+    column2: str,
+    result_name: str,
+) -> pd.DataFrame:
+
+    df_merged = pd.merge(
+        df1,
+        df2,
+        on=["ticker", "end"],
+    )
+
+    df_merged[result_name] = (
+        df_merged[column1] +
+        df_merged[column2]
+    )
+
+    return df_merged[["ticker", "end", result_name]]
