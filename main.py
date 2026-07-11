@@ -49,7 +49,7 @@ def main():
     os.makedirs(DATA_DIR, exist_ok=True)
     output_path = os.path.join(DATA_DIR, f"{PERIOD}_facts.csv")
     final_df.to_csv(output_path, index=False)
-
+    
     print("=" * 80)
     print(f"PERIOD = {PERIOD}")
     print("=" * 80)
@@ -62,7 +62,7 @@ def main():
                 & (final_df["concept"] == "Revenue")
             ][["end", "value"]].tail(12)
         )
-
+    
     return
 
     revenue_growth = calculate_yoy_growth(final_df, "Revenue")
