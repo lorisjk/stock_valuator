@@ -98,3 +98,12 @@ def get_latest_value(df: pd.DataFrame, concept: str) -> pd.DataFrame:
     latest = filtered_df.loc[filtered_df.groupby("ticker")["end"].idxmax()]
     return latest[["ticker", "end", "value"]]
 
+def calculate_historical_pe(df_with_price: pd.DataFrame) -> pd.DataFrame:
+    eps_df = df_with_price[df_with_price["concept"] == "EPS"].copy()
+    eps_df["pe_ratio"] = eps_df["close"] / eps_df["value"]
+    return eps_df[["ticker", "end", "pe_ratio"]]
+
+def calculate_rolling_average(df: pd.DataFrame, value_col: str, window: int, result_name: str) -> pd.DataFrame:
+    df = df.sort_values(["ticker", "end"]).copy()
+    df[result_name] = df.groupby("ticker")[value_col].rolling(window=window).mean().reset_index(level=0, drop=True)
+    return df[["ticker", "end", result_name]]

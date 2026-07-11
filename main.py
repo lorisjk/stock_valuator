@@ -1,8 +1,17 @@
 from fetchers.edgar import extract_annual_values, fetch_or_cache, build_ticker_to_cik, get_cik, get_company_info
 from fetchers.yfinance_fetcher import get_current_price_and_shares, get_price_history
-from parsers.parse_edgar import build_dataframe, extract_merged_annual_values
-from config import EDGAR_USER_AGENT, TICKERS, CONCEPT_CANDIDATES, DATA_DIR
-from metrics import calculate_yoy_growth, calculate_ratio, calculate_difference, calculate_ratio_from_dfs, calculate_sum_from_dfs, get_latest_value
+from parsers.parse_edgar import build_dataframe
+from config import EDGAR_USER_AGENT, TICKERS, CONCEPT_CANDIDATES, DATA_DIR, PERIOD
+from metrics import (
+    calculate_yoy_growth,
+    calculate_ratio,
+    calculate_difference,
+    calculate_ratio_from_dfs,
+    calculate_sum_from_dfs,
+    get_latest_value,
+    calculate_historical_pe,
+    calculate_rolling_average,
+)
 import os
 import pandas as pd
 
@@ -19,20 +28,42 @@ def main():
     for ticker in TICKERS:
         cik = get_cik(ticker, cik_mapping)
         company_info = get_company_info(ticker, cik, EDGAR_USER_AGENT)
-        
-        df = build_dataframe(ticker, company_info, CONCEPT_CANDIDATES)
+
+        df = build_dataframe(
+            ticker,
+            company_info,
+            CONCEPT_CANDIDATES,
+            period=PERIOD,
+        )
         all_dfs.append(df)
 
     final_df = pd.concat(all_dfs, ignore_index=True)
-    duplicates = final_df[final_df.duplicated(subset=["ticker", "concept", "end"], keep=False)]
+
+    duplicates = final_df[
+        final_df.duplicated(subset=["ticker", "concept", "end"], keep=False)
+    ]
     if not duplicates.empty:
         print("Warnung: Duplikate gefunden!")
         print(duplicates)
 
-
     os.makedirs(DATA_DIR, exist_ok=True)
-    output_path = os.path.join(DATA_DIR, "historical_facts.csv")
+    output_path = os.path.join(DATA_DIR, f"{PERIOD}_facts.csv")
     final_df.to_csv(output_path, index=False)
+
+    print("=" * 80)
+    print(f"PERIOD = {PERIOD}")
+    print("=" * 80)
+
+    for ticker in TICKERS:
+        print(f"\n{ticker} Revenue:")
+        print(
+            final_df[
+                (final_df["ticker"] == ticker)
+                & (final_df["concept"] == "Revenue")
+            ][["end", "value"]].tail(12)
+        )
+
+    return
 
     revenue_growth = calculate_yoy_growth(final_df, "Revenue")
     income_growth = calculate_yoy_growth(final_df, "NetIncomeLoss")
@@ -43,24 +74,53 @@ def main():
     net_debt = calculate_difference(final_df, "LongTermDebt", "CashAndEquivalents", "net_debt", "-")
     debt_to_equity = calculate_ratio(final_df, "LongTermDebt", "StockholdersEquity", "debt_to_equity")
     payout_ratio = calculate_ratio(final_df, "DividendsPerShare", "EPS", "payout_ratio")
-    fcf_margin = calculate_ratio_from_dfs(fcf, final_df[final_df["concept"] == "Revenue"][["ticker", "end", "value"]], "fcf", "value", "fcf_margin" )
-    net_debt_to_ebitda = calculate_ratio_from_dfs(net_debt, ebitda, "net_debt", "ebitda", "net_debt_to_ebitda")
-    rule_of_40 = calculate_sum_from_dfs(revenue_growth, fcf_margin, "yoy_growth", "fcf_margin", "rule_of_40")
+    fcf_margin = calculate_ratio_from_dfs(
+        fcf,
+        final_df[final_df["concept"] == "Revenue"][["ticker", "end", "value"]],
+        "fcf",
+        "value",
+        "fcf_margin",
+    )
+    net_debt_to_ebitda = calculate_ratio_from_dfs(
+        net_debt,
+        ebitda,
+        "net_debt",
+        "ebitda",
+        "net_debt_to_ebitda",
+    )
+    rule_of_40 = calculate_sum_from_dfs(
+        revenue_growth,
+        fcf_margin,
+        "yoy_growth",
+        "fcf_margin",
+        "rule_of_40",
+    )
 
-    shares_outstanding_historical = calculate_ratio(final_df, "NetIncomeLoss", "EPS", "shares_outstanding")
-    
+    shares_outstanding_historical = calculate_ratio(
+        final_df,
+        "NetIncomeLoss",
+        "EPS",
+        "shares_outstanding",
+    )
+
+    shares_outstanding_long = shares_outstanding_historical[
+        ["ticker", "end", "shares_outstanding"]
+    ].rename(columns={"shares_outstanding": "value"})
+    shares_outstanding_long["concept"] = "SharesOutstanding"
+    final_df = pd.concat([final_df, shares_outstanding_long], ignore_index=True)
+
     price_rows = []
     for ticker in TICKERS:
         price_data = get_current_price_and_shares(ticker)
         price_data["ticker"] = ticker
         price_rows.append(price_data)
     price_df = pd.DataFrame(price_rows)
-   
+
     price_histories = []
     for ticker in TICKERS:
         price_histories.append(get_price_history(ticker))
     price_history_df = pd.concat(price_histories, ignore_index=True)
-   
+
     price_history_df["date"] = price_history_df["date"].dt.tz_localize(None).astype("datetime64[ns]")
     final_df["end"] = pd.to_datetime(final_df["end"]).astype("datetime64[ns]")
 
@@ -70,10 +130,12 @@ def main():
         left_on="end",
         right_on="date",
         by="ticker",
-        direction="backward"
+        direction="backward",
     )
 
-    print(final_df_with_price.head(20))
+    historical_pe = calculate_historical_pe(final_df_with_price)
+    rolling_pe = calculate_rolling_average(historical_pe, "pe_ratio", 5, "avg_pe_5y")
+    print(rolling_pe)
 
 
 if __name__ == "__main__":
