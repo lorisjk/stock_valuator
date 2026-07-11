@@ -13,7 +13,9 @@ from metrics import (
     calculate_rolling_average,
     calculate_ttm,
     get_latest_row,
+    to_long_format
 )
+
 import os
 import pandas as pd
 
@@ -121,12 +123,24 @@ def main():
     eps_ttm = calculate_ttm(final_df, "EPS", "eps_ttm")
     latest_eps_ttm = get_latest_row(eps_ttm)
 
+    ebitda_ttm = calculate_ttm(ebitda.rename(columns={"ebitda": "value"}).assign(concept="ebitda"), "ebitda", "ebitda_ttm")
+    latest_ebitda_ttm = get_latest_row(ebitda_ttm)
+
     fcf_ttm = calculate_ttm(fcf.rename(columns={"fcf": "value"}).assign(concept="fcf"), "fcf", "fcf_ttm")
     latest_fcf_ttm = get_latest_row(fcf_ttm)
 
+    revenue_ttm = calculate_ttm(final_df, "Revenue", "revenue_ttm")
+    latest_revenue_ttm = get_latest_row(revenue_ttm)
+
+    dividends_ttm = calculate_ttm(final_df, "DividendsPerShare", "dividends_ttm")
+    latest_dividends_ttm = get_latest_row(dividends_ttm)
+
+    latest_revenue_growth = get_latest_row(revenue_growth)
     latest_equity = get_latest_value(final_df, "StockholdersEquity").rename(columns={"value": "equity"})
     latest_debt = get_latest_value(final_df, "LongTermDebt").rename(columns={"value": "debt"})
     latest_cash = get_latest_value(final_df, "CashAndEquivalents").rename(columns={"value": "cash"})
+
+    
 
     price_rows = []
     for ticker in TICKERS:
@@ -146,20 +160,58 @@ def main():
     snapshot = pd.merge(snapshot, latest_fcf_ttm[["ticker", "fcf_ttm"]], on="ticker")
     snapshot["pfcf_ttm"] = snapshot["market_cap"] / snapshot["fcf_ttm"]
 
+    
+
     snapshot = pd.merge(snapshot, latest_debt[["ticker", "debt"]], on="ticker")
     snapshot = pd.merge(snapshot, latest_cash[["ticker", "cash"]], on="ticker")
     snapshot["net_debt"] = snapshot["debt"] - snapshot["cash"]
     snapshot["ev"] = snapshot["market_cap"] + snapshot["net_debt"]
 
+    snapshot = pd.merge(snapshot, latest_ebitda_ttm[["ticker", "ebitda_ttm"]], on="ticker")
+    snapshot["ev_ebitda"] = snapshot["ev"] / snapshot["ebitda_ttm"]
+
+    snapshot = pd.merge(snapshot, latest_revenue_ttm[["ticker", "revenue_ttm"]], on="ticker")
+    snapshot["ev_sales"] = snapshot["ev"] / snapshot["revenue_ttm"]
+
+    snapshot = pd.merge(snapshot, latest_revenue_growth[["ticker", "yoy_growth"]], on="ticker")
+    snapshot["peg_ratio"] = snapshot["pe_ttm"] / (snapshot["yoy_growth"] * 100)
+    
+    snapshot = pd.merge(snapshot, latest_dividends_ttm[["ticker", "dividends_ttm"]], on="ticker")
+    snapshot["dividend_yield"] = snapshot["dividends_ttm"] / snapshot["price"]
+
     # Aktuellster 5-Jahres-Oe-P/E pro Ticker, aus der rollierenden Reihe
     current_avg_pe_5y = get_latest_row(rolling_pe)
     snapshot = pd.merge(snapshot, current_avg_pe_5y[["ticker", "avg_pe_5y"]], on="ticker")
 
-    print(snapshot)
-
     snapshot_path = os.path.join(DATA_DIR, "current_snapshot.csv")
     snapshot.to_csv(snapshot_path, index=False)
+    
 
+    metric_rows = []
+    revenue_growth_long = to_long_format(revenue_growth, "yoy_growth", "revenue_yoy_growth")
+    metric_rows.append(revenue_growth_long)
+    income_growth_long = to_long_format(income_growth, "yoy_growth", "income_yoy_growth")
+    metric_rows.append(income_growth_long)
+    operating_margin_long = to_long_format(operating_margin, "operating_margin", "operating_margin")
+    metric_rows.append(operating_margin_long)
+    roe_long = to_long_format(roe, "roe", "roe")
+    metric_rows.append(roe_long)
+    debt_to_equity_long = to_long_format(debt_to_equity, "debt_to_equity", "debt_to_equity")
+    metric_rows.append(debt_to_equity_long)
+    payout_ratio_long = to_long_format(payout_ratio, "payout_ratio", "payout_ratio")
+    metric_rows.append(payout_ratio_long)
+    fcf_margin_long = to_long_format(fcf_margin, "fcf_margin", "fcf_margin")
+    metric_rows.append(fcf_margin_long)
+    net_debt_to_ebitda_long = to_long_format(net_debt_to_ebitda, "net_debt_to_ebitda", "net_debt_to_ebitda")
+    metric_rows.append(net_debt_to_ebitda_long)
+    rule_of_40_long = to_long_format(rule_of_40, "rule_of_40", "rule_of_40")
+    metric_rows.append(rule_of_40_long)
+    metrics_long = pd.concat(metric_rows, ignore_index=True)
+
+    metrics_long_path = os.path.join(DATA_DIR, "metrics_long.csv") 
+    metrics_long.to_csv(metrics_long_path, index=False)
+    
+    
 
 if __name__ == "__main__":
     main()

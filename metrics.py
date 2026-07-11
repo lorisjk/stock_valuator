@@ -131,3 +131,15 @@ def get_latest_row(df: pd.DataFrame, date_col: str = "end") -> pd.DataFrame:
     bereits abgeleitete DataFrames (z.B. das Ergebnis von calculate_ttm).
     """
     return df.loc[df.groupby("ticker")[date_col].idxmax()]
+"""
+revenue_growth_long = revenue_growth[["ticker", "end", "yoy_growth"]].rename(columns={"yoy_growth" : "value"})
+    revenue_growth_long["concept"] = "revenue_yoy_growth"   
+    metric_rows.append(revenue_growth_long)
+"""
+def to_long_format(df : pd.DataFrame, value_col: str, concept_name: str) -> pd.DataFrame: 
+    
+    filtered_df_long = df[["ticker", "end", value_col]].copy().rename(columns={value_col : "value"})
+    filtered_df_long ["concept"] = concept_name
+    return filtered_df_long[["ticker", "end", "value","concept"]]
+
+
