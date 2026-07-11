@@ -1,19 +1,17 @@
 import pandas as pd
 
-def calculate_yoy_growth(df: pd.DataFrame, concept: str) -> pd.DataFrame:
-    # 1. Nur Zeilen für das gewünschte concept behalten
+def calculate_growth(df: pd.DataFrame, concept: str, periods: int, result_name: str) -> pd.DataFrame:
+    """
+    Verallgemeinerte Wachstumsrate: periods=1 vergleicht mit der unmittelbar
+    vorherigen Periode (bei Jahresdaten = YoY, bei Quartalsdaten = QoQ,
+    saisonal verzerrt). periods=4 vergleicht bei Quartalsdaten mit demselben
+    Quartal vor einem Jahr (echtes, saisonbereinigtes YoY-Wachstum).
+    """
     filtered_df = df[df["concept"] == concept].copy()
-    
-    # 2. Nach ticker UND end sortieren (wichtig für .shift()!)
     filtered_df = filtered_df.sort_values(["ticker", "end"])
-    
-    # 3. Pro ticker den Vorjahreswert per .shift() holen
-    filtered_df["prev_value"] = filtered_df.groupby("ticker")["value"].shift(1)
-    
-    # 4. Wachstumsrate berechnen
-    filtered_df["yoy_growth"] = filtered_df["value"] / filtered_df["prev_value"] - 1
-    
-    return filtered_df[["ticker", "end", "value", "yoy_growth"]]
+    filtered_df["prev_value"] = filtered_df.groupby("ticker")["value"].shift(periods)
+    filtered_df[result_name] = filtered_df["value"] / filtered_df["prev_value"] - 1
+    return filtered_df[["ticker", "end", "value", result_name]]
 
 def calculate_ratio(df: pd.DataFrame, numerator_concept: str, denominator_concept: str, result_name: str) -> pd.DataFrame:
     filtered_numerator_df = df[df["concept"] == numerator_concept].copy()
@@ -107,3 +105,29 @@ def calculate_rolling_average(df: pd.DataFrame, value_col: str, window: int, res
     df = df.sort_values(["ticker", "end"]).copy()
     df[result_name] = df.groupby("ticker")[value_col].rolling(window=window).mean().reset_index(level=0, drop=True)
     return df[["ticker", "end", result_name]]
+
+def calculate_ttm(df: pd.DataFrame, concept: str, result_name: str) -> pd.DataFrame:
+    """
+    TTM (Trailing Twelve Months) = rollierende Summe der letzten 4 Quartale.
+    Nur sinnvoll fuer Zeitraumwerte (Revenue, NetIncomeLoss, EPS, ...),
+    NICHT fuer Bilanzpositionen (die brauchen keine Summierung, siehe get_latest_row).
+    """
+    filtered_df = df[df["concept"] == concept].copy()
+    filtered_df = filtered_df.sort_values(["ticker", "end"])
+    filtered_df[result_name] = (
+        filtered_df.groupby("ticker")["value"]
+        .rolling(window=4)
+        .sum()
+        .reset_index(level=0, drop=True)
+    )
+    return filtered_df[["ticker", "end", result_name]]
+
+
+def get_latest_row(df: pd.DataFrame, date_col: str = "end") -> pd.DataFrame:
+    """
+    Generische Version von get_latest_value: nimmt die neueste Zeile pro
+    ticker, unabhaengig davon, wie die Wert-Spalte heisst. Braucht KEINE
+    "concept"-Spalte, im Unterschied zu get_latest_value - nuetzlich fuer
+    bereits abgeleitete DataFrames (z.B. das Ergebnis von calculate_ttm).
+    """
+    return df.loc[df.groupby("ticker")[date_col].idxmax()]
