@@ -63,14 +63,18 @@ CONCEPT_CANDIDATES = {
     "tags": [ "CommonStockDividendsPerShareDeclared", "CommonStockDividendsPerShareCashPaid" ],
     "point_in_time": False,
     "mode": "fallback",
-    }
+    },
+    "SharesOutstanding": {
+    "tags": ["WeightedAverageNumberOfDilutedSharesOutstanding", "WeightedAverageNumberOfSharesOutstandingBasic"],
+    "point_in_time": True,
+    "mode": "fallback",
+    },
 }
 
 TTM_CONCEPTS = [
     "Revenue",
     "NetIncomeLoss",
     "OperatingIncomeLoss",
-    "EPS",
     "DividendsPerShare",
     "DepreciationAndAmortization",
     "OperatingCashFlow",

@@ -25,8 +25,9 @@ from metrics import (
     get_latest_value,
     get_latest_row,
     to_long_format,
+    add_as_concept
 )
-from figures import plot_fundamentals
+from figures import plot_fundamentals, plot_valuation
 from quality import print_data_quality
 
 import os
@@ -51,7 +52,7 @@ def load_facts() -> pd.DataFrame:
         cik = get_cik(ticker, cik_mapping)
         company_info = get_company_info(ticker, cik, EDGAR_USER_AGENT)
         all_dfs.append(build_dataframe(ticker, company_info, CONCEPT_CANDIDATES, period=PERIOD))
-
+    
     df = pd.concat(all_dfs, ignore_index=True)
     df["end"] = pd.to_datetime(df["end"]).astype("datetime64[ns]")
     return df
@@ -108,7 +109,7 @@ def calculate_all_metrics(facts: pd.DataFrame) -> dict:
     # Margen & Rentabilitaet
     m["operating_margin"] = calculate_ratio(facts, "OperatingIncomeLoss_TTM", "Revenue_TTM", "operating_margin")
     m["roe"] = calculate_ratio(facts, "NetIncomeLoss_TTM", "StockholdersEquity", "roe")
-    m["payout_ratio"] = calculate_ratio(facts, "DividendsPerShare_TTM", "EPS_TTM", "payout_ratio", require_positive_denominator=True)
+    m["payout_ratio"] = calculate_ratio(facts, "DividendsPerShare_TTM", "EPS_TTM_CALC", "payout_ratio", require_positive_denominator=True)
 
     # Bilanz (reine Stichtagswerte - kein TTM)
     m["debt_to_equity"] = calculate_ratio(facts, "LongTermDebt", "StockholdersEquity", "debt_to_equity")
@@ -158,7 +159,7 @@ def calculate_historical_pe(facts: pd.DataFrame, price_history: pd.DataFrame) ->
     merge_asof mit direction="backward": Bilanzstichtage sind oft keine
     Handelstage (Wochenende), also wird der letzte Kurs davor genommen.
     """
-    eps_ttm = facts[facts["concept"] == "EPS_TTM"][["ticker", "end", "value"]].copy()
+    eps_ttm = facts[facts["concept"] == "EPS_TTM_CALC"][["ticker", "end", "value"]].copy()
     eps_ttm = eps_ttm.rename(columns={"value": "eps_ttm"})
 
     with_price = pd.merge_asof(
@@ -185,7 +186,7 @@ def build_snapshot(facts: pd.DataFrame, metrics: dict, prices: pd.DataFrame, rol
     snap = prices.copy()
 
     # Zeitraum-Groessen: neuester TTM-Wert
-    eps = get_latest_value(facts, "EPS_TTM").rename(columns={"value": "eps_ttm"})
+    eps = get_latest_value(facts, "EPS_TTM_CALC").rename(columns={"value": "eps_ttm"})
     revenue = get_latest_value(facts, "Revenue_TTM").rename(columns={"value": "revenue_ttm"})
     dividends = get_latest_value(facts, "DividendsPerShare_TTM").rename(columns={"value": "dividends_ttm"})
 
@@ -229,6 +230,59 @@ def build_snapshot(facts: pd.DataFrame, metrics: dict, prices: pd.DataFrame, rol
 
     return snap
 
+def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame) -> pd.DataFrame:
+    """
+    Alle Bewertungsmultiples als Zeitreihe (long-format wie metrics_long).
+
+    Anders als der Snapshot (heutiger Kurs) nutzt das hier fuer JEDES Quartal
+    den damaligen Kurs und die damalige Aktienanzahl - sonst waere die
+    historische Marktkapitalisierung mit heutiger Aktienzahl verfaelscht.
+    """
+    needed = [
+        "EPS_TTM_CALC", "Revenue_TTM", "StockholdersEquity", "SharesOutstanding",
+        "LongTermDebt", "CashAndEquivalents", "DividendsPerShare_TTM", "FCF_TTM", "EBITDA_TTM"
+    ]
+
+    # long -> wide: eine Spalte pro Konzept
+    wide = (
+        facts[facts["concept"].isin(needed)]
+        .pivot_table(index=["ticker", "end"], columns="concept", values="value")
+        .reset_index()
+    )
+
+    # historischen Kurs je Quartalsstichtag dranhaengen
+    wide = pd.merge_asof(
+        wide.sort_values("end"),
+        price_history.sort_values("date"),
+        left_on="end",
+        right_on="date",
+        by="ticker",
+        direction="backward",
+    )
+
+    # Basisgroessen
+    wide["market_cap"] = wide["close"] * wide["SharesOutstanding"]
+    wide["net_debt"] = wide["LongTermDebt"] - wide["CashAndEquivalents"]
+    wide["ev"] = wide["market_cap"] + wide["net_debt"]
+
+    # Multiples
+    wide["pe_ratio"] = wide["close"] / wide["EPS_TTM_CALC"].where(wide["EPS_TTM_CALC"] > 0)
+    wide["pb_ratio"] = wide["market_cap"] / wide["StockholdersEquity"].where(wide["StockholdersEquity"] > 0)
+    wide["ev_sales"] = wide["ev"] / wide["Revenue_TTM"].where(wide["Revenue_TTM"] > 0)
+    wide["dividend_yield"] = wide["DividendsPerShare_TTM"].where(wide["DividendsPerShare_TTM"] >= 0) / wide["close"]
+    wide["pfcf_ratio"] = wide["market_cap"] / wide["FCF_TTM"].where(wide["FCF_TTM"] > 0)
+    wide["ev_ebitda"] = wide["ev"] / wide["EBITDA_TTM"].where(wide["EBITDA_TTM"] > 0)
+    
+
+    # wide -> long
+    value_cols = ["pe_ratio", "pb_ratio", "ev_sales", "dividend_yield", "pfcf_ratio", "ev_ebitda"]  
+    long = wide.melt(
+        id_vars=["ticker", "end"],
+        value_vars=value_cols,
+        var_name="concept",
+        value_name="value",
+    )
+    return long.dropna(subset=["value"])
 
 # ---------------------------------------------------------------------------
 # MAIN
@@ -237,12 +291,22 @@ def build_snapshot(facts: pd.DataFrame, metrics: dict, prices: pd.DataFrame, rol
 def main():
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(FIGURE_DIR, exist_ok=True)
-
+    
     # 1. Rohdaten + TTM
     facts = load_facts()
     facts = add_ttm_concepts(facts, TTM_CONCEPTS)
-    print_data_quality(facts)
 
+    eps_ttm = calculate_ratio(facts, "NetIncomeLoss_TTM", "SharesOutstanding", "value")
+    eps_ttm["concept"] = "EPS_TTM_CALC"
+    facts = pd.concat([facts, eps_ttm[["ticker", "end", "concept", "value"]]], ignore_index=True)
+
+
+    metrics = calculate_all_metrics(facts)
+    facts = add_as_concept(facts, metrics["fcf"], "fcf", "FCF_TTM")
+    facts = add_as_concept(facts, metrics["ebitda"], "ebitda", "EBITDA_TTM")
+    
+    print_data_quality(facts)
+    
     duplicates = facts[facts.duplicated(subset=["ticker", "concept", "end"], keep=False)]
     if not duplicates.empty:
         print("WARNUNG: Duplikate gefunden!")
@@ -251,7 +315,7 @@ def main():
     facts.to_csv(os.path.join(DATA_DIR, f"{PERIOD}_facts.csv"), index=False)
 
     # 2. Kennzahlen
-    metrics = calculate_all_metrics(facts)
+    
     metrics_long = build_metrics_long(metrics)
     metrics_long.to_csv(os.path.join(DATA_DIR, "metrics_long.csv"), index=False)
 
@@ -259,16 +323,21 @@ def main():
     price_history = load_price_history()
     prices = load_current_prices()
 
+    # valuation history
+    valuation_history = build_valuation_history(facts, price_history)
+    valuation_history.to_csv(os.path.join(DATA_DIR, "valuation_history.csv"), index=False)
+
     pe_history, rolling_pe = calculate_historical_pe(facts, price_history)
     snapshot = build_snapshot(facts, metrics, prices, rolling_pe)
     snapshot.to_csv(os.path.join(DATA_DIR, "current_snapshot.csv"), index=False)
 
     print(snapshot[["ticker", "price", "pe_ttm", "avg_pe_5y", "pb_ratio", "ev_ebitda", "peg_ratio"]])
-
+    
     # 4. Plots (ein Chart-Set pro Ticker - nie ticker-uebergreifend)
     for ticker in TICKERS:
         plot_fundamentals(ticker, metrics_long, os.path.join(FIGURE_DIR, f"{ticker}_fundamentals.png"))
-
-
+        plot_valuation(ticker, valuation_history, os.path.join(FIGURE_DIR, f"{ticker}_valuation.png"))
+    
+          
 if __name__ == "__main__":
     main()

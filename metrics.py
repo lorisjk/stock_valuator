@@ -164,3 +164,9 @@ def add_ttm_concepts(df: pd.DataFrame, concepts: list[str]) -> pd.DataFrame:
         return df
 
     return pd.concat([df] + ttm_frames, ignore_index=True)
+
+def add_as_concept(facts: pd.DataFrame, df: pd.DataFrame, value_col: str, concept_name: str) -> pd.DataFrame:
+    filtered_df_concept = df[["ticker", "end", value_col]].copy().rename(columns={value_col : "value"})
+    filtered_df_concept ["concept"] = concept_name
+
+    return pd.concat([facts, filtered_df_concept], axis=0, ignore_index=True)
