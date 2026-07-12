@@ -81,7 +81,7 @@ def extract_period_values(concept_data: dict, is_point_in_time: bool = False, pe
             if period == "annual":
                 is_valid = 350 <= days_diff <= 380
             elif period == "quarterly":
-                is_valid = (80 <= days_diff <= 100) or (350 <= days_diff <= 380)
+                is_valid = 80 <= days_diff <= 380
             else:
                 raise ValueError(f"Unbekannter period-Wert: {period}")
 
@@ -103,36 +103,82 @@ def extract_period_values(concept_data: dict, is_point_in_time: bool = False, pe
     return list(values.values())
 
 
-def derive_q4_values(period_values: list[dict]) -> list[dict]:
-    """
-    Leitet Q4 rechnerisch ab: Q4 = FY-Gesamtwert - (Q1 + Q2 + Q3)
+def decumulate_period_values(period_values: list[dict]) -> list[dict]:
+    entries = [v for v in period_values if v.get("start")]
+    if not entries:
+        return []
 
-    WICHTIG: Gruppierung erfolgt NICHT ueber das "fy"-Tag (unzuverlaessig,
-    teils mehrfach vergeben), sondern ueber zeitliche Naehe: fuer jeden
-    Jahres-Kandidaten (~350-380 Tage) werden die drei Quartals-Kandidaten
-    (~80-100 Tage) mit dem unmittelbar davorliegenden end-Datum gesucht.
-    """
-    quarters = [v for v in period_values if v["start"] and 80 <= (date.fromisoformat(v["end"]) - date.fromisoformat(v["start"])).days <= 100]
-    annuals = [v for v in period_values if v["start"] and 350 <= (date.fromisoformat(v["end"]) - date.fromisoformat(v["start"])).days <= 380]
+    quarters = {}   # end-Datum -> echter Quartalswert
+    annuals = []    # volle Jahreswerte (nur fuer Q4-Ableitung im Einzelquartals-Fall)
 
-    result = [{"end": q["end"], "value": q["value"], "filed": q["filed"]} for q in quarters]
-    quarters_sorted = sorted(quarters, key=lambda x: x["end"])
+    # Nach start-Datum gruppieren. Bei KUMULATIVEN Daten (Cashflow-Positionen)
+    # haben alle Perioden eines Geschaeftsjahres denselben start (Jahresbeginn)
+    # und laufen nur unterschiedlich lang. Bei EINZELQUARTALEN (Revenue, GuV)
+    # hat jedes Quartal seinen eigenen start.
+    by_start = {}
+    for v in entries:
+        by_start.setdefault(v["start"], []).append(v)
+
+    for start_str, group in by_start.items():
+        start = date.fromisoformat(start_str)
+        group_sorted = sorted(group, key=lambda x: x["end"])
+
+        prev_value = 0.0
+        prev_days = 0
+        for v in group_sorted:
+            days = (date.fromisoformat(v["end"]) - start).days
+
+            if 350 <= days <= 380:
+                # Volle Jahresperiode: als Jahreswert merken. Falls sie in einer
+                # kumulativen Gruppe steht, ist sie zugleich die letzte YTD-Stufe
+                # -> Q4 ergibt sich als Differenz zur vorigen Stufe.
+                annuals.append({"end": v["end"], "value": v["value"], "filed": v["filed"]})
+                if prev_days > 0 and 80 <= (days - prev_days) <= 100:
+                    quarters[v["end"]] = {
+                        "end": v["end"],
+                        "value": v["value"] - prev_value,
+                        "filed": v["filed"],
+                    }
+                prev_value = v["value"]
+                prev_days = days
+                continue
+
+            # Differenz zur vorherigen Stufe derselben start-Gruppe.
+            # Bei Einzelquartalen ist prev_value=0 (eigene Gruppe) -> Wert bleibt
+            # unveraendert. Bei kumulativen Daten wird korrekt de-kumuliert.
+            quarter_value = v["value"] - prev_value
+            quarter_len = days - prev_days
+
+            if 80 <= quarter_len <= 100:
+                quarters[v["end"]] = {
+                    "end": v["end"],
+                    "value": quarter_value,
+                    "filed": v["filed"],
+                }
+
+            prev_value = v["value"]
+            prev_days = days
+
+    # Q4-Ableitung fuer den EINZELQUARTALS-Fall (dort ist der FY-Wert keine
+    # kumulative Endstufe, sondern ein separater Eintrag): Q4 = FY - (Q1+Q2+Q3).
+    quarters_sorted = sorted(quarters.values(), key=lambda x: x["end"])
 
     for ann in annuals:
+        if ann["end"] in quarters:
+            continue  # schon abgedeckt
+
         ann_end = date.fromisoformat(ann["end"])
         preceding = [
             q for q in quarters_sorted
             if date.fromisoformat(q["end"]) < ann_end
             and (ann_end - date.fromisoformat(q["end"])).days <= 300
-        ]
-        preceding = preceding[-3:]
+        ][-3:]
 
         if len(preceding) == 3:
-            q_sum = sum(q["value"] for q in preceding)
-            q4_value = ann["value"] - q_sum
-            result.append({"end": ann["end"], "value": q4_value, "filed": ann["filed"]})
+            q4 = ann["value"] - sum(q["value"] for q in preceding)
+            quarters[ann["end"]] = {"end": ann["end"], "value": q4, "filed": ann["filed"]}
 
-    return result
+    return sorted(quarters.values(), key=lambda x: x["end"])
 
 
 def extract_quarterly_values(concept_data: dict, is_point_in_time: bool = False) -> list[dict]:
@@ -146,7 +192,7 @@ def extract_quarterly_values(concept_data: dict, is_point_in_time: bool = False)
     if is_point_in_time:
         return [{"end": v["end"], "value": v["value"], "filed": v["filed"]} for v in raw]
     else:
-        return derive_q4_values(raw)
+        return decumulate_period_values(raw)
 
 
 def extract_annual_values(concept_data: dict, is_point_in_time: bool = False) -> list[dict]:

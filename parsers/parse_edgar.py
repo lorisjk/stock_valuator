@@ -83,10 +83,36 @@ def build_dataframe(
                     company_info["facts"]["us-gaap"],
                     cfg["tags"],
                     is_point_in_time=cfg["point_in_time"],
+                    period="quarterly",
                 )
 
             else:
                 raise ValueError("period must be 'annual' or 'quarterly'")
+            
+        elif mode == "fallback_sum": 
+
+            values = extract_merged_values(
+                company_info["facts"]["us-gaap"],
+                cfg["tags"],
+                period=period,
+                is_point_in_time=cfg["point_in_time"],
+            )
+            if not values: 
+                  if period == "annual":
+                    values = extract_summed_annual_values(
+                        company_info["facts"]["us-gaap"],
+                        cfg["fallback_sum_tags"],
+                        is_point_in_time=cfg["point_in_time"],
+                    )
+
+                  elif period == "quarterly":
+                    values = extract_summed_values(
+                        company_info["facts"]["us-gaap"],
+                        cfg["fallback_sum_tags"],
+                        is_point_in_time=cfg["point_in_time"],
+                        period="quarterly",
+                )
+
 
         else:
 

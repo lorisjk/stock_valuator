@@ -10,10 +10,17 @@ def calculate_growth(df: pd.DataFrame, concept: str, periods: int, result_name: 
     filtered_df = df[df["concept"] == concept].copy()
     filtered_df = filtered_df.sort_values(["ticker", "end"])
     filtered_df["prev_value"] = filtered_df.groupby("ticker")["value"].shift(periods)
+
+    # Wachstumsraten sind mathematisch nur sinnvoll, wenn der Vorjahreswert positiv
+    # ist. Bei negativem oder null Basiswert (z.B. NVDA-Verlustjahr 2011) explodiert
+    # die Formel und liefert Werte wie -6300% - das ist kein Signal, sondern Artefakt.
+    filtered_df["prev_value"] = filtered_df["prev_value"].where(filtered_df["prev_value"] > 0)
+
+    filtered_df[result_name] = filtered_df["value"] / filtered_df["prev_value"] - 1
     filtered_df[result_name] = filtered_df["value"] / filtered_df["prev_value"] - 1
     return filtered_df[["ticker", "end", "value", result_name]]
 
-def calculate_ratio(df: pd.DataFrame, numerator_concept: str, denominator_concept: str, result_name: str) -> pd.DataFrame:
+def calculate_ratio(df: pd.DataFrame, numerator_concept: str, denominator_concept: str, result_name: str, require_positive_denominator=False) -> pd.DataFrame:
     filtered_numerator_df = df[df["concept"] == numerator_concept].copy()
     filtered_denominator_df = df[df["concept"] == denominator_concept].copy()
     
@@ -22,9 +29,12 @@ def calculate_ratio(df: pd.DataFrame, numerator_concept: str, denominator_concep
         on=["ticker", "end"],
         suffixes=(f"_{numerator_concept}", f"_{denominator_concept}")
     )
-    
+   
     numerator_col = f"value_{numerator_concept}"
     denominator_col = f"value_{denominator_concept}"
+
+    if require_positive_denominator:
+        df_merged[denominator_col] = df_merged[denominator_col].where(df_merged[denominator_col] > 0)
     df_merged[result_name] = df_merged[numerator_col] / df_merged[denominator_col]
     
     return df_merged[["ticker", "end", result_name]]
@@ -142,4 +152,15 @@ def to_long_format(df : pd.DataFrame, value_col: str, concept_name: str) -> pd.D
     filtered_df_long ["concept"] = concept_name
     return filtered_df_long[["ticker", "end", "value","concept"]]
 
+def add_ttm_concepts(df: pd.DataFrame, concepts: list[str]) -> pd.DataFrame:
+    ttm_frames = []
 
+    for concept in concepts:
+        ttm = calculate_ttm(df, concept, "value")
+        ttm["concept"] = f"{concept}_TTM"
+        ttm_frames.append(ttm[["ticker", "end", "concept", "value"]])
+
+    if not ttm_frames:
+        return df
+
+    return pd.concat([df] + ttm_frames, ignore_index=True)

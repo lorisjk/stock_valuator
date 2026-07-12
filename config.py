@@ -53,18 +53,30 @@ CONCEPT_CANDIDATES = {
     "point_in_time": True,
     "mode": "fallback",
     },
-     "DepreciationAndAmortization": {
-        "tags": [ "DepreciationDepletionAndAmortization", "DepreciationAndAmortization", "Depreciation" ],
+    "DepreciationAndAmortization": {
+        "tags": ["DepreciationDepletionAndAmortization", "DepreciationAndAmortization"],
+        "fallback_sum_tags": ["Depreciation", "AmortizationOfIntangibleAssets"],
         "point_in_time": False,
-        "mode": "fallback",
+        "mode": "fallback_sum",
     },
-    "DividendsPerShare": {
+        "DividendsPerShare": {
     "tags": [ "CommonStockDividendsPerShareDeclared", "CommonStockDividendsPerShareCashPaid" ],
     "point_in_time": False,
     "mode": "fallback",
     }
 }
 
+TTM_CONCEPTS = [
+    "Revenue",
+    "NetIncomeLoss",
+    "OperatingIncomeLoss",
+    "EPS",
+    "DividendsPerShare",
+    "DepreciationAndAmortization",
+    "OperatingCashFlow",
+    "Capex",
+]
 
 CACHE_DIR = "cache"
 DATA_DIR = "data"
+FIGURE_DIR = "figures"
