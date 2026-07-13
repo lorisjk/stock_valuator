@@ -171,10 +171,14 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame) ->
     ]
 
     wide = (
-        facts[facts["concept"].isin(needed)]
-        .pivot_table(index=["ticker", "end"], columns="concept", values="value")
-        .reset_index()
-    )
+    facts[facts["concept"].isin(needed)]
+    .pivot_table(index=["ticker", "end"], columns="concept", values="value")
+    .reset_index()
+)
+
+    for concept in needed:
+        if concept not in wide.columns:
+            wide[concept] = pd.NA
 
     wide = pd.merge_asof(
         wide.sort_values("end"),

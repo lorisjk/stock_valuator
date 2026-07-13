@@ -1,4 +1,4 @@
-TICKERS = ["AAPL", "MSFT", "NVDA"]
+TICKERS = ["NOW"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
