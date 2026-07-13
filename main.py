@@ -46,6 +46,19 @@ def load_facts() -> pd.DataFrame:
         cik = get_cik(ticker, cik_mapping)
         company_info = get_company_info(ticker, cik, EDGAR_USER_AGENT)
         all_dfs.append(build_dataframe(ticker, company_info, CONCEPT_CANDIDATES, period=PERIOD))
+        if ticker == "AMZN":
+            from fetchers.edgar import extract_period_values
+            from datetime import date
+            cd = company_info["facts"]["us-gaap"]["NetCashProvidedByUsedInOperatingActivities"]
+            raw = extract_period_values(cd, is_point_in_time=False, period="quarterly")
+            print("Roh:", len(raw))
+            entries = [v for v in raw if v.get("start")]
+            print("Mit start:", len(entries))
+            lens = {}
+            for v in entries:
+                d = (date.fromisoformat(v["end"]) - date.fromisoformat(v["start"])).days
+                lens[d] = lens.get(d, 0) + 1
+            print("Laengenverteilung:", dict(sorted(lens.items())))
         
     df = pd.concat(all_dfs, ignore_index=True)
     df["end"] = pd.to_datetime(df["end"]).astype("datetime64[ns]")
@@ -155,7 +168,7 @@ def calculate_historical_pe(facts: pd.DataFrame, price_history: pd.DataFrame) ->
         direction="backward",
     )
     with_price["pe_ratio"] = with_price["close"] / with_price["eps_ttm"]
-    
+
     with_price["pe_ratio"] = with_price["pe_ratio"].where(with_price["pe_ratio"] <= 200)
 
     rolling = calculate_rolling_average(with_price, "pe_ratio", 20, "avg_pe_5y")
@@ -290,6 +303,7 @@ def main():
 
     facts = add_as_concept(facts, metrics["fcf"], "fcf", "FCF_TTM")
     facts = add_as_concept(facts, metrics["ebitda"], "ebitda", "EBITDA_TTM")
+    
 
     duplicates = facts[facts.duplicated(subset=["ticker", "concept", "end"], keep=False)]
     if not duplicates.empty:

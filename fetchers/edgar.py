@@ -82,9 +82,11 @@ def extract_period_values(concept_data: dict, is_point_in_time: bool = False, pe
             continue
 
         end_date = item["end"]
-        existing = values.get(end_date)
+        key = (end_date, days_diff) if not is_point_in_time else end_date
+
+        existing = values.get(key)
         if existing is None or item["filed"] > existing["filed"]:
-            values[end_date] = {
+            values[key] = {
                 "end": end_date,
                 "value": item["val"],
                 "filed": item["filed"],
@@ -98,6 +100,20 @@ def extract_period_values(concept_data: dict, is_point_in_time: bool = False, pe
 
 def decumulate_period_values(period_values: list[dict]) -> list[dict]:
     entries = [v for v in period_values if v.get("start")]
+    quarter_starts = set()
+    for v in entries:
+        days = (date.fromisoformat(v["end"]) - date.fromisoformat(v["start"])).days
+        if 80 <= days <= 100:
+            quarter_starts.add(v["start"])
+
+    cleaned = []
+    for v in entries:
+        days = (date.fromisoformat(v["end"]) - date.fromisoformat(v["start"])).days
+        if 350 <= days <= 380 and v["start"] not in quarter_starts:
+            continue
+        cleaned.append(v)
+
+    entries = cleaned
     if not entries:
         return []
 

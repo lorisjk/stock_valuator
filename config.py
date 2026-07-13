@@ -1,4 +1,4 @@
-TICKERS = ["NOW"]
+TICKERS = ["AMZN"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
@@ -68,6 +68,7 @@ CONCEPT_CANDIDATES = {
         "LongTermDebtCurrent",
         "ConvertibleDebtCurrent",
         "ConvertibleNotesPayableCurrent",
+        "NotesPayableCurrent"
     ],
     "point_in_time": True,
     "mode": "sum",
