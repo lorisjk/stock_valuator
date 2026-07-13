@@ -37,29 +37,22 @@ def get_company_info(ticker: str, cik: str, user_agent: str) -> dict:
     return fetch_or_cache(
         url=f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json",
         cache_path=f"cache/{ticker}_company_info.json",
-        headers={"User-Agent": user_agent}
+        headers={"User-Agent": user_agent},
     )
 
 
 def extract_period_values(concept_data: dict, is_point_in_time: bool = False, period: str = "annual") -> list[dict]:
-    """
-    Kernfunktion: extrahiert Rohwerte aus einem XBRL-Konzept, gefiltert nach Periodentyp.
-
-    WICHTIGE ERKENNTNIS aus der Entwicklung: das "fp"-Feld (Q1/Q2/Q3/FY) ist
-    NICHT zuverlaessig - manche Firmen/Tags (z.B. NVDA RevenueFromContract...)
-    taggen praktisch ALLES als "FY", auch eindeutig quartalsgrosse Werte.
-    Deshalb wird die Zeitraumlaenge (days_diff), nicht "fp", als Klassifizierungs-
-    merkmal genutzt. "fp"/"fy"/"start" werden trotzdem mitgegeben (fuer die
-    Q4-Ableitung und Debugging), aber die Kernentscheidung haengt nicht mehr an "fp".
-    """
     values = {}
 
     units = concept_data.get("units", {})
     if not units:
         return []
 
-    first_unit_key = list(units.keys())[0]
-    items = units[first_unit_key]
+    preferred = ["USD", "USD/shares", "shares"]
+    unit_key = next((u for u in preferred if u in units), None)
+    if unit_key is None:
+        unit_key = list(units.keys())[0]
+    items = units[unit_key]
 
     for item in items:
         fp = item.get("fp")
@@ -108,13 +101,9 @@ def decumulate_period_values(period_values: list[dict]) -> list[dict]:
     if not entries:
         return []
 
-    quarters = {}   # end-Datum -> echter Quartalswert
-    annuals = []    # volle Jahreswerte (nur fuer Q4-Ableitung im Einzelquartals-Fall)
+    quarters = {}
+    annuals = []
 
-    # Nach start-Datum gruppieren. Bei KUMULATIVEN Daten (Cashflow-Positionen)
-    # haben alle Perioden eines Geschaeftsjahres denselben start (Jahresbeginn)
-    # und laufen nur unterschiedlich lang. Bei EINZELQUARTALEN (Revenue, GuV)
-    # hat jedes Quartal seinen eigenen start.
     by_start = {}
     for v in entries:
         by_start.setdefault(v["start"], []).append(v)
@@ -129,9 +118,6 @@ def decumulate_period_values(period_values: list[dict]) -> list[dict]:
             days = (date.fromisoformat(v["end"]) - start).days
 
             if 350 <= days <= 380:
-                # Volle Jahresperiode: als Jahreswert merken. Falls sie in einer
-                # kumulativen Gruppe steht, ist sie zugleich die letzte YTD-Stufe
-                # -> Q4 ergibt sich als Differenz zur vorigen Stufe.
                 annuals.append({"end": v["end"], "value": v["value"], "filed": v["filed"]})
                 if prev_days > 0 and 80 <= (days - prev_days) <= 100:
                     quarters[v["end"]] = {
@@ -143,9 +129,6 @@ def decumulate_period_values(period_values: list[dict]) -> list[dict]:
                 prev_days = days
                 continue
 
-            # Differenz zur vorherigen Stufe derselben start-Gruppe.
-            # Bei Einzelquartalen ist prev_value=0 (eigene Gruppe) -> Wert bleibt
-            # unveraendert. Bei kumulativen Daten wird korrekt de-kumuliert.
             quarter_value = v["value"] - prev_value
             quarter_len = days - prev_days
 
@@ -159,13 +142,11 @@ def decumulate_period_values(period_values: list[dict]) -> list[dict]:
             prev_value = v["value"]
             prev_days = days
 
-    # Q4-Ableitung fuer den EINZELQUARTALS-Fall (dort ist der FY-Wert keine
-    # kumulative Endstufe, sondern ein separater Eintrag): Q4 = FY - (Q1+Q2+Q3).
     quarters_sorted = sorted(quarters.values(), key=lambda x: x["end"])
 
     for ann in annuals:
         if ann["end"] in quarters:
-            continue  # schon abgedeckt
+            continue
 
         ann_end = date.fromisoformat(ann["end"])
         preceding = [
@@ -182,11 +163,6 @@ def decumulate_period_values(period_values: list[dict]) -> list[dict]:
 
 
 def extract_quarterly_values(concept_data: dict, is_point_in_time: bool = False) -> list[dict]:
-    """
-    Oeffentliche Funktion fuer Quartalsdaten: kombiniert Extraktion + Q4-Ableitung.
-    Bei Stichtagswerten ist keine Ableitung noetig (jeder Stichtag ist fuer
-    sich schon ein gueltiger Wert).
-    """
     raw = extract_period_values(concept_data, is_point_in_time=is_point_in_time, period="quarterly")
 
     if is_point_in_time:
@@ -196,19 +172,11 @@ def extract_quarterly_values(concept_data: dict, is_point_in_time: bool = False)
 
 
 def extract_annual_values(concept_data: dict, is_point_in_time: bool = False) -> list[dict]:
-    """
-    Bestehende Funktion, unveraendertes Verhalten fuer bestehenden Code.
-    Intern nur noch ein duenner Wrapper um extract_period_values(period="annual").
-    """
     raw = extract_period_values(concept_data, is_point_in_time=is_point_in_time, period="annual")
     return [{"end": v["end"], "value": v["value"], "filed": v["filed"]} for v in raw]
 
 
 def extract_summed_values(us_gaap_data: dict, tags_to_sum: list[str], is_point_in_time: bool = False, period: str = "annual") -> list[dict]:
-    """
-    Verallgemeinerte Version von extract_summed_annual_values: summiert mehrere
-    Tags pro Periode, egal ob annual oder quarterly.
-    """
     per_tag_values = []
     for tag in tags_to_sum:
         concept_data = us_gaap_data.get(tag)
@@ -231,5 +199,4 @@ def extract_summed_values(us_gaap_data: dict, tags_to_sum: list[str], is_point_i
 
 
 def extract_summed_annual_values(us_gaap_data: dict, tags_to_sum: list[str], is_point_in_time: bool = False) -> list[dict]:
-    """Bestehende Funktion, unveraendertes Verhalten - Wrapper um extract_summed_values(period="annual")."""
     return extract_summed_values(us_gaap_data, tags_to_sum, is_point_in_time=is_point_in_time, period="annual")

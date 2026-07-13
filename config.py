@@ -1,15 +1,16 @@
-# config.py
-
 TICKERS = ["AAPL", "MSFT", "NVDA"]
 
-# SEC verlangt einen echten Kontakt im User-Agent, sonst 403
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
-PERIOD="quarterly"
+PERIOD = "quarterly"
 
 CONCEPT_CANDIDATES = {
     "Revenue": {
-        "tags": ["RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues", "SalesRevenueNet"],
+        "tags": [
+            "RevenueFromContractWithCustomerExcludingAssessedTax",
+            "Revenues",
+            "SalesRevenueNet",
+        ],
         "point_in_time": False,
         "mode": "fallback",
     },
@@ -23,6 +24,14 @@ CONCEPT_CANDIDATES = {
         "point_in_time": False,
         "mode": "fallback",
     },
+    "SharesOutstanding": {
+        "tags": [
+            "WeightedAverageNumberOfDilutedSharesOutstanding",
+            "WeightedAverageNumberOfSharesOutstandingBasic",
+        ],
+        "point_in_time": True,
+        "mode": "fallback",
+    },
     "StockholdersEquity": {
         "tags": ["StockholdersEquity"],
         "point_in_time": True,
@@ -34,24 +43,20 @@ CONCEPT_CANDIDATES = {
         "mode": "fallback",
     },
     "OperatingCashFlow": {
-        "tags": ["NetCashProvidedByUsedInOperatingActivitiesContinuingOperations", "NetCashProvidedByUsedInOperatingActivities"],
+        "tags": [
+            "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations",
+            "NetCashProvidedByUsedInOperatingActivities",
+        ],
         "point_in_time": False,
         "mode": "fallback",
     },
-    "LongTermDebt": {
-    "tags": ["LongTermDebtNoncurrent", "ConvertibleDebtNoncurrent", "LongTermDebtCurrent", "ConvertibleDebtCurrent"],
-    "point_in_time": True,
-    "mode": "sum",
-    },
     "Capex": {
-    "tags": ["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"],
-    "point_in_time": False,
-    "mode": "fallback",
-    },
-    "CashAndEquivalents": {
-    "tags": ["CashAndCashEquivalentsAtCarryingValue"],
-    "point_in_time": True,
-    "mode": "fallback",
+        "tags": [
+            "PaymentsToAcquirePropertyPlantAndEquipment",
+            "PaymentsToAcquireProductiveAssets",
+        ],
+        "point_in_time": False,
+        "mode": "fallback",
     },
     "DepreciationAndAmortization": {
         "tags": ["DepreciationDepletionAndAmortization", "DepreciationAndAmortization"],
@@ -59,15 +64,28 @@ CONCEPT_CANDIDATES = {
         "point_in_time": False,
         "mode": "fallback_sum",
     },
-        "DividendsPerShare": {
-    "tags": [ "CommonStockDividendsPerShareDeclared", "CommonStockDividendsPerShareCashPaid" ],
-    "point_in_time": False,
-    "mode": "fallback",
+    "LongTermDebt": {
+        "tags": [
+            "LongTermDebtNoncurrent",
+            "ConvertibleDebtNoncurrent",
+            "LongTermDebtCurrent",
+            "ConvertibleDebtCurrent",
+        ],
+        "point_in_time": True,
+        "mode": "sum",
     },
-    "SharesOutstanding": {
-    "tags": ["WeightedAverageNumberOfDilutedSharesOutstanding", "WeightedAverageNumberOfSharesOutstandingBasic"],
-    "point_in_time": True,
-    "mode": "fallback",
+    "CashAndEquivalents": {
+        "tags": ["CashAndCashEquivalentsAtCarryingValue"],
+        "point_in_time": True,
+        "mode": "fallback",
+    },
+    "DividendsPerShare": {
+        "tags": [
+            "CommonStockDividendsPerShareDeclared",
+            "CommonStockDividendsPerShareCashPaid",
+        ],
+        "point_in_time": False,
+        "mode": "fallback",
     },
 }
 
@@ -75,10 +93,10 @@ TTM_CONCEPTS = [
     "Revenue",
     "NetIncomeLoss",
     "OperatingIncomeLoss",
-    "DividendsPerShare",
-    "DepreciationAndAmortization",
     "OperatingCashFlow",
     "Capex",
+    "DepreciationAndAmortization",
+    "DividendsPerShare",
 ]
 
 CACHE_DIR = "cache"

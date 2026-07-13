@@ -23,17 +23,9 @@ def extract_merged_values(
             continue
 
         if period == "annual":
-            values = extract_annual_values(
-                concept_data,
-                is_point_in_time=is_point_in_time,
-            )
-
+            values = extract_annual_values(concept_data, is_point_in_time=is_point_in_time)
         elif period == "quarterly":
-            values = extract_quarterly_values(
-                concept_data,
-                is_point_in_time=is_point_in_time,
-            )
-
+            values = extract_quarterly_values(concept_data, is_point_in_time=is_point_in_time)
         else:
             raise ValueError("period must be 'annual' or 'quarterly'")
 
@@ -47,13 +39,39 @@ def extract_merged_values(
             }
 
     return [
-        {
-            "end": end,
-            "value": data["value"],
-            "filed": data["filed"],
-        }
+        {"end": end, "value": data["value"], "filed": data["filed"]}
         for end, data in merged.items()
     ]
+
+
+def extract_with_mode(us_gaap_data: dict, cfg: dict, period: str) -> list[dict]:
+    mode = cfg.get("mode", "fallback")
+    is_point_in_time = cfg["point_in_time"]
+
+    if mode == "sum":
+        return extract_summed_values(
+            us_gaap_data,
+            cfg["tags"],
+            is_point_in_time=is_point_in_time,
+            period=period,
+        )
+
+    values = extract_merged_values(
+        us_gaap_data,
+        cfg["tags"],
+        period=period,
+        is_point_in_time=is_point_in_time,
+    )
+
+    if mode == "fallback_sum" and not values:
+        values = extract_summed_values(
+            us_gaap_data,
+            cfg["fallback_sum_tags"],
+            is_point_in_time=is_point_in_time,
+            period=period,
+        )
+
+    return values
 
 
 def build_dataframe(
@@ -63,65 +81,11 @@ def build_dataframe(
     period: str = "annual",
 ) -> pd.DataFrame:
 
+    us_gaap_data = company_info["facts"]["us-gaap"]
     rows = []
 
     for key, cfg in concept_candidates.items():
-
-        mode = cfg.get("mode", "fallback")
-
-        if mode == "sum":
-
-            if period == "annual":
-                values = extract_summed_annual_values(
-                    company_info["facts"]["us-gaap"],
-                    cfg["tags"],
-                    is_point_in_time=cfg["point_in_time"],
-                )
-
-            elif period == "quarterly":
-                values = extract_summed_values(
-                    company_info["facts"]["us-gaap"],
-                    cfg["tags"],
-                    is_point_in_time=cfg["point_in_time"],
-                    period="quarterly",
-                )
-
-            else:
-                raise ValueError("period must be 'annual' or 'quarterly'")
-            
-        elif mode == "fallback_sum": 
-
-            values = extract_merged_values(
-                company_info["facts"]["us-gaap"],
-                cfg["tags"],
-                period=period,
-                is_point_in_time=cfg["point_in_time"],
-            )
-            if not values: 
-                  if period == "annual":
-                    values = extract_summed_annual_values(
-                        company_info["facts"]["us-gaap"],
-                        cfg["fallback_sum_tags"],
-                        is_point_in_time=cfg["point_in_time"],
-                    )
-
-                  elif period == "quarterly":
-                    values = extract_summed_values(
-                        company_info["facts"]["us-gaap"],
-                        cfg["fallback_sum_tags"],
-                        is_point_in_time=cfg["point_in_time"],
-                        period="quarterly",
-                )
-
-
-        else:
-
-            values = extract_merged_values(
-                company_info["facts"]["us-gaap"],
-                cfg["tags"],
-                period=period,
-                is_point_in_time=cfg["point_in_time"],
-            )
+        values = extract_with_mode(us_gaap_data, cfg, period)
 
         if not values:
             continue
