@@ -1,4 +1,6 @@
 import pandas as pd
+import numpy as np
+COMMON_SPLIT_FACTORS = [1, 2, 3, 4, 5, 6, 7, 8, 10, 15, 20, 25, 30, 40, 50]
 
 
 def calculate_growth(df: pd.DataFrame, concept: str, periods: int, result_name: str) -> pd.DataFrame:
@@ -117,7 +119,7 @@ def calculate_rolling_average(df: pd.DataFrame, value_col: str, window: int, res
 
     df[result_name] = (
         df.groupby("ticker")[value_col]
-        .rolling(window=window)
+        .rolling(window=window, min_periods=1)
         .mean()
         .reset_index(level=0, drop=True)
     )
@@ -158,3 +160,54 @@ def add_ttm_concepts(df: pd.DataFrame, concepts: list[str]) -> pd.DataFrame:
 def add_as_concept(facts: pd.DataFrame, df: pd.DataFrame, value_col: str, concept_name: str) -> pd.DataFrame:
     new_concept = to_long_format(df, value_col, concept_name)
     return pd.concat([facts, new_concept], ignore_index=True)
+
+  
+def _normalize_series(values: pd.Series, dates: pd.Series) -> pd.Series:
+    if len(values) < 2:
+        return values
+ 
+    anchor = values.iloc[-1]
+    if anchor <= 0 or pd.isna(anchor):
+        return values
+ 
+    normalized = []
+    for v in values:
+        if pd.isna(v) or v <= 0:
+            normalized.append(v)
+            continue
+ 
+        best = v
+        best_err = abs(np.log(v / anchor))
+ 
+        for f in COMMON_SPLIT_FACTORS:
+            for candidate in (v * f, v / f):
+                err = abs(np.log(candidate / anchor))
+                if err < best_err:
+                    best = candidate
+                    best_err = err
+ 
+        normalized.append(best)
+ 
+    return pd.Series(normalized, index=values.index)
+ 
+ 
+def normalize_split_adjusted(df: pd.DataFrame, concepts: list[str]) -> pd.DataFrame:
+    mask = df["concept"].isin(concepts)
+    target = df[mask].copy()
+    rest = df[~mask]
+
+    if target.empty:
+        return df
+
+    target = target.sort_values(["ticker", "concept", "end"])
+
+    normalized_parts = []
+    for _, group in target.groupby(["ticker", "concept"]):
+        group = group.copy()
+        group["value"] = _normalize_series(group["value"], group["end"])
+        normalized_parts.append(group)
+
+    target = pd.concat(normalized_parts, ignore_index=True)
+
+    return pd.concat([rest, target], ignore_index=True)
+ 

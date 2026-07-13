@@ -19,11 +19,7 @@ CONCEPT_CANDIDATES = {
         "point_in_time": False,
         "mode": "fallback",
     },
-    "EPS": {
-        "tags": ["EarningsPerShareDiluted", "EarningsPerShareBasic"],
-        "point_in_time": False,
-        "mode": "fallback",
-    },
+
     "SharesOutstanding": {
         "tags": [
             "WeightedAverageNumberOfDilutedSharesOutstanding",
@@ -65,14 +61,16 @@ CONCEPT_CANDIDATES = {
         "mode": "fallback_sum",
     },
     "LongTermDebt": {
-        "tags": [
-            "LongTermDebtNoncurrent",
-            "ConvertibleDebtNoncurrent",
-            "LongTermDebtCurrent",
-            "ConvertibleDebtCurrent",
-        ],
-        "point_in_time": True,
-        "mode": "sum",
+    "tags": [
+        "LongTermDebtNoncurrent",
+        "ConvertibleDebtNoncurrent",
+        "ConvertibleLongTermNotesPayable",
+        "LongTermDebtCurrent",
+        "ConvertibleDebtCurrent",
+        "ConvertibleNotesPayableCurrent",
+    ],
+    "point_in_time": True,
+    "mode": "sum",
     },
     "CashAndEquivalents": {
         "tags": ["CashAndCashEquivalentsAtCarryingValue"],

@@ -22,12 +22,15 @@ from metrics import (
     get_latest_value,
     get_latest_row,
     to_long_format,
+    normalize_split_adjusted
 )
 from figures import plot_fundamentals, plot_valuation
 from quality import print_data_quality
 
 import os
 import pandas as pd
+
+from datetime import date
 
 
 def load_facts() -> pd.DataFrame:
@@ -43,7 +46,7 @@ def load_facts() -> pd.DataFrame:
         cik = get_cik(ticker, cik_mapping)
         company_info = get_company_info(ticker, cik, EDGAR_USER_AGENT)
         all_dfs.append(build_dataframe(ticker, company_info, CONCEPT_CANDIDATES, period=PERIOD))
-
+        
     df = pd.concat(all_dfs, ignore_index=True)
     df["end"] = pd.to_datetime(df["end"]).astype("datetime64[ns]")
     return df
@@ -152,6 +155,8 @@ def calculate_historical_pe(facts: pd.DataFrame, price_history: pd.DataFrame) ->
         direction="backward",
     )
     with_price["pe_ratio"] = with_price["close"] / with_price["eps_ttm"]
+    
+    with_price["pe_ratio"] = with_price["pe_ratio"].where(with_price["pe_ratio"] <= 200)
 
     rolling = calculate_rolling_average(with_price, "pe_ratio", 20, "avg_pe_5y")
     return with_price, rolling
@@ -203,6 +208,11 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame) ->
     )
 
     value_cols = ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_ebitda", "ev_sales", "dividend_yield"]
+
+    MAX_MULTIPLE = 200
+
+    for col in ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_ebitda", "ev_sales"]:
+        wide[col] = wide[col].where(wide[col] <= MAX_MULTIPLE)
 
     long = wide.melt(
         id_vars=["ticker", "end"],
@@ -270,7 +280,10 @@ def main():
     os.makedirs(FIGURE_DIR, exist_ok=True)
 
     facts = load_facts()
+    facts = normalize_split_adjusted(facts, ["SharesOutstanding"])
     print_data_quality(facts, list(CONCEPT_CANDIDATES.keys()))
+    
+    
 
     facts = add_derived_concepts(facts)
     metrics = calculate_all_metrics(facts)
@@ -291,6 +304,7 @@ def main():
     valuation_history = build_valuation_history(facts, price_history)
     _, rolling_pe = calculate_historical_pe(facts, price_history)
     snapshot = build_snapshot(facts, metrics, prices, rolling_pe)
+
 
     facts.to_csv(os.path.join(DATA_DIR, f"{PERIOD}_facts.csv"), index=False)
     metrics_long.to_csv(os.path.join(DATA_DIR, "metrics_long.csv"), index=False)
