@@ -22,7 +22,12 @@ def check_data_quality(df: pd.DataFrame, expected_concepts: list[str], threshold
     ]
 
 
-def print_data_quality(df: pd.DataFrame, expected_concepts: list[str], threshold: float = 0.5) -> None:
+def print_data_quality(
+    df: pd.DataFrame,
+    expected_concepts: list[str],
+    search_hints: dict = None,
+    threshold: float = 0.5,
+) -> None:
     problems = check_data_quality(df, expected_concepts, threshold)
 
     if problems.empty:
@@ -39,5 +44,19 @@ def print_data_quality(df: pd.DataFrame, expected_concepts: list[str], threshold
             f"  {marker} {row['ticker']:6s} {row['concept']:32s} "
             f"{row['count']:3d} von {row['max_for_ticker']:3d} ({row['ratio']:.0%})"
         )
-
+        hint = search_hints.get(row["concept"]) if search_hints else None
+        if hint:
+            print(f"         → python explore_tags.py {row['ticker']} {' '.join(hint)}")
     print(f"{'='*72}\n")
+
+def search_tags(company_info: dict, keywords: list[str]) -> list[str]:
+    lower_cased_keywords = [word.lower() for word in keywords]
+    tags = []
+
+    for key in company_info["facts"]["us-gaap"].keys():
+        key_lower = key.lower()
+        if any(word in key_lower for word in lower_cased_keywords):
+            tags.append(key)
+
+    tags.sort()
+    return tags

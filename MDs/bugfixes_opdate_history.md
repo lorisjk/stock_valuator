@@ -6,6 +6,86 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-07-13 (update) — Tag discovery tooling
+
+Not a bug. A workflow that was being done by hand, six times, made repeatable.
+
+### The problem
+
+Every time the data quality check flagged a missing or thin concept, the next step was identical: comment a debug block into `load_facts()`, run the whole pipeline, read the tag list, comment it out again.
+
+```python
+if ticker == "AMZN":
+    for key in company_info["facts"]["us-gaap"].keys():
+        if "Depreciation" in key or "Amortization" in key:
+            print(key)
+```
+
+Six tickers, six variations of the same three lines. The pattern was stable enough to extract.
+
+### `search_tags()` in `quality.py`
+
+```python
+def search_tags(company_info: dict, keywords: list[str]) -> list[str]:
+    lower_cased_keywords = [word.lower() for word in keywords]
+    tags = []
+
+    for key in company_info["facts"]["us-gaap"].keys():
+        key_lower = key.lower()
+        if any(word in key_lower for word in lower_cased_keywords):
+            tags.append(key)
+
+    tags.sort()
+    return tags
+```
+
+Case-insensitive on both sides — `"debt"` has to match `ConvertibleDebtNoncurrent`. The **original** tag name goes into the result list, not the lowercased comparison string: the point of the search is to get a name that can be pasted into `CONCEPT_CANDIDATES`.
+
+`any(...)` rather than an inner loop with `break`, so a tag matching several keywords (`DepreciationAndAmortization` against `["depreciation", "amortization"]`) is only appended once.
+
+### `explore_tags.py`
+
+A standalone script, not part of the pipeline:
+
+```bash
+python explore_tags.py AMZN depreciation amortization
+```
+
+**Deliberately not interactive.** The original idea was to have the quality check prompt for keywords when it detects a problem. Rejected for two reasons:
+
+- **It blocks.** Any unattended run (cron, CI, or just walking away from the terminal) would hang on `input()` forever.
+- **It mixes modes.** `main.py` is a batch program: data in, charts out. Tag discovery is a diagnostic — done once, deliberately, *after* something has gone wrong.
+
+Command-line arguments give the same convenience without either problem.
+
+### `SEARCH_HINTS` in `config.py`
+
+Closes the loop. The quality report now emits the command it wants you to run:
+
+```
+FEHLT  AMZN   DividendsPerShare                  0 von  77 (0%)
+       → python explore_tags.py AMZN dividendspershare
+```
+
+The hints map each concept to the keywords that have historically found it:
+
+```python
+SEARCH_HINTS = {
+    "LongTermDebt": ["debt", "notes", "borrowings"],
+    "DepreciationAndAmortization": ["depreciation", "amortization"],
+    "Capex": ["acquire", "propertyplant"],
+    ...
+}
+```
+
+`print_data_quality` takes them as a parameter rather than importing them, so `quality.py` stays independent of the project config — the same rule that applies to `expected_concepts`.
+
+### Known limitation
+
+The suggestion fires on every warning, including the ones that aren't problems. Amazon doesn't pay a dividend, so `DividendsPerShare` at 0% is correct — but the report still offers to go looking for a tag.
+
+Suppressing those would mean maintaining a list of known-absent concepts per ticker. Not done, on purpose: a silenced warning is a warning that won't fire when it *is* real for the next ticker. The cost of the false positive is one glance.
+
 ## 2026-07-13 (later) — Amazon
 
 Adding **AMZN** produced a P/E of 216 (real value ~30) and a five-year average P/E of **−41.6**. A negative average P/E is not a number that can exist.

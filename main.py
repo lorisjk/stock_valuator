@@ -9,6 +9,7 @@ from config import (
     PERIOD,
     DATA_DIR,
     FIGURE_DIR,
+    SEARCH_HINTS
 )
 from metrics import (
     add_ttm_concepts,
@@ -46,19 +47,6 @@ def load_facts() -> pd.DataFrame:
         cik = get_cik(ticker, cik_mapping)
         company_info = get_company_info(ticker, cik, EDGAR_USER_AGENT)
         all_dfs.append(build_dataframe(ticker, company_info, CONCEPT_CANDIDATES, period=PERIOD))
-        if ticker == "AMZN":
-            from fetchers.edgar import extract_period_values
-            from datetime import date
-            cd = company_info["facts"]["us-gaap"]["NetCashProvidedByUsedInOperatingActivities"]
-            raw = extract_period_values(cd, is_point_in_time=False, period="quarterly")
-            print("Roh:", len(raw))
-            entries = [v for v in raw if v.get("start")]
-            print("Mit start:", len(entries))
-            lens = {}
-            for v in entries:
-                d = (date.fromisoformat(v["end"]) - date.fromisoformat(v["start"])).days
-                lens[d] = lens.get(d, 0) + 1
-            print("Laengenverteilung:", dict(sorted(lens.items())))
         
     df = pd.concat(all_dfs, ignore_index=True)
     df["end"] = pd.to_datetime(df["end"]).astype("datetime64[ns]")
@@ -294,7 +282,7 @@ def main():
 
     facts = load_facts()
     facts = normalize_split_adjusted(facts, ["SharesOutstanding"])
-    print_data_quality(facts, list(CONCEPT_CANDIDATES.keys()))
+    print_data_quality(facts, list(CONCEPT_CANDIDATES.keys()), SEARCH_HINTS)
     
     
 

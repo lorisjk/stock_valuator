@@ -1,4 +1,4 @@
-TICKERS = ["AMZN"]
+TICKERS = ["NOW"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
@@ -97,6 +97,20 @@ TTM_CONCEPTS = [
     "DepreciationAndAmortization",
     "DividendsPerShare",
 ]
+
+SEARCH_HINTS = {
+    "Revenue": ["revenue", "sales"],
+    "NetIncomeLoss": ["netincome"],
+    "OperatingIncomeLoss": ["operatingincome"],
+    "OperatingCashFlow": ["operatingactivities"],
+    "Capex": ["acquire", "propertyplant"],
+    "DepreciationAndAmortization": ["depreciation", "amortization"],
+    "LongTermDebt": ["debt", "notes", "borrowings"],
+    "CashAndEquivalents": ["cashandcash"],
+    "StockholdersEquity": ["stockholdersequity"],
+    "SharesOutstanding": ["sharesoutstanding"],
+    "DividendsPerShare": ["dividendspershare"],
+}
 
 CACHE_DIR = "cache"
 DATA_DIR = "data"
