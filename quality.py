@@ -31,15 +31,15 @@ def print_data_quality(
     problems = check_data_quality(df, expected_concepts, threshold)
 
     if problems.empty:
-        print(f"Datenqualitaet OK - kein Konzept unter {threshold:.0%} Abdeckung.")
+        print(f"Data fine - no concept below {threshold:.0%} coverage.")
         return
 
     print(f"\n{'='*72}")
-    print(f"DATENQUALITAET: Konzepte unter {threshold:.0%} Abdeckung")
+    print(f"DATA QUALITY: concepts below {threshold:.0%} coverage")
     print(f"{'='*72}")
 
     for _, row in problems.iterrows():
-        marker = "FEHLT " if row["count"] == 0 else "duenn "
+        marker = "MISSING " if row["count"] == 0 else "thin "
         print(
             f"  {marker} {row['ticker']:6s} {row['concept']:32s} "
             f"{row['count']:3d} von {row['max_for_ticker']:3d} ({row['ratio']:.0%})"
