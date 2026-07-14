@@ -54,11 +54,15 @@ CONCEPT_CANDIDATES = {
         "point_in_time": False,
         "mode": "fallback",
     },
-    "DepreciationAndAmortization": {
-        "tags": ["DepreciationDepletionAndAmortization", "DepreciationAndAmortization"],
-        "fallback_sum_tags": ["Depreciation", "AmortizationOfIntangibleAssets"],
-        "point_in_time": False,
-        "mode": "fallback_sum",
+   "DepreciationAndAmortization": {
+    "tags": [
+        "DepreciationDepletionAndAmortization",
+        "DepreciationAndAmortization",
+        "DepreciationAmortizationAndAccretionNet",
+    ],
+    "fallback_sum_tags": ["Depreciation", "AmortizationOfIntangibleAssets"],
+    "point_in_time": False,
+    "mode": "fallback_sum",
     },
     "LongTermDebt": {
     "tags": [
