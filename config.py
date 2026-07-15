@@ -65,19 +65,23 @@ CONCEPT_CANDIDATES = {
     "point_in_time": False,
     "mode": "fallback_sum",
     },
-    "LongTermDebt": {
-    "tags": [
-        "LongTermDebtNoncurrent",
-        "ConvertibleDebtNoncurrent",
-        "ConvertibleLongTermNotesPayable",
-        "LongTermDebtCurrent",
-        "ConvertibleDebtCurrent",
-        "ConvertibleNotesPayableCurrent",
-        "NotesPayableCurrent"
-    ],
+"LongTermDebt": {
+   "tags": [
+    "LongTermDebt",
+    "DebtLongtermAndShorttermCombinedAmount",
+    "LongTermNotesAndLoans",
+    "LongTermDebtNoncurrent",
+    "ConvertibleLongTermNotesPayable",
+    "ConvertibleDebtNoncurrent",
+    "LongTermDebtCurrent",
+    "ConvertibleDebtCurrent",
+    "ConvertibleNotesPayableCurrent",
+    "NotesPayableCurrent",
+],
     "point_in_time": True,
-    "mode": "sum",
-    },
+    "mode": "fallback",
+},
+
     "CashAndEquivalents": {
         "tags": ["CashAndCashEquivalentsAtCarryingValue"],
         "point_in_time": True,

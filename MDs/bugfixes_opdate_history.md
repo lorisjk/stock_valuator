@@ -6,6 +6,82 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-07-15 — LongTermDebt: sum → fallback, fixing MU, a latent NOW double-count, and ORCL
+
+Onboarding **MU** surfaced a `LongTermDebt` coverage gap that, when chased down, revealed the
+`sum` mode was the wrong tool for all of these tickers — and had been silently double-counting
+**NOW** since well before this session. One config change (`sum` → `fallback`) fixed three
+tickers at once. Adding **ORCL** then required extending the tag list for a different reporting
+vocabulary.
+
+### MU: components stop in 2013, aggregate takes over
+
+`LongTermDebtNoncurrent` / `LongTermDebtCurrent` both end at 2013-05-30. From 2020 on, Micron
+reports only the bare aggregate `LongTermDebt` — which the config's `sum` list did not include,
+so the entire relevant era (2020–2025, debt rising 6→12bn through the memory-capex cycle) was
+missing. In the 2010–2013 overlap the bare `LongTermDebt` equals `Noncurrent + Current` exactly
+(e.g. 2012-08-30: 3,038M + 224M = 3,262M), so it is the same debt reported as an aggregate.
+
+### The real discovery: `sum` was double-counting NOW
+
+Checking whether a `fallback_sum` approach would break NOW/Meta instead revealed that NOW's
+existing debt series was already wrong. NOW reports the same convertible note under *both*
+`ConvertibleLongTermNotesPayable` and `LongTermDebtNoncurrent` in the 2019–2021 window, and the
+`sum` mode added both:
+
+```
+2019-12-31   1,442,630,000   (should be ~694M — doubled)
+2020-12-31   3,280,000,000   (should be ~1,640M — doubled)
+2021-03-31   1,611,000,000   (correct again — only one tag present)
+```
+
+The original ServiceNow verification missed this because it only checked the *current edge*
+(~1.49bn, where only one tag is present) against a known figure — not the middle of the series.
+Lesson: "the latest value is right" does not mean "the series is right".
+
+### Why fallback fixes all three
+
+Laying the three tickers side by side, each reports its *entire* debt in a single consolidated
+tag — nothing actually needs summing:
+
+- **Meta** → `LongTermDebtNoncurrent` (real bonds; bare `LongTermDebt` present too, identical)
+- **NOW** → `ConvertibleLongTermNotesPayable` (no bare `LongTermDebt` at all)
+- **MU** → bare `LongTermDebt` (aggregate)
+
+`fallback` takes the first tag with a value per date and never sums, so overlap-driven
+double-counting is structurally impossible. Switched `mode: "sum"` → `"fallback"` with a
+priority-ordered tag list (aggregate first, components last). Verified across MU/NOW/Meta run
+together: NOW's 2019–2021 window now shows ~694M / ~1,640M, MU is continuous 2020–2025, Meta
+unchanged.
+
+**Trade-off accepted:** `fallback` swaps the double-count risk of `sum` for an *under*-count risk —
+a future company with genuinely separate, non-overlapping debt across multiple tags (real bonds
+*and* separate convertibles, both to be added) would only get the first tag. None of the current
+tickers are like this, but it's the assumption the fix rests on.
+
+### ORCL: a different tagging vocabulary
+
+Oracle came in at 39% debt coverage — it uses none of the existing tag families. It reports under
+`LongTermNotesAndLoans` / `LongTermNotesPayable` (identical, 85,297M = long-term only),
+`NotesPayableCurrent` (7,271M = short-term), and `DebtLongtermAndShorttermCombinedAmount`
+(92,568M). The arithmetic confirms the structure: 85,297 + 7,271 = 92,568, so the Combined tag is
+the clean long+short aggregate — exactly what we want, and the same tag that had been the winner
+for SoFi earlier.
+
+Added `DebtLongtermAndShorttermCombinedAmount` and `LongTermNotesAndLoans` to the fallback list
+(Combined second, right after bare `LongTermDebt`; `LongTermNotesPayable` omitted as a duplicate
+of `LongTermNotesAndLoans`). ORCL now runs continuously ~2015→2026, ending ~129bn (the AI
+data-centre debt build).
+
+**Two consistency notes carried forward, not resolved:**
+
+- `DebtLongtermAndShorttermCombinedAmount` is long+short; the bare `LongTermDebt` used for MU/Meta
+  may be long-only. Small divergence (~8% for ORCL) but the concept is not perfectly uniform across
+  tickers — same category as the OperatingIncomeLoss / lease-inclusion definition calls.
+- Because the Combined tag is now generic, **SoFi's debt will populate** on its next run — the value
+  we had deliberately left empty because deposit-funded neobank debt is ambiguous. Not broken, just
+  to be read with care if SoFi is revisited.
+
 ## 2026-07-15 — Growth rates unreadable on near-zero base (IBM, CRM, NOW)
 
 `income_yoy_growth` produced meaningless spikes across three tickers: CRM hit +3131%,
@@ -90,7 +166,7 @@ needs taming.
 
 **Pragmatic threshold, not a principled one** — same spirit as `MAX_MULTIPLE = 200`. It removes
 the values that break the scale and accepts that "mathematically valid but economically
-meaningless" is ultimately a reading-the-chart judgement no parameter fully captures.
+meaningless" is ultimately a reading-the-chart judgement no parameter fully captures."
 
 ## 2026-07-15 — Google: two "not a bug" cases (SharesOutstanding, D&A)
 
