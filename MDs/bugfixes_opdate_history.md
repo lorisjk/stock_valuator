@@ -5,6 +5,93 @@ A running log of bugs found, what caused them, and how they were fixed. Ordered 
 Most entries here share a theme: **the pipeline fails silently**. A missing tag returns an empty list, an empty list produces an empty merge, an empty merge produces an empty chart. Nothing crashes. The symptom appears several layers away from the cause, and usually looks like a plotting problem. Nearly every fix below was found by noticing that a *number* looked wrong, not by reading a stack trace.
 
 ---
+
+## 2026-07-15 — Growth rates unreadable on near-zero base (IBM, CRM, NOW)
+
+`income_yoy_growth` produced meaningless spikes across three tickers: CRM hit +3131%,
++830%, +1888% in its 2012–2021 near-zero-profit era; IBM showed +448%/+346%/+316% during
+the Kyndryl-spinoff quarters; NOW spiked in 2023 as it first turned profitable. Same
+category as the ServiceNow `avg_pe_5y` and Amazon P/E cases — a ratio whose denominator is
+technically positive but negligibly small stops conveying information.
+
+### The existing guard was half the fix
+
+`calculate_growth` already masked negative bases:
+
+```python
+filtered_df["prev_value"] = filtered_df["prev_value"].where(filtered_df["prev_value"] > 0)
+```
+
+This catches sign flips (negative → positive base, where the growth rate is even directionally
+wrong) but does nothing for a base that is positive yet tiny. `150M / 5M − 1 = +2900%` passes
+straight through.
+
+### The discriminant: base must be substantial *relative to* the current value
+
+An absolute floor (`prev_value > 100M`) was rejected — arbitrary, and doesn't scale across
+company sizes. The relative test scales automatically and matches the real failure mode: a
+growth rate is only meaningful when *both* endpoints have a sensible magnitude.
+
+```python
+def calculate_growth(df, concept, periods, result_name, min_base_ratio=0.33):
+    ...
+    filtered_df["prev_value"] = filtered_df.groupby("ticker")["value"].shift(periods)
+
+    valid_base = (
+        (filtered_df["prev_value"] > 0)
+        & (filtered_df["value"] > 0)
+        & (filtered_df["prev_value"] >= min_base_ratio * filtered_df["value"])
+    )
+    filtered_df["prev_value"] = filtered_df["prev_value"].where(valid_base)
+
+    filtered_df[result_name] = filtered_df["value"] / filtered_df["prev_value"] - 1
+```
+
+Three conditions: base positive (as before), current value positive (new — a negative current
+value produces a nonsense rate the old code let through), and base ≥ 33% of the current value.
+
+### Tuning `min_base_ratio` from the data, not from theory
+
+The threshold was read off the real split between artefacts and genuine values, the same way
+`normalize_split_adjusted` reads split factors off the data rather than assuming them.
+
+IBM gave the cleanest separation:
+
+```
+keep  2026-03  +96%  → base/value ≈ 0.51
+keep  2025-12  +76%  → base/value ≈ 0.57
+kill  2023-09  +448% → base/value ≈ 0.18
+kill  2024-03  +346% → base/value ≈ 0.22
+```
+
+Any threshold in 0.25–0.45 separates these. 0.33 sits mid-gap with margin on both sides.
+
+Verified across all three problem tickers:
+
+- **IBM** — Kyndryl-era spikes (2023-09 → 2024-06) gone; real recovery at the recent edge
+  (+76%, +96%) kept; the 2018-12 +52% borderline (ratio ≈ 0.66) correctly survives.
+- **NOW** — 2023 near-zero spikes gone; genuine strong jumps 2021-12 (+94%, ratio ≈ 0.52) and
+  2023-03 (+79%, ratio ≈ 0.56) kept; recent edge intact.
+- **CRM** — the absurd 30×-type values removed. A few borderline values survive (2023-07 +194%,
+  ratio ≈ 0.34, just over the line). Unlike IBM, CRM's near-zero era spans a whole decade, so
+  the artefact/genuine gap is not perfectly clean — no single threshold separates it exactly.
+  Accepted deliberately: the survivors are no longer *absurd*, only *to be read with care*,
+  which is true of any growth rate off a near-zero base regardless of filter.
+
+`calculate_all_metrics` calls `calculate_growth` without the parameter — the default handles it,
+no call-site change needed.
+
+### Follow-on: reverted the growth chart from symlog to linear
+
+The `income_yoy_growth` panel in `figures.py` had been on a symlog y-axis purely to keep the
+extreme spikes on-scale. With the spikes now filtered at the source, the axis is back to plain
+linear — the chart shows the real range without compression, and there is nothing left that
+needs taming.
+
+**Pragmatic threshold, not a principled one** — same spirit as `MAX_MULTIPLE = 200`. It removes
+the values that break the scale and accepts that "mathematically valid but economically
+meaningless" is ultimately a reading-the-chart judgement no parameter fully captures.
+
 ## 2026-07-15 — Google: two "not a bug" cases (SharesOutstanding, D&A)
 
 Two separate investigations while onboarding **GOOG**, both resolving the same way: EDGAR

@@ -55,7 +55,7 @@ def plot_metric(
 def plot_fundamentals(ticker: str, metrics_long: pd.DataFrame, output_path: str) -> None:
     concepts_to_plot = [
         ("revenue_yoy_growth", "Umsatzwachstum", 0, True, False),
-        ("income_yoy_growth", "Gewinnwachstum", 0, True, True),
+        ("income_yoy_growth", "Gewinnwachstum", 0, True, False),
         ("operating_margin", "Operative Marge", None, True, False),
         ("roe", "Eigenkapitalrendite", None, True, False),
         ("debt_to_equity", "Verschuldungsgrad", None, False, False),

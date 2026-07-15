@@ -3,12 +3,19 @@ import numpy as np
 COMMON_SPLIT_FACTORS = [1, 2, 3, 4, 5, 6, 7, 8, 10, 15, 20, 25, 30, 40, 50]
 
 
-def calculate_growth(df: pd.DataFrame, concept: str, periods: int, result_name: str) -> pd.DataFrame:
+def calculate_growth(df: pd.DataFrame, concept: str, periods: int, result_name: str, min_base_ratio: float = 0.33) -> pd.DataFrame:
     filtered_df = df[df["concept"] == concept].copy()
     filtered_df = filtered_df.sort_values(["ticker", "end"])
 
     filtered_df["prev_value"] = filtered_df.groupby("ticker")["value"].shift(periods)
-    filtered_df["prev_value"] = filtered_df["prev_value"].where(filtered_df["prev_value"] > 0)
+
+    valid_base = (
+        (filtered_df["prev_value"] > 0)
+        & (filtered_df["value"] > 0)
+        & (filtered_df["prev_value"] >= min_base_ratio * filtered_df["value"])
+    )
+    filtered_df["prev_value"] = filtered_df["prev_value"].where(valid_base)
+
     filtered_df[result_name] = filtered_df["value"] / filtered_df["prev_value"] - 1
 
     return filtered_df[["ticker", "end", "value", result_name]]
