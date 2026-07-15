@@ -5,6 +5,90 @@ A running log of bugs found, what caused them, and how they were fixed. Ordered 
 Most entries here share a theme: **the pipeline fails silently**. A missing tag returns an empty list, an empty list produces an empty merge, an empty merge produces an empty chart. Nothing crashes. The symptom appears several layers away from the cause, and usually looks like a plotting problem. Nearly every fix below was found by noticing that a *number* looked wrong, not by reading a stack trace.
 
 ---
+## 2026-07-15 — Google: two "not a bug" cases (SharesOutstanding, D&A)
+
+Two separate investigations while onboarding **GOOG**, both resolving the same way: EDGAR
+simply has fewer quarters of data for the concept than expected. No code changes required
+for either.
+
+### SharesOutstanding: correctly deduplicated, remaining gap is real
+
+The quality check flagged 13 of 26 possible quarters for `SharesOutstanding`. The 26→13
+halving itself was correct (annual and quarterly facts deduplicating as designed) — the
+open question was whether the *remaining* 13 were a genuine data gap or a bug.
+
+`explore_tags.py GOOG sharesoutstanding` surfaced `CommonStockSharesOutstanding`, an
+`instant` concept (actual share count at a balance-sheet date) as opposed to the two
+existing tags, which are both `duration` averages:
+
+```python
+"SharesOutstanding": {
+    "tags": [
+        "WeightedAverageNumberOfDilutedSharesOutstanding",
+        "WeightedAverageNumberOfSharesOutstandingBasic",
+        "CommonStockSharesOutstanding",   # added
+    ],
+    "point_in_time": True,
+    "mode": "fallback",
+},
+```
+
+Checked the transition point for a discontinuity, since mixing an instant value into a
+weighted-average series could show up as an artificial jump:
+
+```
+2015-12-31  13,746,960,000   ← CommonStockSharesOutstanding (fallback)
+2016-03-31  13,735,840,000   ← WeightedAverageNumberOfDilutedSharesOutstanding
+```
+
+Difference: ~11M on a base of 13.7bn (<0.1%). No jump. `extract_merged_values` already
+merges per-date across the tag list (not per-series), so this fallback only ever fires for
+the individual dates that are missing — the same mechanism already in place for
+Diluted → Basic.
+
+**Result:** tag added, gap closed back to 2014. No tracking of "which tag won" was added —
+considered, but the per-date merge already bounds the risk, and no discontinuity showed up
+in the one case that could have produced one.
+
+### DepreciationAndAmortization: 13 quarters is correct, not a coverage bug
+
+`fallback_sum` (`Depreciation` + `AmortizationOfIntangibleAssets`) produced only 13 rows,
+starting exactly at 2023-03-31, despite both tags being present. Looked like the
+all-or-nothing check in `extract_with_mode` (`if mode == "fallback_sum" and not values`)
+might be swallowing a partial main-tag result — but the three main tags
+(`DepreciationDepletionAndAmortization`, `DepreciationAndAmortization`,
+`DepreciationAmortizationAndAccretionNet`) are `NICHT VORHANDEN` for GOOG entirely, so that
+code path was never in play.
+
+Raw `Depreciation` facts show why the fallback still stops at 2023:
+
+```
+2021-01-01 → 2021-12-31   annual only, no matching quarter start
+2022-01-01 → 2022-12-31   annual only, no matching quarter start
+2023-01-01 → 2023-03-31   first quarterly entry
+```
+
+The `quarter_starts` discriminant in `decumulate_period_values` (from the 2026-07-13 Amazon
+fix) requires at least one real quarter sharing a fiscal year's start date before it will
+decumulate that year's annual figure. 2021 and 2022 have none — Google only began
+quarterly-granular `Depreciation` disclosure in Q1 2023. The filter is doing exactly what
+it was built to do.
+
+Quarter count checks out exactly: 4 (2023) + 4 (2024) + 4 (2025) + 1 (2026 Q1) = 13.
+
+**Considered and rejected:** adding `FinanceLeaseRightOfUseAssetAmortization` as a
+`fallback_sum_tags` entry.
+
+- Earliest entry is `2022-01-01 → 2022-12-31`, itself annual-only with no matching quarter
+  start — would not close the 2021/2022 gap either.
+- Magnitude is marginal: ~413M vs. 15,311M `Depreciation` for FY2024, ~2.7%.
+- Open conceptual question, not just a data question: whether finance-lease amortization
+  belongs in this project's EBITDA definition at all (same category of decision as the
+  Meta lease-exclusion call on 2026-07-13). Not resolved here — no clear win to justify
+  answering it under time pressure for a <3% effect.
+
+**No fix applied.** GOOG simply discloses `Depreciation` annually-only before 2023, same
+category as the Reddit and Meta "not a bug" entries above.
 
 ## 2026-07-14 — Apple: missing D&A tag
 

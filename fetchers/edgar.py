@@ -52,24 +52,31 @@ def extract_period_values(concept_data: dict, is_point_in_time: bool = False, pe
     unit_key = next((u for u in preferred if u in units), None)
     if unit_key is None:
         unit_key = list(units.keys())[0]
+    
     items = units[unit_key]
 
     for item in items:
         fp = item.get("fp")
+        days_diff = None
+
+        if "start" in item:
+            start = date.fromisoformat(item["start"])
+            end = date.fromisoformat(item["end"])
+            days_diff = (end - start).days
 
         if is_point_in_time:
             if period == "annual":
                 is_valid = fp == "FY"
             elif period == "quarterly":
-                is_valid = True
+                if days_diff is None:
+                    is_valid = True
+                else:
+                    is_valid = (80 <= days_diff <= 100) or (350 <= days_diff <= 380)
             else:
                 raise ValueError(f"Unbekannter period-Wert: {period}")
         else:
-            if "start" not in item:
+            if days_diff is None:
                 continue
-            start = date.fromisoformat(item["start"])
-            end = date.fromisoformat(item["end"])
-            days_diff = (end - start).days
 
             if period == "annual":
                 is_valid = 350 <= days_diff <= 380
@@ -82,18 +89,38 @@ def extract_period_values(concept_data: dict, is_point_in_time: bool = False, pe
             continue
 
         end_date = item["end"]
-        key = (end_date, days_diff) if not is_point_in_time else end_date
+        key = end_date if is_point_in_time else (end_date, days_diff)
+
+        new_entry = {
+            "end": end_date,
+            "value": item["val"],
+            "filed": item["filed"],
+            "fp": fp,
+            "fy": item.get("fy"),
+            "start": item.get("start"),
+            "days": days_diff,
+        }
 
         existing = values.get(key)
-        if existing is None or item["filed"] > existing["filed"]:
-            values[key] = {
-                "end": end_date,
-                "value": item["val"],
-                "filed": item["filed"],
-                "fp": fp,
-                "fy": item.get("fy"),
-                "start": item.get("start"),
-            }
+
+        if existing is None:
+            values[key] = new_entry
+            continue
+
+        if is_point_in_time:
+            existing_days = existing.get("days")
+            new_days = days_diff
+
+            if existing_days is None or new_days is None:
+                if item["filed"] > existing["filed"]:
+                    values[key] = new_entry
+            elif new_days < existing_days:
+                values[key] = new_entry
+            elif new_days == existing_days and item["filed"] > existing["filed"]:
+                values[key] = new_entry
+        else:
+            if item["filed"] > existing["filed"]:
+                values[key] = new_entry
 
     return list(values.values())
 
@@ -180,10 +207,11 @@ def decumulate_period_values(period_values: list[dict]) -> list[dict]:
 
 def extract_quarterly_values(concept_data: dict, is_point_in_time: bool = False) -> list[dict]:
     raw = extract_period_values(concept_data, is_point_in_time=is_point_in_time, period="quarterly")
-
+   
     if is_point_in_time:
         return [{"end": v["end"], "value": v["value"], "filed": v["filed"]} for v in raw]
     else:
+        
         return decumulate_period_values(raw)
 
 

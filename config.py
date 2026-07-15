@@ -24,6 +24,7 @@ CONCEPT_CANDIDATES = {
         "tags": [
             "WeightedAverageNumberOfDilutedSharesOutstanding",
             "WeightedAverageNumberOfSharesOutstandingBasic",
+            "CommonStockSharesOutstanding",
         ],
         "point_in_time": True,
         "mode": "fallback",
@@ -90,6 +91,7 @@ CONCEPT_CANDIDATES = {
         "point_in_time": False,
         "mode": "fallback",
     },
+
 }
 
 TTM_CONCEPTS = [
