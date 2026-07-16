@@ -138,11 +138,15 @@ PROFILE_HIDDEN = {
     "standard": {
         "net_interest_margin",
         "efficiency_ratio",
+        "p_tbv",
+        "roa",
+        "equity_to_assets",
     },
     "financial": {
         "pfcf_ttm", "ev_ebitda", "ev_sales",
         "pfcf_ratio", "net_debt_to_ebitda", "fcf_margin",
         "debt_to_equity", "operating_margin", "rule_of_40",
+        "pb_ratio",
     },
 }
 
@@ -177,6 +181,11 @@ PROFILE_CONCEPT_OVERRIDES = {
         "NoninterestExpense": {
             "tags": ["NoninterestExpense"],
             "point_in_time": False,
+            "mode": "fallback",
+        },
+        "Goodwill": {
+            "tags": ["Goodwill"],
+            "point_in_time": True,
             "mode": "fallback",
         },
     },

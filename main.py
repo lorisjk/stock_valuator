@@ -87,6 +87,10 @@ def add_derived_concepts(facts: pd.DataFrame) -> pd.DataFrame:
     eps_ttm["concept"] = "EPS_TTM_CALC"
     facts = pd.concat([facts, eps_ttm[["ticker", "end", "concept", "value"]]], ignore_index=True)
 
+    tangible_equity = calculate_difference(facts, "StockholdersEquity", "Goodwill", "value", "-")
+    tangible_equity["concept"] = "TangibleEquity"
+    facts = pd.concat([facts, tangible_equity[["ticker", "end", "concept", "value"]]], ignore_index=True)
+
     return facts
 
 
@@ -137,6 +141,12 @@ def calculate_all_metrics(facts: pd.DataFrame) -> dict:
     m["efficiency_ratio"] = calculate_ratio(
         facts, "NoninterestExpense_TTM", "Revenue_TTM", "efficiency_ratio"
     )
+    m["roa"] = calculate_ratio(
+        facts, "NetIncomeLoss_TTM", "Assets", "roa"
+    )
+    m["equity_to_assets"] = calculate_ratio(
+        facts, "StockholdersEquity", "Assets", "equity_to_assets"
+    )
 
     return m
 
@@ -154,6 +164,8 @@ def build_metrics_long(metrics: dict) -> pd.DataFrame:
         (metrics["rule_of_40"], "rule_of_40", "rule_of_40"),
         (metrics["net_interest_margin"], "net_interest_margin", "net_interest_margin"),
         (metrics["efficiency_ratio"], "efficiency_ratio", "efficiency_ratio"),
+        (metrics["roa"], "roa", "roa"),
+        (metrics["equity_to_assets"], "equity_to_assets", "equity_to_assets"),
     ]
 
     rows = [to_long_format(df, value_col, name) for df, value_col, name in spec]
@@ -191,6 +203,7 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame) ->
         "DividendsPerShare_TTM",
         "FCF_TTM",
         "EBITDA_TTM",
+        "TangibleEquity",
     ]
 
     wide = (
@@ -221,15 +234,15 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame) ->
     wide["pfcf_ratio"] = wide["market_cap"] / wide["FCF_TTM"].where(wide["FCF_TTM"] > 0)
     wide["ev_ebitda"] = wide["ev"] / wide["EBITDA_TTM"].where(wide["EBITDA_TTM"] > 0)
     wide["ev_sales"] = wide["ev"] / wide["Revenue_TTM"].where(wide["Revenue_TTM"] > 0)
-    wide["dividend_yield"] = (
-        wide["DividendsPerShare_TTM"].where(wide["DividendsPerShare_TTM"] >= 0) / wide["close"]
-    )
+    wide["dividend_yield"] = (wide["DividendsPerShare_TTM"].where(wide["DividendsPerShare_TTM"] >= 0) / wide["close"])
 
-    value_cols = ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_ebitda", "ev_sales", "dividend_yield"]
+    wide["p_tbv"] = wide["market_cap"] / wide["TangibleEquity"].where(wide["TangibleEquity"] > 0)
+
+    value_cols = ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_ebitda", "ev_sales", "dividend_yield", "p_tbv"]
 
     MAX_MULTIPLE = 200
 
-    for col in ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_ebitda", "ev_sales"]:
+    for col in ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_ebitda", "ev_sales", "p_tbv"]:
         wide[col] = wide[col].where(wide[col] <= MAX_MULTIPLE)
 
     long = wide.melt(
@@ -275,6 +288,9 @@ def build_snapshot(
 
     nim = get_latest_row(metrics["net_interest_margin"])
     efficiency = get_latest_row(metrics["efficiency_ratio"])
+    tangible_equity = get_latest_value(facts, "TangibleEquity").rename(columns={"value": "tangible_equity"})
+    roa = get_latest_row(metrics["roa"])
+    equity_to_assets = get_latest_row(metrics["equity_to_assets"])
 
     for df, cols in [
         (eps, ["ticker", "eps_ttm"]),
@@ -289,6 +305,9 @@ def build_snapshot(
         (avg_pe, ["ticker", "avg_pe_5y"]),
         (nim, ["ticker", "net_interest_margin"]),
         (efficiency, ["ticker", "efficiency_ratio"]),
+        (tangible_equity, ["ticker", "tangible_equity"]),
+        (roa, ["ticker", "roa"]),
+        (equity_to_assets, ["ticker", "equity_to_assets"]),
     ]:
         snap = pd.merge(snap, df[cols], on="ticker", how="left")
 
@@ -302,6 +321,7 @@ def build_snapshot(
     snap["ev_sales"] = snap["ev"] / snap["revenue_ttm"]
     snap["peg_ratio"] = snap["pe_ttm"] / (snap["yoy_growth"] * 100)
     snap["dividend_yield"] = snap["dividends_ttm"] / snap["price"]
+    snap["p_tbv"] = snap["market_cap"] / snap["tangible_equity"]
 
     snap = apply_profile_filter(snap)
     return snap

@@ -66,6 +66,8 @@ def plot_fundamentals(ticker: str, metrics_long: pd.DataFrame, output_path: str)
         ("rule_of_40", "Rule of 40", 0.4, True, False),
         ("net_interest_margin", "Nettozinsmarge", None, True, False),
         ("efficiency_ratio", "Efficiency Ratio", None, True, False),
+        ("roa", "Return on Assets", None, True, False),
+        ("equity_to_assets", "Equity / Assets", None, True, False),
     ]
     concepts_to_plot = [c for c in concepts_to_plot if not is_hidden(ticker, c[0])]
 
@@ -91,6 +93,7 @@ def plot_valuation(ticker: str, valuation_history: pd.DataFrame, output_path: st
         ("ev_ebitda", "EV/EBITDA", None, False),
         ("ev_sales", "EV/Sales", None, False),
         ("dividend_yield", "Dividendenrendite", None, True),
+        ("p_tbv", "P/TBV", None, False),
         
     ]
 
