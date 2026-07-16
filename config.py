@@ -1,4 +1,4 @@
-TICKERS = ["JPM"]
+TICKERS = ["MSFT"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
@@ -112,6 +112,8 @@ TTM_CONCEPTS = [
     "DividendsPerShare",
     "NetInterestIncome",
     "NoninterestExpense",
+    "ProvisionForCreditLosses",
+    "NoninterestIncome",
 ]
 
 SEARCH_HINTS = {
@@ -126,6 +128,12 @@ SEARCH_HINTS = {
     "StockholdersEquity": ["stockholdersequity"],
     "SharesOutstanding": ["sharesoutstanding"],
     "DividendsPerShare": ["dividendspershare"],
+    "Assets": ["assets"],
+    "NetInterestIncome": ["interest", "income"],
+    "NoninterestExpense": ["noninterest", "expense"],
+    "NoninterestIncome": ["noninterest", "income"],
+    "Goodwill": ["goodwill", "intangible"],
+    "ProvisionForCreditLosses": ["provision", "credit", "loss"],
 }
 
 DEFAULT_PROFILE = "standard"
@@ -141,6 +149,8 @@ PROFILE_HIDDEN = {
         "p_tbv",
         "roa",
         "equity_to_assets",
+        "provision_ratio",
+        "p_ppnr"
     },
     "financial": {
         "pfcf_ttm", "ev_ebitda", "ev_sales",
@@ -188,8 +198,34 @@ PROFILE_CONCEPT_OVERRIDES = {
             "point_in_time": True,
             "mode": "fallback",
         },
+        "ProvisionForCreditLosses": {
+            "tags": ["ProvisionForLoanLeaseAndOtherLosses"],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+        "NoninterestIncome": {
+            "tags": ["NoninterestIncome"],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
     },
 }
+
+PROFILE_EXCLUDED_CONCEPTS = {
+    "financial": {
+        "Capex",
+        "OperatingIncomeLoss",
+        "LongTermDebt",
+        "CashAndEquivalents",
+    },
+}
+
+
+def get_expected_concepts(ticker: str) -> list[str]:
+    profile = TICKER_PROFILES.get(ticker, DEFAULT_PROFILE)
+    candidates = set(get_concept_candidates(ticker).keys())
+    excluded = PROFILE_EXCLUDED_CONCEPTS.get(profile, set())
+    return list(candidates - excluded)
 
 
 def is_hidden(ticker: str, metric_name: str) -> bool:

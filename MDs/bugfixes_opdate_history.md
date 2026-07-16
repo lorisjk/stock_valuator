@@ -6,6 +6,103 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-07-16 — Stock-type profiles: making financials analysable (JPM as first bank)
+
+The largest single addition so far. Until now the whole tool was implicitly tuned for
+tech/growth stocks; financials (banks) produced either nonsense (a `debt_to_equity` of 9 for a
+deposit-funded bank) or empty metrics. The goal: JPM analysable as richly as MSFT, without
+touching how tech tickers behave, and built as a clean foundation for the eventual frontend
+(where a user picks any ticker). Chosen approach: per-ticker profile ("Weg B"), full metric
+set per profile ("Stufe 2").
+
+Two problems had to be kept separate throughout: (1) *different tags* — banks tag the same
+concept differently (solvable with the existing tag-list machinery); (2) *different metrics* —
+some ratios don't exist or mean something else for a bank (EV/EBITDA, debt_to_equity, FCF are
+meaningless; NIM, ROA, efficiency ratio, P/TBV take their place). Most naive tools only solve
+(1) and then emit a technically-computed but economically-meaningless number.
+
+### Architecture: three declarative layers, one visibility source of truth
+
+Deliberately declarative rather than scattered `if profile == "financial"` checks, so the
+frontend can later toggle profiles without rewrites.
+
+- **`TICKER_PROFILES`** maps ticker → profile (`"JPM": "financial"`), default `"standard"`.
+- **Visibility** — `PROFILE_HIDDEN` lists, per profile, which metric/chart columns to blank.
+  Symmetric: `financial` hides the tech metrics (ev_ebitda, debt_to_equity, fcf_margin,
+  rule_of_40, pb_ratio, …); `standard` hides the bank metrics (nim, efficiency_ratio, roa,
+  equity_to_assets, provision_ratio, p_tbv, p_ppnr). A single `is_hidden(ticker, metric)`
+  function is the only place that knows the logic, imported by every output stage.
+  **Philosophy 1 chosen**: everything is always *computed*, only *display* is filtered — so a
+  future "show JPM with standard metrics" toggle needs no recompute. Applied at every output:
+  snapshot (`apply_profile_filter`), both chart sets (filter `concepts_to_plot`), and the
+  long-format CSVs (`filter_hidden_rows`). Raw `quarterly_facts` deliberately NOT filtered —
+  raw balance-sheet values stay complete even when the derived ratio is hidden.
+- **Concept overrides** — `PROFILE_CONCEPT_OVERRIDES` + `get_concept_candidates(ticker)` layer
+  profile-specific concept configs over the shared base via `.update()` (same base+overlay
+  pattern as `fallback_then_sum`). Base config (tech) untouched; banks only override/add.
+
+### Bank concepts added (all as `financial` overrides, verified per ticker)
+
+- **Revenue** → `RevenuesNetOfInterestExpense` (JPM's total net revenue; the standard tags
+  only caught the contract-with-customer slice, hence the original 36% coverage and a
+  *negative* PEG from a broken yoy_growth). Fixing this alone flipped PEG from −6.9 to +4.8.
+- **Assets** → `Assets` (total assets, feeds NIM, ROA, equity/assets).
+- **NetInterestIncome** → `InterestIncomeExpenseNet` (duration, into `TTM_CONCEPTS`).
+- **NoninterestExpense** → `NoninterestExpense` (duration, TTM).
+- **NoninterestIncome** → `NoninterestIncome` (duration, TTM; for PPNR).
+- **Goodwill** → `Goodwill`. Other intangibles (finite/indefinite/other) checked and
+  *deliberately dropped* — fragmented tags, gaps, and only low-single-digit billions vs. a
+  ~50bn goodwill on a ~4tn balance sheet. Same "marginal, not worth the fragility" call as the
+  Micron lease-amortization decision. TBV = Equity − Goodwill.
+- **ProvisionForCreditLosses** → `ProvisionForLoanLeaseAndOtherLosses` (continuous 2007→2026;
+  two shorter competing tags rejected). Negative values in 2021 are real — post-COVID reserve
+  releases, not a bug.
+
+### The 9 + 6 → 9 + 4 metric set for banks
+
+Fundamentals (9): revenue growth, income growth, ROE, payout (inherited) + **NIM**
+(NetInterestIncome_TTM / Assets), **efficiency ratio** (NoninterestExpense_TTM / Revenue_TTM),
+**ROA** (NetIncome_TTM / Assets), **equity/assets** (leverage inverse), **provision/revenue**.
+
+Valuation — honestly 4, not a forced 6: **P/E**, **P/TBV** (replaces P/B for banks via
+`PROFILE_HIDDEN`), **dividend yield**, **P/PPNR** (market_cap / (NII + NonII − NonExp) — the
+Fed-stress-test pre-provision-net-revenue, the clean bank analogue to EV/EBITDA without the
+EV problem). The last two slots left *empty on purpose*: EV-multiples are conceptually broken
+for banks (deposits are the raw material, not a financing layer), and bank FCF is ill-defined.
+Two empty slots is more honest than two misleading numbers.
+
+Sanity checks all held: NIM ~1.4–2.6%, efficiency ~52–55%, ROA ~1.2%, equity/assets ~7.4%
+(≈13.5x leverage, normal for a trading-heavy megabank), P/TBV 2.95 > P/B 2.53 (goodwill effect),
+P/PPNR avg 7.6 < P/E avg 10.4 (pre-provision, pre-tax → larger denominator).
+
+### Two follow-on fixes
+
+**Dynamic chart grid.** The fixed 3×3 / 2×3 grids left empty boxes once metrics vary per
+profile (banks: 4 valuation charts in a 2×3 = two blanks). Added `_make_grid(n)` (ceil-division
+to rows×cols) and blank-axis cleanup for leftover cells. Fundamentals stayed 3×3 only by
+coincidence (14 − 5 hidden = 9); now it's robustly derived, not lucky.
+
+**Data-quality for profiles.** Banks kept warning on `Capex` / `OperatingIncomeLoss` /
+`LongTermDebt` / `CashAndEquivalents` — concepts that are structurally irrelevant for banks but
+still expected. Added `PROFILE_EXCLUDED_CONCEPTS` + `get_expected_concepts(ticker)`. Two subtle
+bugs found while wiring it: (1) `print_data_quality` was still called with
+`get_concept_candidates().keys()` instead of the pruned `get_expected_concepts()`; (2) more
+importantly, `check_data_quality` builds its counts from what's *actually in facts*, so the
+expected-list was only an *additive* list (what's missing), not a whitelist — `LongTermDebt`
+was still loaded and thus still counted. Fixed by intersecting up front:
+`df = df[df["concept"].isin(expected_concepts)]`. Side effect (intended): derived concepts
+(Revenue_TTM, PPNR, TangibleEquity, …) are also excluded from coverage warnings — correct, since
+those are validated via end-metric plausibility, not coverage. `SEARCH_HINTS` extended for all
+new bank concepts so a future thin bank concept gets a proper explore_tags suggestion.
+
+### Known debt carried forward (not done today)
+
+`build_snapshot` still pulls each metric out of the metrics dict by hand (one `get_latest_row`
++ merge line per metric) — increasingly tedious with every bank metric, and worse once
+consumer-staples / healthcare profiles arrive. Flagged for a refactor: have `build_snapshot`
+consume the metrics dict generically. Consumer staples and healthcare profiles still
+unverified (expected to be much closer to tech than banks are).
+
 ## 2026-07-16 — New feature: `build_snapshot_as_of` (retroactive snapshots)
 
 Follows the manual MU backtest (ignoring the last N rows of each series to see whether the

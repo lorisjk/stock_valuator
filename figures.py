@@ -3,6 +3,7 @@ import matplotlib.dates as mdates
 import pandas as pd
 from matplotlib.ticker import PercentFormatter
 from config import is_hidden
+import numpy as np
 
 
 def plot_metric(
@@ -52,6 +53,13 @@ def plot_metric(
     if symlog:
         ax.set_yscale("symlog", linthresh=1)
 
+def _make_grid(n: int, max_cols: int = 3):
+    if n == 0:
+        return 1, 1
+    cols = min(max_cols, n)
+    rows = -(-n // cols)  # ceil division
+    return rows, cols
+
 
 def plot_fundamentals(ticker: str, metrics_long: pd.DataFrame, output_path: str) -> None:
     concepts_to_plot = [
@@ -68,13 +76,19 @@ def plot_fundamentals(ticker: str, metrics_long: pd.DataFrame, output_path: str)
         ("efficiency_ratio", "Efficiency Ratio", None, True, False),
         ("roa", "Return on Assets", None, True, False),
         ("equity_to_assets", "Equity / Assets", None, True, False),
+        ("provision_ratio", "Provision/Revenue", 0, True, False),
     ]
     concepts_to_plot = [c for c in concepts_to_plot if not is_hidden(ticker, c[0])]
 
-    fig, axes = plt.subplots(3, 3, figsize=(15, 10))
+    rows, cols = _make_grid(len(concepts_to_plot))
+    fig, axes = plt.subplots(rows, cols, figsize=(5 * cols, 3.3 * rows))
+    axes = np.atleast_1d(axes).flatten()
 
-    for ax, (concept, ylabel, ref_line, percent, symlog) in zip(axes.flatten(), concepts_to_plot):
+    for ax, (concept, ylabel, ref_line, percent, symlog) in zip(axes, concepts_to_plot):
         plot_metric(ax, metrics_long, ticker, concept, ylabel, ref_line, percent, symlog)
+
+    for ax in axes[len(concepts_to_plot):]:
+        ax.axis("off")
 
     fig.suptitle(f"Fundamentaldaten {ticker}")
     fig.tight_layout()
@@ -94,15 +108,21 @@ def plot_valuation(ticker: str, valuation_history: pd.DataFrame, output_path: st
         ("ev_sales", "EV/Sales", None, False),
         ("dividend_yield", "Dividendenrendite", None, True),
         ("p_tbv", "P/TBV", None, False),
+        ("p_ppnr", "P/PPNR", None, False)
         
     ]
 
     concepts_to_plot = [c for c in concepts_to_plot if not is_hidden(ticker, c[0])]
 
-    fig, axes = plt.subplots(2, 3, figsize=(15, 8))
+    rows, cols = _make_grid(len(concepts_to_plot))
+    fig, axes = plt.subplots(rows, cols, figsize=(5 * cols, 4 * rows))
+    axes = np.atleast_1d(axes).flatten()
 
-    for ax, (concept, ylabel, ref_line, percent) in zip(axes.flatten(), concepts_to_plot):
+    for ax, (concept, ylabel, ref_line, percent) in zip(axes, concepts_to_plot):
         plot_metric(ax, filtered, ticker, concept, ylabel, ref_line, percent, show_mean=True)
+
+    for ax in axes[len(concepts_to_plot):]:
+        ax.axis("off")
 
     fig.suptitle(f"Bewertungsdaten {ticker}")
     fig.tight_layout()

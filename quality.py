@@ -2,6 +2,7 @@ import pandas as pd
 
 
 def check_data_quality(df: pd.DataFrame, expected_concepts: list[str], threshold: float = 0.5) -> pd.DataFrame:
+    df = df[df["concept"].isin(expected_concepts)]
     counts = df.groupby(["ticker", "concept"]).size().reset_index(name="count")
 
     missing_rows = []

@@ -14,6 +14,7 @@ from config import (
     TICKER_PROFILES, 
     PROFILE_HIDDEN,
     DEFAULT_PROFILE,
+    get_expected_concepts,
     is_hidden, 
     filter_hidden_rows, 
     get_concept_candidates
@@ -91,6 +92,15 @@ def add_derived_concepts(facts: pd.DataFrame) -> pd.DataFrame:
     tangible_equity["concept"] = "TangibleEquity"
     facts = pd.concat([facts, tangible_equity[["ticker", "end", "concept", "value"]]], ignore_index=True)
 
+    nii = facts[facts["concept"] == "NetInterestIncome_TTM"][["ticker", "end", "value"]].rename(columns={"value": "nii"})
+    nonii = facts[facts["concept"] == "NoninterestIncome_TTM"][["ticker", "end", "value"]].rename(columns={"value": "nonii"})
+    nonexp = facts[facts["concept"] == "NoninterestExpense_TTM"][["ticker", "end", "value"]].rename(columns={"value": "nonexp"})
+
+    ppnr = nii.merge(nonii, on=["ticker", "end"]).merge(nonexp, on=["ticker", "end"])
+    ppnr["value"] = ppnr["nii"] + ppnr["nonii"] - ppnr["nonexp"]
+    ppnr["concept"] = "PPNR"
+    facts = pd.concat([facts, ppnr[["ticker", "end", "concept", "value"]]], ignore_index=True)
+
     return facts
 
 
@@ -147,6 +157,9 @@ def calculate_all_metrics(facts: pd.DataFrame) -> dict:
     m["equity_to_assets"] = calculate_ratio(
         facts, "StockholdersEquity", "Assets", "equity_to_assets"
     )
+    m["provision_ratio"] = calculate_ratio(
+        facts, "ProvisionForCreditLosses_TTM", "Revenue_TTM", "provision_ratio"
+    )
 
     return m
 
@@ -166,6 +179,7 @@ def build_metrics_long(metrics: dict) -> pd.DataFrame:
         (metrics["efficiency_ratio"], "efficiency_ratio", "efficiency_ratio"),
         (metrics["roa"], "roa", "roa"),
         (metrics["equity_to_assets"], "equity_to_assets", "equity_to_assets"),
+        (metrics["provision_ratio"], "provision_ratio", "provision_ratio"),
     ]
 
     rows = [to_long_format(df, value_col, name) for df, value_col, name in spec]
@@ -204,6 +218,7 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame) ->
         "FCF_TTM",
         "EBITDA_TTM",
         "TangibleEquity",
+        "PPNR"
     ]
 
     wide = (
@@ -237,12 +252,13 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame) ->
     wide["dividend_yield"] = (wide["DividendsPerShare_TTM"].where(wide["DividendsPerShare_TTM"] >= 0) / wide["close"])
 
     wide["p_tbv"] = wide["market_cap"] / wide["TangibleEquity"].where(wide["TangibleEquity"] > 0)
+    wide["p_ppnr"] = wide["market_cap"] / wide["PPNR"].where(wide["PPNR"] > 0)
 
-    value_cols = ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_ebitda", "ev_sales", "dividend_yield", "p_tbv"]
+    value_cols = ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_ebitda", "ev_sales", "dividend_yield", "p_tbv", "p_ppnr"]
 
     MAX_MULTIPLE = 200
 
-    for col in ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_ebitda", "ev_sales", "p_tbv"]:
+    for col in ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_ebitda", "ev_sales", "p_tbv", "p_ppnr"]:
         wide[col] = wide[col].where(wide[col] <= MAX_MULTIPLE)
 
     long = wide.melt(
@@ -291,6 +307,8 @@ def build_snapshot(
     tangible_equity = get_latest_value(facts, "TangibleEquity").rename(columns={"value": "tangible_equity"})
     roa = get_latest_row(metrics["roa"])
     equity_to_assets = get_latest_row(metrics["equity_to_assets"])
+    provision_ratio = get_latest_row(metrics["provision_ratio"])
+    ppnr_latest = get_latest_value(facts, "PPNR").rename(columns={"value": "ppnr_ttm"})
 
     for df, cols in [
         (eps, ["ticker", "eps_ttm"]),
@@ -308,6 +326,8 @@ def build_snapshot(
         (tangible_equity, ["ticker", "tangible_equity"]),
         (roa, ["ticker", "roa"]),
         (equity_to_assets, ["ticker", "equity_to_assets"]),
+        (provision_ratio, ["ticker", "provision_ratio"]),
+        (ppnr_latest, ["ticker", "ppnr_ttm"]),
     ]:
         snap = pd.merge(snap, df[cols], on="ticker", how="left")
 
@@ -322,6 +342,8 @@ def build_snapshot(
     snap["peg_ratio"] = snap["pe_ttm"] / (snap["yoy_growth"] * 100)
     snap["dividend_yield"] = snap["dividends_ttm"] / snap["price"]
     snap["p_tbv"] = snap["market_cap"] / snap["tangible_equity"]
+    snap["p_ppnr"] = snap["market_cap"] / snap["ppnr_ttm"]
+    
 
     snap = apply_profile_filter(snap)
     return snap
@@ -362,7 +384,8 @@ def main():
 
     facts = load_facts()
     facts = normalize_split_adjusted(facts, ["SharesOutstanding"])
-    print_data_quality(facts, list(get_concept_candidates(TICKERS[0]).keys()), SEARCH_HINTS)
+   
+    print_data_quality(facts, get_expected_concepts(TICKERS[0]), SEARCH_HINTS)
     
     
 
