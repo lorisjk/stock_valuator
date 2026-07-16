@@ -275,6 +275,34 @@ def build_snapshot(
 
     return snap
 
+def get_price_as_of(price_history: pd.DataFrame, cutoff_date: pd.Timestamp) -> pd.DataFrame:
+    hist = price_history[price_history["date"] <= cutoff_date]
+    latest = hist.loc[hist.groupby("ticker")["date"].idxmax()]
+    return latest[["ticker", "close"]].rename(columns={"close": "price"})
+
+
+def build_snapshot_as_of(
+    cutoff_date: str,
+    facts: pd.DataFrame,
+    metrics: dict,
+    price_history: pd.DataFrame,
+    rolling_pe: pd.DataFrame,
+) -> pd.DataFrame:
+    cutoff_date = pd.Timestamp(cutoff_date)
+
+    facts_cut = facts[facts["end"] <= cutoff_date]
+    metrics_cut = {k: df[df["end"] <= cutoff_date] for k, df in metrics.items()}
+    rolling_pe_cut = rolling_pe[rolling_pe["end"] <= cutoff_date]
+
+    prices_cut = get_price_as_of(price_history, cutoff_date)
+    shares = get_latest_value(facts_cut, "SharesOutstanding").rename(
+        columns={"value": "shares_outstanding"}
+    )
+    prices_cut = pd.merge(prices_cut, shares[["ticker", "shares_outstanding"]], on="ticker", how="left")
+    prices_cut["market_cap"] = prices_cut["price"] * prices_cut["shares_outstanding"]
+
+    return build_snapshot(facts_cut, metrics_cut, prices_cut, rolling_pe_cut)
+
 
 def main():
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -307,6 +335,16 @@ def main():
     _, rolling_pe = calculate_historical_pe(facts, price_history)
     snapshot = build_snapshot(facts, metrics, prices, rolling_pe)
 
+    from config import SNAPSHOT_AS_OF_DATES  # oder oben mit den anderen Importen
+
+    for cutoff in SNAPSHOT_AS_OF_DATES:
+        hist_snapshot = build_snapshot_as_of(cutoff, facts, metrics, price_history, rolling_pe)
+        hist_snapshot.to_csv(
+            os.path.join(DATA_DIR, f"snapshot_asof_{cutoff}.csv"), index=False
+        )
+        print(f"\n--- Snapshot as of {cutoff} ---")
+        print(hist_snapshot[["ticker", "price", "pe_ttm", "avg_pe_5y", "pb_ratio", "ev_ebitda", "peg_ratio"]])
+        print(f"\n-------------------------------")
 
     facts.to_csv(os.path.join(DATA_DIR, f"{PERIOD}_facts.csv"), index=False)
     metrics_long.to_csv(os.path.join(DATA_DIR, "metrics_long.csv"), index=False)

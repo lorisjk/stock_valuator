@@ -6,6 +6,53 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-07-16 — New feature: `build_snapshot_as_of` (retroactive snapshots)
+
+Follows the manual MU backtest (ignoring the last N rows of each series to see whether the
+framework would have flagged it as undervalued a year ago). Automates that instead of redoing it
+by hand per ticker.
+
+### Approach: filter inputs, reuse the existing pipeline
+
+`calculate_ttm` / `calculate_growth` / `calculate_rolling_average` already only look backward
+(rolling window, `.shift(periods)`), so no metric-calculation logic needed to change. Filtering
+`facts`, `metrics`, and `rolling_pe` to `end <= cutoff_date` *before* handing them to the existing
+`get_latest_value` / `get_latest_row` (both already `idxmax` on `end`) reproduces "latest known
+value as of the cutoff" for free. `build_snapshot` itself is untouched — it just receives
+pre-cut inputs plus a historical price instead of the live one.
+
+```python
+def build_snapshot_as_of(cutoff_date, facts, metrics, price_history, rolling_pe):
+    cutoff_date = pd.Timestamp(cutoff_date)
+    facts_cut = facts[facts["end"] <= cutoff_date]
+    metrics_cut = {k: df[df["end"] <= cutoff_date] for k, df in metrics.items()}
+    rolling_pe_cut = rolling_pe[rolling_pe["end"] <= cutoff_date]
+    prices_cut = get_price_as_of(price_history, cutoff_date)
+    ...
+    return build_snapshot(facts_cut, metrics_cut, prices_cut, rolling_pe_cut)
+```
+
+`get_price_as_of` does the same thing for the price series: filter to `date <= cutoff`, take the
+latest row per ticker.
+
+Wired into `main()` via a new `SNAPSHOT_AS_OF_DATES` list in `config.py` (empty by default, so a
+normal run is unaffected). Each date produces `snapshot_asof_{date}.csv` alongside the regular
+snapshot.
+
+### Known limitation, accepted deliberately
+
+This is "latest value under today's data", not "what an analyst could actually have known on that
+date." SEC restatements retroactively update comparative periods in the newest filing (see the
+2026-07-13 ServiceNow split note) — old 10-Qs keep their pre-restatement values, but this
+snapshot pulls from the current `facts` DataFrame, which reflects whatever value survived
+deduplication (generally the latest filed, i.e. restated, one). True point-in-time would require
+threading `filed` through `build_dataframe` (currently dropped) and filtering on `filed <= cutoff`
+instead of `end <= cutoff` — meaningfully more work, not done here. Same category of trade-off as
+`MAX_MULTIPLE`: pragmatic, not principled, documented rather than solved.
+
+**Verified:** MU as-of 2025-08-28 (pe_ttm 16.0, ev_ebitda 7.7, peg 0.33) vs. current (pe_ttm 20.5,
+ev_ebitda 14.7, peg 0.12) — matches the manual backtest from the prior session.
+
 ## 2026-07-16 — New mode `fallback_then_sum`: resolves the AAPL debt gap left open by the last fix
 
 The previous entry's accepted trade-off ("a future company with genuinely separate debt across

@@ -4,6 +4,8 @@ EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
 PERIOD = "quarterly"
 
+SNAPSHOT_AS_OF_DATES = []  
+
 CONCEPT_CANDIDATES = {
     "Revenue": {
         "tags": [
