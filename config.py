@@ -17,7 +17,10 @@ CONCEPT_CANDIDATES = {
         "mode": "fallback",
     },
     "NetIncomeLoss": {
-        "tags": ["NetIncomeLoss"],
+        "tags": [
+            "NetIncomeLoss",
+            "NetIncomeLossAvailableToCommonStockholdersBasic"
+        ],
         "point_in_time": False,
         "mode": "fallback",
     },
@@ -139,7 +142,14 @@ SEARCH_HINTS = {
 DEFAULT_PROFILE = "standard"
 
 TICKER_PROFILES = {
-    "JPM" : "financial"
+    "JPM" : "financial", 
+    "BAC": "financial",
+    "WFC": "financial",
+    "C": "financial", 
+    "USB": "financial",
+    "PNC": "financial", 
+    "TFC": "financial", 
+    "GS": "financial"
 }
 
 PROFILE_HIDDEN = {

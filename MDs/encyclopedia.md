@@ -314,6 +314,128 @@ Treat PEG as a rough sanity check on P/E, never as a decision criterion.
 
 ---
 
+## Net Interest Margin (NIM); all following are financial indicators
+
+**What it is:** Net interest income (interest earned minus interest paid) divided by assets. It measures the spread a bank earns on its core business: borrowing cheaply, lending dearly.
+
+**Why it matters:** For a bank, this *is* the engine. A retailer has gross margin; a bank has NIM. It tells you how profitably the institution turns its balance sheet into interest income, independent of one-off gains or fee businesses.
+
+**How to read it:**
+- Higher is better, but the range is narrow — most large banks sit between ~1.5% and ~3.5%
+- Rising NIM usually means a favourable rate environment (banks reprice loans faster than deposits when rates climb)
+- Falling NIM often signals rate compression — JPM's dip toward ~1.4% in 2021/22 is the zero-rate era squeezing the spread
+
+**Where it lies:**
+- The denominator here is *total* assets, not strictly *interest-earning* assets. That understates the true margin slightly and makes cross-bank comparison rough — a bank with a large trading book (non-interest-earning assets) will look worse than it is
+- NIM says nothing about *volume*. A bank can have a great margin on a shrinking loan book. Read it alongside asset and revenue growth
+- It ignores credit risk entirely. A high NIM earned by lending to risky borrowers is not the same as a high NIM from a safe book — that's what the provision ratio is for
+
+---
+
+## Efficiency Ratio
+
+**What it is:** Non-interest expense (salaries, IT, buildings — the running costs) divided by total revenue. The bank equivalent of an inverse operating margin.
+
+**Why it matters:** It answers a simple question: how many cents does the bank spend to produce one dollar of revenue? It's the cleanest single read on operational discipline.
+
+**How to read it:**
+- **Lower is better** — this is the one bank metric where down is good
+- ~55–60% is typical for a large bank; JPM running toward ~52–55% is strong
+- A falling trend (as JPM shows over the decade) means the bank is getting more efficient — more revenue per dollar of cost
+
+**Where it lies:**
+- The denominator (total revenue) swings with the rate environment. A rate-driven revenue jump flatters the ratio without any real efficiency gain — the bank just earned more, not spent less
+- It lumps all non-interest expense together, so it can't distinguish a bank investing in growth (tech, hiring) from one that's simply bloated
+- Not comparable across bank *types* — an investment bank and a retail bank have structurally different cost bases
+
+---
+
+## Return on Assets (ROA)
+
+**What it is:** Net income divided by total assets. What the bank earns on every dollar of balance sheet.
+
+**Why it matters:** For a bank, ROA is often more honest than ROE. ROE can be inflated simply by piling on leverage; ROA can't, because the denominator is the *whole* balance sheet. It's the cleaner read on underlying profitability.
+
+**How to read it:**
+- The range is small — a healthy bank ROA sits around ~1%–1.5%. JPM near ~1.2% is solid
+- Do not read it like a tech ROA. 1.2% is *good* for a bank; the same number would be alarming for a software company
+- Rising ROA over time (as JPM shows) signals genuine profitability improvement, not just leverage games
+
+**Where it lies:**
+- The absolute number is meaningless without context — always compare a bank to other banks, never to non-financials
+- ROA and ROE together tell you about leverage: if ROE is high but ROA is ordinary, the returns are being manufactured by the balance-sheet size, not by superior earning power
+
+---
+
+## Equity / Assets
+
+**What it is:** Shareholders' equity divided by total assets. The simplest possible read on how thick the bank's capital cushion is — effectively the inverse of leverage.
+
+**Why it matters:** A bank funds enormous assets with a thin sliver of equity. This ratio shows how thin. It's a poor-man's stand-in for the regulatory Tier-1 ratio (which usually isn't cleanly available in standard XBRL).
+
+**How to read it:**
+- Higher means a thicker safety buffer; JPM around ~7.4% implies roughly 13–14x leverage
+- For a large, trading-heavy bank this level is normal; a small retail bank might run higher
+- A falling ratio means rising leverage — more assets stacked on the same equity
+
+**Where it lies:**
+- This is *not* the real regulatory capital ratio. It uses raw book equity and total assets, not risk-weighted assets or Tier-1 capital. It's a rough proxy, not a compliance figure
+- It treats all assets as equally risky, which they aren't. A balance sheet full of government bonds is far safer at the same ratio than one full of unsecured loans
+
+---
+
+## Provision for Credit Losses / Revenue
+
+**What it is:** The amount a bank sets aside for expected loan losses, relative to revenue. A forward-looking read on credit quality.
+
+**Why it matters:** Provisions are one of the earliest signals of stress. A bank raises them *before* losses actually materialise, when it senses trouble in the loan book — so a rising provision ratio can lead a downturn.
+
+**How to read it:**
+- Low and stable in good times (low single-digit % of revenue)
+- Spikes in a crisis — JPM's ~18–20% during COVID 2020 is the bank bracing for a wave of defaults
+- **Can go negative** — JPM's ~-8% in 2021 is *reserve release*: money set aside in 2020 flowed back into profit once the feared defaults didn't happen. A negative provision ratio is a *good* sign
+
+**Where it lies:**
+- Highly discretionary. Provisioning involves management judgement about the future, so it can be used to smooth earnings — under-provisioning in good times to flatter profits, over-provisioning to build a cushion
+- The sign flips the intuition: a *rising* ratio isn't necessarily bad if the bank is prudently getting ahead of risk, and a falling one isn't always good if it's just running reserves thin
+
+---
+
+## P/TBV — Price to Tangible Book Value
+
+**What it is:** Market cap divided by tangible book value (equity minus goodwill). For banks it replaces plain P/B as the primary valuation-to-book measure.
+
+**Why it matters:** Banks are valued off book value, but plain book value is inflated by goodwill from past acquisitions — an accounting entry, not hard capital you could recover in a crisis. P/TBV strips it out, leaving the tangible equity that actually backs the business.
+
+**How to read it:**
+- Higher than the plain P/B by construction (goodwill is removed from the denominator) — JPM's P/TBV of ~2.95 vs. a P/B of ~2.53 shows goodwill is roughly 15% of equity
+- Read against the bank's *own* history: JPM re-rating from ~1.2 (2022) to ~2.9 shows the market repricing it upward
+- A P/TBV near 1.0 means the market values the bank at roughly its liquidation-adjusted net worth; well above 1.0 means it's paying for future earning power
+
+**Where it lies:**
+- Our version subtracts only goodwill, not other intangibles. For JPM those are trivial (low single-digit billions on a ~4tn balance sheet), but for an intangible-heavy institution the tangible book would be overstated
+- Book value itself is an accounting number. In a stressed bank, the "tangible" book can still evaporate if the asset marks are wrong — P/TBV assumes the balance sheet is honestly valued
+
+---
+
+## P/PPNR — Price to Pre-Provision Net Revenue
+
+**What it is:** Market cap divided by pre-provision net revenue (net interest income + non-interest income − non-interest expense). PPNR is the bank's earning power *before* credit costs and taxes — the clean analogue to EBITDA for an industrial company.
+
+**Why it matters:** It answers what EV/EBITDA answers for a normal company — how the market prices the underlying operating engine — but without the EV problem (enterprise value is conceptually broken for banks, since deposits are the raw material, not a financing layer). PPNR is a standard measure, used by the Fed in its bank stress tests.
+
+**How to read it:**
+- Lower than P/E by construction, because PPNR is larger than net income (it's before provisions and tax) — JPM's P/PPNR averaging ~7.6 vs. a P/E of ~10.4
+- Read against the bank's own history; the 2023 trough (~5.5) reflects the rate-scare episode, the 2024–26 rise mirrors the same re-rating seen in P/E and P/TBV
+- Useful precisely *because* it's before provisions: it isolates operating strength from the noise of a single year's credit cycle
+
+**Where it lies:**
+- By ignoring provisions entirely, it flatters a bank that's under-reserving. A bank can have a great PPNR and still be heading for trouble if its loan book is deteriorating — pair it with the provision ratio
+- It's pre-tax, so it ignores differences in tax efficiency between banks
+- PPNR isn't a single reported line — it's assembled from three components, so it inherits any tagging quirks in those inputs
+
+---
+
 # Part 3: How to actually use this
 
 **Start with the fundamentals chart.** Ignore the price entirely. Is revenue growing? Are margins stable or improving? Is the debt manageable? Is free cash flow real? If the answer to any of these is a clear no, the valuation doesn't matter — you can stop.
