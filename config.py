@@ -1,4 +1,4 @@
-TICKERS = ["MSFT"]
+TICKERS = ["JPM"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
@@ -110,6 +110,8 @@ TTM_CONCEPTS = [
     "Capex",
     "DepreciationAndAmortization",
     "DividendsPerShare",
+    "NetInterestIncome",
+    "NoninterestExpense",
 ]
 
 SEARCH_HINTS = {
@@ -125,6 +127,81 @@ SEARCH_HINTS = {
     "SharesOutstanding": ["sharesoutstanding"],
     "DividendsPerShare": ["dividendspershare"],
 }
+
+DEFAULT_PROFILE = "standard"
+
+TICKER_PROFILES = {
+    "JPM" : "financial"
+}
+
+PROFILE_HIDDEN = {
+    "standard": {
+        "net_interest_margin",
+        "efficiency_ratio",
+    },
+    "financial": {
+        "pfcf_ttm", "ev_ebitda", "ev_sales",
+        "pfcf_ratio", "net_debt_to_ebitda", "fcf_margin",
+        "debt_to_equity", "operating_margin", "rule_of_40",
+    },
+}
+
+PROFILE_CONCEPT_OVERRIDES = {
+    "financial": {
+        "Revenue": {
+            "tags": [
+                "RevenuesNetOfInterestExpense",
+                "Revenues",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+        "CashAndEquivalents": {
+            "tags": [
+                "CashAndCashEquivalentsAtCarryingValue",
+                "CashAndDueFromBanks",
+            ],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+        "Assets": {
+            "tags": ["Assets"],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+        "NetInterestIncome": {
+            "tags": ["InterestIncomeExpenseNet"],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+        "NoninterestExpense": {
+            "tags": ["NoninterestExpense"],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+    },
+}
+
+
+def is_hidden(ticker: str, metric_name: str) -> bool:
+    profile = TICKER_PROFILES.get(ticker, DEFAULT_PROFILE)
+    return metric_name in PROFILE_HIDDEN.get(profile, set())
+
+def filter_hidden_rows(df, ticker_col="ticker", concept_col="concept"):
+    if df.empty:
+        return df
+    mask = df.apply(
+        lambda row: not is_hidden(row[ticker_col], row[concept_col]),
+        axis=1,
+    )
+    return df[mask].reset_index(drop=True)
+
+def get_concept_candidates(ticker: str) -> dict:
+    profile = TICKER_PROFILES.get(ticker, DEFAULT_PROFILE)
+    overrides = PROFILE_CONCEPT_OVERRIDES.get(profile, {})
+    resolved = dict(CONCEPT_CANDIDATES)      
+    resolved.update(overrides)               
+    return resolved
 
 CACHE_DIR = "cache"
 DATA_DIR = "data"

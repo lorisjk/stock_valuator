@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import pandas as pd
 from matplotlib.ticker import PercentFormatter
+from config import is_hidden
 
 
 def plot_metric(
@@ -63,7 +64,10 @@ def plot_fundamentals(ticker: str, metrics_long: pd.DataFrame, output_path: str)
         ("fcf_margin", "Free Cash Flow Marge", None, True, False),
         ("net_debt_to_ebitda", "Net Debt / EBITDA", 0, False, False),
         ("rule_of_40", "Rule of 40", 0.4, True, False),
+        ("net_interest_margin", "Nettozinsmarge", None, True, False),
+        ("efficiency_ratio", "Efficiency Ratio", None, True, False),
     ]
+    concepts_to_plot = [c for c in concepts_to_plot if not is_hidden(ticker, c[0])]
 
     fig, axes = plt.subplots(3, 3, figsize=(15, 10))
 
@@ -87,7 +91,10 @@ def plot_valuation(ticker: str, valuation_history: pd.DataFrame, output_path: st
         ("ev_ebitda", "EV/EBITDA", None, False),
         ("ev_sales", "EV/Sales", None, False),
         ("dividend_yield", "Dividendenrendite", None, True),
+        
     ]
+
+    concepts_to_plot = [c for c in concepts_to_plot if not is_hidden(ticker, c[0])]
 
     fig, axes = plt.subplots(2, 3, figsize=(15, 8))
 

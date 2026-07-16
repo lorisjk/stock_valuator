@@ -9,7 +9,14 @@ from config import (
     PERIOD,
     DATA_DIR,
     FIGURE_DIR,
-    SEARCH_HINTS
+    SEARCH_HINTS, 
+    SNAPSHOT_AS_OF_DATES,
+    TICKER_PROFILES, 
+    PROFILE_HIDDEN,
+    DEFAULT_PROFILE,
+    is_hidden, 
+    filter_hidden_rows, 
+    get_concept_candidates
 )
 from metrics import (
     add_ttm_concepts,
@@ -44,9 +51,10 @@ def load_facts() -> pd.DataFrame:
 
     all_dfs = []
     for ticker in TICKERS:
+        concept_candidates = get_concept_candidates(ticker)
         cik = get_cik(ticker, cik_mapping)
         company_info = get_company_info(ticker, cik, EDGAR_USER_AGENT)
-        all_dfs.append(build_dataframe(ticker, company_info, CONCEPT_CANDIDATES, period=PERIOD))
+        all_dfs.append(build_dataframe(ticker, company_info, concept_candidates, period=PERIOD))
         
     df = pd.concat(all_dfs, ignore_index=True)
     df["end"] = pd.to_datetime(df["end"]).astype("datetime64[ns]")
@@ -123,6 +131,13 @@ def calculate_all_metrics(facts: pd.DataFrame) -> dict:
         m["revenue_growth"], m["fcf_margin"], "yoy_growth", "fcf_margin", "rule_of_40"
     )
 
+    m["net_interest_margin"] = calculate_ratio(
+        facts, "NetInterestIncome_TTM", "Assets", "net_interest_margin"
+    )
+    m["efficiency_ratio"] = calculate_ratio(
+        facts, "NoninterestExpense_TTM", "Revenue_TTM", "efficiency_ratio"
+    )
+
     return m
 
 
@@ -137,6 +152,8 @@ def build_metrics_long(metrics: dict) -> pd.DataFrame:
         (metrics["fcf_margin"], "fcf_margin", "fcf_margin"),
         (metrics["net_debt_to_ebitda"], "net_debt_to_ebitda", "net_debt_to_ebitda"),
         (metrics["rule_of_40"], "rule_of_40", "rule_of_40"),
+        (metrics["net_interest_margin"], "net_interest_margin", "net_interest_margin"),
+        (metrics["efficiency_ratio"], "efficiency_ratio", "efficiency_ratio"),
     ]
 
     rows = [to_long_format(df, value_col, name) for df, value_col, name in spec]
@@ -224,6 +241,14 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame) ->
 
     return long.dropna(subset=["value"])
 
+def apply_profile_filter(snap: pd.DataFrame) -> pd.DataFrame:
+    snap = snap.copy()
+    for idx, row in snap.iterrows():
+        ticker = row["ticker"]
+        for col in snap.columns:
+            if is_hidden(ticker, col):
+                snap.at[idx, col] = None
+    return snap
 
 def build_snapshot(
     facts: pd.DataFrame,
@@ -248,6 +273,9 @@ def build_snapshot(
     growth = get_latest_row(metrics["revenue_growth"])
     avg_pe = get_latest_row(rolling_pe)
 
+    nim = get_latest_row(metrics["net_interest_margin"])
+    efficiency = get_latest_row(metrics["efficiency_ratio"])
+
     for df, cols in [
         (eps, ["ticker", "eps_ttm"]),
         (equity, ["ticker", "equity"]),
@@ -259,6 +287,8 @@ def build_snapshot(
         (cash, ["ticker", "cash"]),
         (growth, ["ticker", "yoy_growth"]),
         (avg_pe, ["ticker", "avg_pe_5y"]),
+        (nim, ["ticker", "net_interest_margin"]),
+        (efficiency, ["ticker", "efficiency_ratio"]),
     ]:
         snap = pd.merge(snap, df[cols], on="ticker", how="left")
 
@@ -273,7 +303,9 @@ def build_snapshot(
     snap["peg_ratio"] = snap["pe_ttm"] / (snap["yoy_growth"] * 100)
     snap["dividend_yield"] = snap["dividends_ttm"] / snap["price"]
 
+    snap = apply_profile_filter(snap)
     return snap
+
 
 def get_price_as_of(price_history: pd.DataFrame, cutoff_date: pd.Timestamp) -> pd.DataFrame:
     hist = price_history[price_history["date"] <= cutoff_date]
@@ -310,7 +342,7 @@ def main():
 
     facts = load_facts()
     facts = normalize_split_adjusted(facts, ["SharesOutstanding"])
-    print_data_quality(facts, list(CONCEPT_CANDIDATES.keys()), SEARCH_HINTS)
+    print_data_quality(facts, list(get_concept_candidates(TICKERS[0]).keys()), SEARCH_HINTS)
     
     
 
@@ -335,17 +367,17 @@ def main():
     _, rolling_pe = calculate_historical_pe(facts, price_history)
     snapshot = build_snapshot(facts, metrics, prices, rolling_pe)
 
-    from config import SNAPSHOT_AS_OF_DATES  # oder oben mit den anderen Importen
 
     for cutoff in SNAPSHOT_AS_OF_DATES:
         hist_snapshot = build_snapshot_as_of(cutoff, facts, metrics, price_history, rolling_pe)
-        hist_snapshot.to_csv(
-            os.path.join(DATA_DIR, f"snapshot_asof_{cutoff}.csv"), index=False
-        )
+        
         print(f"\n--- Snapshot as of {cutoff} ---")
         print(hist_snapshot[["ticker", "price", "pe_ttm", "avg_pe_5y", "pb_ratio", "ev_ebitda", "peg_ratio"]])
         print(f"\n-------------------------------")
 
+    metrics_long = filter_hidden_rows(metrics_long)
+    valuation_history = filter_hidden_rows(valuation_history)
+    
     facts.to_csv(os.path.join(DATA_DIR, f"{PERIOD}_facts.csv"), index=False)
     metrics_long.to_csv(os.path.join(DATA_DIR, "metrics_long.csv"), index=False)
     valuation_history.to_csv(os.path.join(DATA_DIR, "valuation_history.csv"), index=False)
