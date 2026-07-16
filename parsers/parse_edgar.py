@@ -47,7 +47,26 @@ def extract_merged_values(
 def extract_with_mode(us_gaap_data: dict, cfg: dict, period: str) -> list[dict]:
     mode = cfg.get("mode", "fallback")
     is_point_in_time = cfg["point_in_time"]
+    
+    if mode == "fallback_then_sum":
+        aggregate_values = extract_merged_values(
+            us_gaap_data,
+            cfg["tags"],
+            period=period,
+            is_point_in_time=is_point_in_time,
+        )
+        component_values = extract_summed_values(
+            us_gaap_data,
+            cfg["sum_tags"],
+            is_point_in_time=is_point_in_time,
+            period=period,
+        )
 
+        merged = {v["end"]: v for v in component_values}
+        merged.update({v["end"]: v for v in aggregate_values})
+
+        return sorted(merged.values(), key=lambda v: v["end"])
+    
     if mode == "sum":
         return extract_summed_values(
             us_gaap_data,

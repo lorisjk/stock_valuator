@@ -6,6 +6,62 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-07-16 — New mode `fallback_then_sum`: resolves the AAPL debt gap left open by the last fix
+
+The previous entry's accepted trade-off ("a future company with genuinely separate debt across
+multiple tags would only get the first tag") turned out not to be hypothetical. AAPL's aggregate
+`LongTermDebt` tag has a six-year gap (2015-03-28 → 2021-09-25) — exactly the era of Apple's bond
+issuance for buybacks — while `LongTermDebtNoncurrent` / `LongTermDebtCurrent` are gapless
+throughout. Under plain `fallback`, that whole window silently dropped the current portion
+(e.g. 13.5bn missing at 2019-06-29).
+
+### The fix: per-date aggregate-first, component-sum-as-gap-filler
+
+New mode in `extract_with_mode`:
+
+```python
+if mode == "fallback_then_sum":
+    aggregate_values = extract_merged_values(us_gaap_data, cfg["tags"], period=period, is_point_in_time=is_point_in_time)
+    component_values = extract_summed_values(us_gaap_data, cfg["sum_tags"], is_point_in_time=is_point_in_time, period=period)
+
+    merged = {v["end"]: v for v in component_values}
+    merged.update({v["end"]: v for v in aggregate_values})
+
+    return sorted(merged.values(), key=lambda v: v["end"])
+```
+
+Component sums go in first, aggregates overwrite via `.update()` — so for any date where a clean
+aggregate exists it always wins, and the summed components only fill dates where none of the
+aggregate tags have a value. This is the same discriminant as `fallback_sum`, just evaluated
+per-date instead of globally (the global all-or-nothing check would have missed AAPL entirely,
+since the aggregate tags aren't *fully* empty, just gapped).
+
+### Config split: two lists, and which tags go where matters
+
+```python
+"LongTermDebt": {
+    "tags": ["LongTermDebt", "DebtLongtermAndShorttermCombinedAmount", "LongTermNotesAndLoans",
+             "ConvertibleLongTermNotesPayable", "ConvertibleDebtNoncurrent",
+             "ConvertibleDebtCurrent", "ConvertibleNotesPayableCurrent"],
+    "sum_tags": ["LongTermDebtNoncurrent", "LongTermDebtCurrent", "NotesPayableCurrent"],
+    "point_in_time": True,
+    "mode": "fallback_then_sum",
+},
+```
+
+Convertible tags stay in `tags` (fallback), not `sum_tags` — at NOW they carry the *entire* debt
+alone under one name; summing them with anything reintroduces the double-count from the last fix.
+Only the genuinely non-overlapping Noncurrent/Current/NotesPayableCurrent triplet goes in
+`sum_tags`.
+
+### Verified
+
+- **AAPL** 2019-06-29 now reads 98,465M (= 84,936M Noncurrent + 13,529M Current, matches exactly);
+  2021-09-25 reads the raw aggregate 118,700M again once it resumes — confirming aggregate wins
+  over sum at the handoff point.
+- **NOW** 2020-12-31 back to 1,640M (not the previous double-counted 3,280M); Convertible tag
+  values pass through untouched, confirming no regression on the ticker the last fix protected.
+
 ## 2026-07-15 — LongTermDebt: sum → fallback, fixing MU, a latent NOW double-count, and ORCL
 
 Onboarding **MU** surfaced a `LongTermDebt` coverage gap that, when chased down, revealed the
