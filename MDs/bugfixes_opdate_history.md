@@ -6,6 +6,105 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-07-17 — Claude Code as a tag-discovery scout, and a real architecture bug it caught
+
+The financials work (2026-07-16) proved the tag-hunting method — search, verify magnitude/overlap,
+decide fallback vs. sum — but doing it ticker-by-ticker doesn't scale to the S&P 500. Today's shift:
+delegate the *mechanical* search-and-screen work to a Claude Code agent, while keeping every config
+change gated behind an explicit, empirically-verified non-regression check before it's trusted.
+
+### The workflow, in three escalating rounds
+
+**Pilot (15 mixed tickers).** First test of whether an agent could apply the same judgment used
+manually all session — reject `LiabilitiesAndStockholdersEquity` (balance-sheet total, not equity),
+reject `NonoperatingIncomeExpense` for `OperatingIncomeLoss` (the literal opposite concept, despite
+passing every mechanical filter), flag but don't blindly add anything that overlaps an existing tag
+with *different* values. It did. It also found that `SEARCH_HINTS` using bare words like `"sales"`,
+`"debt"`, `"loss"` were substring-matching into unrelated tag families (`AvailableForSaleSecurities`
+alone accounted for most of the noise) — hints were narrowed before scaling up.
+
+**Run 2 (92 tickers — the full S&P Tech + true-Banks universe).** 53 of 92 came back clean. The
+dominant remaining gap: `LongTermDebtAndCapitalLeaseObligations*`, a real, larger figure (debt +
+finance leases) that consistently overlapped the existing `LongTermDebt` tags with *different*
+values across ~18 tickers — correctly left as "needs a human mode decision," not auto-appended.
+
+**Apply pass — and the bug.** Instructed to append the safe findings, with one hard rule: *a fix
+for one ticker must never change a value for an already-working one.* The agent tested every
+addition individually against all 92 tickers before keeping it, and found that reasoning supplied
+in the task brief — "appending a tag at the end of `tags` is safe because first-match-wins" — was
+incomplete. `fallback_then_sum` let *any* tag in `tags` unconditionally beat the `sum_tags` result,
+regardless of where in `tags` it sat; position only mattered relative to other tags, not to sums.
+Appending the lease tags "last" still silently overwrote dates that were correctly served by summing
+`LongTermDebtNoncurrent + LongTermDebtCurrent` (caught: AMD's debt at one date shifting from
+2,019,000,000 to 2,037,000,000 with no visible warning). 331 regressions were found this way, before
+anything was kept — only 3 of the ~10 proposed additions survived. This is the payoff of insisting
+on empirical diffing over trusting the stated reasoning, mine included.
+
+### The real fix: one merge mechanism instead of two special-cased, buggy ones
+
+`fallback_then_sum` (tags-always-beat-sums) and `fallback_sum` (fallback only fires if the *entire*
+primary series is empty, an all-or-nothing-per-ticker gate that structurally blocked six D&A-thin
+banks from ever using their configured fallback tags) turned out to be the same underlying flaw in
+two disguises: neither was a true single-tier, per-date priority list.
+
+Replaced both with one new mode, `priority_merge`. A concept declares an ordered `sources` list —
+each entry either `{"type": "tag", "tag": "..."}` or `{"type": "sum", "tags": [...]}` — and
+extraction is a single per-date pass: first source in the list with a value for a given date wins,
+full stop, with sums treated as an ordinary entry rather than a special second tier.
+
+```python
+"LongTermDebt": {
+    "sources": [
+        {"type": "tag", "tag": "LongTermDebt"},
+        # ...existing tags in their existing order...
+        {"type": "sum", "tags": ["LongTermDebtNoncurrent", "LongTermDebtCurrent", "NotesPayableCurrent"]},
+        {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligations"},
+        {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities"},
+    ],
+    "mode": "priority_merge",
+},
+```
+
+Migrated with a two-step discipline: first a pure restructuring with zero new tags, required to
+prove byte-identical output against the old modes across all 111 cached tickers (it was, for
+`LongTermDebt`; for `DepreciationAndAmortization` it wasn't — 493 previously-unreachable values
+appeared with nothing changed or removed, which is the all-or-nothing gate finally being gone, not
+a defect, and was reported as such rather than forced to match the old, buggy behavior). Only after
+that proof did the previously-blocked tags get added, this time genuinely safe by construction
+because a per-date merge with explicit priority can't overwrite anything above it in the list.
+Zero regressions on the second pass either — nothing had to be reverted this time.
+
+### Net result
+
+- **9 of the 36 still-open tickers fully resolved** (ACN, APH, INTC, JBL, MU, NXPI, TER, TRMB, BAC),
+  several more meaningfully improved (GLW LongTermDebt 20%→97%, KEYS/MTB D&A into the 90s%).
+- **1,196 new data points** recovered across `LongTermDebt` and `DepreciationAndAmortization`,
+  zero previously-correct values touched, at any stage.
+- `fallback_then_sum` and `fallback_sum` are no longer used anywhere in `config.py`; the old code
+  paths were left in place (unused, not deleted — no reason to remove working dead code) in case a
+  future concept genuinely wants that simpler, two-tier shape.
+- Sector coverage: **~92 of ~504 S&P 500 constituents (~20%) now have systematically vetted tag
+  configs** — the full Information Technology sector plus true depository banks, split out from
+  insurers and capital-markets/payments names (which don't fit either existing profile and were
+  deliberately left unscanned this round rather than mis-filed).
+
+### Open, going into next session
+
+Three threads handed to a follow-up Claude Code task, same non-regression discipline: (1) confirm
+no other concept has the same architecture symptom under a different mode name, (2) a further tag
+search for the 11 tech tickers whose `LongTermDebt` gap survived even the lease-tag addition, and
+(3) bank `Revenue` for TFC/FITB/HBAN/RF/BNY/MTB/SYF — where no single tag has ever covered the
+total, so the candidate fix is a genuine `{"type": "sum"}` of net-interest-income + noninterest-
+income, validated against a working bank (JPM) before being trusted on the broken ones.
+
+Longer-term: the GICS sectors scanned so far (Tech, Banks) were the two profiles that already
+existed. The next several sessions' decisions are squarely about the sectors that don't fit either
+— insurers (own economics: premiums, combined ratio, float, no NIM), capital-markets/payments names
+(economically closer to tech than to banks — Visa, Mastercard, the exchanges, asset managers), and
+eventually Consumer Staples/Healthcare/Industrials, none of which have been profiled at all yet.
+Each will likely need its own profile, its own metric registry entries, and its own round of this
+same scout → apply → verify cycle.
+
 ## 2026-07-16 — Stock-type profiles: making financials analysable (JPM as first bank)
 
 The largest single addition so far. Until now the whole tool was implicitly tuned for
