@@ -1,158 +1,125 @@
-# Task: Structural Fix — Unified Per-Date Priority Merge
+# Task: Follow-Up on the Three Open Questions from priority_merge_report.md
 
-## The root problem (same bug, two disguises)
+Three independent sub-tasks. Do them in order — A is quick and may turn out to
+be a non-issue; B and C are real tag hunts that reuse the established
+methodology (`search_tags` + `SEARCH_HINTS`, the five compatibility criteria,
+the four pilot learnings about flow-vs-balance/forward-looking/name-sanity/
+overlap-≠-additive) from the scan tasks. Every config change, in every part,
+must pass the same non-regression discipline used in the last two tasks:
+diff every `(ticker, concept, end)` value across the full known ticker
+universe (all cached `company_info.json` files plus everything in
+`TICKER_PROFILES`) before vs. after, zero tolerance for any previously-
+populated value changing or disappearing, only new fills are acceptable.
 
-`fallback_then_sum` (used by `LongTermDebt`) and `fallback_sum` (used by
-`DepreciationAndAmortization`, base and `financial` override) both try to do
-"prefer clean tags, fall back to summing components" — but neither actually
-does a clean per-date priority merge:
+## Part A — Confirm no other concept has the same architecture bug
 
-- `fallback_then_sum`: `tags` always wins over `sum_tags` for any date, no
-  matter where a tag sits in the `tags` list. A tag appended "last" in `tags`
-  is only last *relative to other tags* — it still unconditionally beats the
-  `sum_tags` result. This is exactly what caused Run-2's apply task to revert
-  the `LongTermDebtAndCapitalLeaseObligations*` additions (331 regressions).
-- `fallback_sum`: the fallback to `fallback_sum_tags` only triggers when the
-  *entire* primary-`tags` series is empty for that ticker — an all-or-nothing
-  gate per ticker, not per date. This structurally blocks every candidate from
-  ever helping a ticker (MTB, BAC, NTRS, TER, TRMB, KEYS) that already has
-  *some* primary-tag coverage, regardless of what the new tag's data actually
-  looks like.
+`priority_merge_report.md` Part D already confirmed via `grep` that
+`LongTermDebt` and both `DepreciationAndAmortization` entries were the only
+users of `fallback_then_sum`/`fallback_sum`. This part is a second, more
+careful pass — grep alone proves no *other* concept uses those two mode
+*names*, but doesn't prove no other concept has a similar underlying symptom
+under a different mode.
 
-Both are solved by the same fix: one ordered list of "sources" (a source is
-either a single tag or a sum-of-tags group), merged **per date**, first source
-in the list with a value for that date wins — full stop, no tier distinction
-between "tags" and "sums."
+1. For every concept in `CONCEPT_CANDIDATES` and every `PROFILE_CONCEPT_OVERRIDES`
+   entry, check its `mode`. Plain `fallback` and `sum` do not have the
+   architecture bug (both already operate per-date with a single tier), so
+   they don't need migration. Confirm there are genuinely no other
+   `fallback_then_sum`/`fallback_sum` users (re-verify the report's grep
+   result directly rather than trusting it blindly).
+2. Separately, revisit `GLW`'s `Capex` gap (3/71, 4%) specifically, since it's
+   the open question's example. Per Run 2's own finding, every `Capex`
+   candidate for GLW was either a wrong-direction PP&E-disposal tag or failed
+   the period filter — i.e., this was already established as "no viable
+   candidate exists," not a merge-mechanics problem. Confirm this conclusion
+   still holds (a quick re-check of `Capex`'s current `mode` — if it's plain
+   `fallback`, the architecture fix is irrelevant here and the gap is a
+   genuine no-candidate case, not something Part A can help with).
+3. If step 1 finds no other affected concept and step 2 confirms GLW's Capex
+   gap is a genuine no-candidate case: **close this question with a short
+   note, make no config changes for Part A, and move to Part B.** Do not
+   invent work here — if there's nothing to migrate, say so plainly.
+4. If step 1 *does* find another concept with the same symptom (a ticker with
+   partial primary-tag coverage where a configured fallback/sum tag is
+   structurally unreachable), migrate it to `priority_merge` using the same
+   staged B1 (byte-identical proof, no new tags) → B2 (extend) process as the
+   previous task, each step separately verified.
 
-## Part A — Implement the new mode
+## Part B — Targeted LongTermDebt search: the 11 remaining tech tickers
 
-Add a new mode, `priority_merge`, to `extract_with_mode` in `parse_edgar.py`.
-Do not remove the existing `fallback`, `sum`, `fallback_sum`, `fallback_then_sum`
-code paths — other concepts may still use plain `fallback`/`sum` and should be
-untouched by this task.
+`ADI, ANET, CDNS, FFIV, FTNT, MPWR, PLTR, PTC, SNDK, SWKS, TYL` — confirmed by
+the last task's report to have no `LongTermDebtAndCapitalLeaseObligations[...]`
+data at all. The merge mechanism is no longer the blocker for these; the
+question is purely whether a different tag exists.
 
-Config shape for a concept using the new mode:
+1. For each of the 11, run `search_tags` with the current `LongTermDebt`
+   `SEARCH_HINTS` entries, plus one broader pass using just `["debt"]` and
+   `["notes"]` individually (accept the noise — with only 11 tickers this is
+   affordable to review by hand, unlike a full S&P scan) to catch anything
+   the narrower hints might have missed.
+2. Apply the same rejection rules as before: forward-looking maturity-
+   schedule tags, cash-flow proceeds/repayments (flow, not balance) tags,
+   fair-value-basis tags, name-mismatch tags (read the name even when the
+   numbers look clean) — all rejected regardless of coverage/magnitude
+   scores. Apply the "overlap ≠ additive" rule to anything that overlaps an
+   existing source with different values.
+3. For anything that survives: add it to that concept's `sources` list at
+   lowest priority (after everything currently there, including the two
+   capital-lease tags from the last task) and run the full non-regression
+   diff. If it introduces any regression, remove it and log why rather than
+   forcing it through.
+4. Some of these 11 may genuinely have no usable tag (Run 2 already suggested
+   several, e.g. PLTR, are simply low-debt companies with sparse reporting).
+   That's an acceptable outcome — report it as such per ticker, don't strain
+   to find a candidate that isn't there.
 
-```python
-"ConceptName": {
-    "sources": [
-        {"type": "tag", "tag": "SomeTag"},
-        {"type": "tag", "tag": "AnotherTag"},
-        {"type": "sum", "tags": ["ComponentA", "ComponentB"]},
-        {"type": "tag", "tag": "LowConfidenceTag"},
-    ],
-    "point_in_time": True,  # or False — same as today, one flag for the whole concept
-    "mode": "priority_merge",
-},
-```
+## Part C — Bank Revenue gap: try a genuine sum, not just another single tag
 
-Algorithm — implement this exactly, it's a straightforward generalization of
-the existing `extract_merged_values`:
+`TFC, FITB, HBAN, RF, BNY, MTB, SYF` — Run 2 found only revenue *components*
+(interest income alone, or a single fee line) for these, never a total. A
+single-tag fallback can't fix this; a bank's total revenue is structurally
+`NetInterestIncome + NoninterestIncome`, which `priority_merge`'s `"sum"`
+source type can express *if* both components are reliably tagged for these
+banks and the sum is genuinely additive (not double-counting a tag that
+already includes both pieces).
 
-```python
-def extract_priority_merge(us_gaap_data, sources, period, is_point_in_time):
-    merged = {}
-    for source in sources:
-        if source["type"] == "tag":
-            concept_data = us_gaap_data.get(source["tag"])
-            if concept_data is None:
-                continue
-            values = (extract_annual_values if period == "annual" else extract_quarterly_values)(
-                concept_data, is_point_in_time=is_point_in_time
-            )
-        elif source["type"] == "sum":
-            values = extract_summed_values(
-                us_gaap_data, source["tags"], is_point_in_time=is_point_in_time, period=period
-            )
-        else:
-            raise ValueError(f"unknown source type: {source['type']}")
-
-        for v in values:
-            if v["end"] not in merged:
-                merged[v["end"]] = v
-
-    return sorted(merged.values(), key=lambda v: v["end"])
-```
-
-Order in the list is priority, full stop — a `sum` step is not special-cased,
-it just occupies whatever position it's given, and is skipped for any date
-already claimed by an earlier source.
-
-## Part B — Migrate LongTermDebt and DepreciationAndAmortization, staged
-
-Do this as **two separate, verified steps** — do not add new tags in the same
-step as the mode migration. This lets a regression get traced to "the merge
-logic changed" vs. "a new tag was added," which matters if anything breaks.
-
-### Step B1 — Pure refactor, zero new tags, must be byte-identical to today
-
-Rewrite these three configs to use `sources`/`priority_merge`, preserving the
-*exact current effective priority* — same tags, same order, sum group placed
-exactly where `sum_tags`/`fallback_sum_tags` currently sits (i.e., right after
-all the named tags, nothing added yet):
-
-- `CONCEPT_CANDIDATES["LongTermDebt"]`: all current `tags` entries in their
-  current order, each as a `{"type": "tag", ...}`, followed by one
-  `{"type": "sum", "tags": [...]}` using the current `sum_tags` list.
-- `CONCEPT_CANDIDATES["DepreciationAndAmortization"]`: current `tags` entries,
-  then a `sum` step with the current `fallback_sum_tags`.
-- `PROFILE_CONCEPT_OVERRIDES["financial"]["DepreciationAndAmortization"]`: same
-  pattern with its current tags/fallback_sum_tags (the one added in the
-  previous task, currently inert — migrate it too, for consistency).
-
-**Verification (must pass before Step B2 starts):** for every ticker with
-cached SEC data (check `cache/*_company_info.json`, plus anything listed in
-`TICKER_PROFILES` even if not yet cached — fetch if needed), extract
-`LongTermDebt` and `DepreciationAndAmortization` under the **old** config and
-the **new** `priority_merge` config, and diff every `(ticker, end)` value.
-This must come back with **zero differences** — it's a pure restructuring, the
-output must be identical. If anything differs, the migration has a bug; fix it
-before proceeding, don't paper over it by adjusting the "expected" values.
-
-### Step B2 — Now add the previously-blocked tags, as new lowest-priority sources
-
-Only after B1 is proven identical, append these as new `{"type": "tag", ...}`
-entries **after** the `sum` step (i.e., last priority — they fire only where
-neither the named tags nor the sum has data for that date):
-
-- `LongTermDebt.sources`: append `LongTermDebtAndCapitalLeaseObligations`,
-  then `LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities`.
-- `DepreciationAndAmortization.sources` (base): append `AdjustmentForAmortization`,
-  then `FiniteLivedIntangibleAssetsAmortizationExpense`.
-- `financial` D&A override `.sources`: append `DepreciationNonproduction`,
-  `DepreciationPremisesAndEquipment`, `CapitalizedComputerSoftwareAmortization`
-  (the MSR tag from the previous task should already be present — keep it,
-  positioned last as before).
-
-**Verification (mandatory, same non-regression discipline as the previous
-task):** re-run the full diff across the same ticker universe. Every
-previously-populated `(ticker, concept, end)` value must be unchanged. Only
-previously-null values may now be populated. If any previously-populated value
-changes, that specific tag's position or inclusion is wrong — remove it and
-log why, don't force it through.
-
-## Part C — Re-check coverage on the still-flagged tickers
-
-Re-run `check_data_quality` on the tickers that were still gapped after the
-previous task (the 36 unresolved from `run2_apply_report.md`'s Part D table,
-excluding CRWD/NTRS/SYF which are already resolved). Produce a before/after
-coverage table like the previous report's Part D, plus a short note on which
-tickers' `LongTermDebt`/`DepreciationAndAmortization` gaps are now closed or
-meaningfully improved thanks to the fixed per-date gating.
-
-## Part D — Cleanup (optional, only if safe)
-
-If, after B1+B2, nothing in the codebase still references the old
-`fallback_then_sum` or `fallback_sum` modes (check the full `config.py` for
-any other concept using them — do not assume LongTermDebt/D&A are the only
-ones without checking), it's fine to leave the old mode implementations in
-`extract_with_mode` as dead code rather than removing them — do not delete
-code as part of this task unless you are certain nothing depends on it.
-Removing dead code is not the goal here; correctness and non-regression are.
+1. **Validate the approach on a bank that already works, before touching the
+   broken ones.** For JPM (or another bank with a clean `Revenue` value via
+   `RevenuesNetOfInterestExpense`), pull the raw values of whatever tags
+   correspond to net interest income and noninterest income (`NetInterestIncome`
+   / `InterestIncomeExpenseNet` and `NoninterestIncome`, or their raw XBRL
+   equivalents) for the same dates, and confirm
+   `interest_component + noninterest_component ≈ RevenuesNetOfInterestExpense`
+   (allow a small tolerance — a few percent — for rounding/other adjustments).
+   If this doesn't hold reasonably closely, the sum approach is unsound and
+   Part C should stop here with that finding reported, rather than applying
+   an unvalidated formula to the broken banks.
+2. If validated: for each of the 7 tickers, check whether it reports both an
+   interest-income(-net) tag and a noninterest-income tag with reasonable
+   coverage (use `search_tags` with `["interestincome", "interestexpensenet"]`
+   and `["noninterestincome"]`, consistent with the existing `SEARCH_HINTS`
+   entries for `NetInterestIncome`/`NoninterestIncome`).
+3. For any ticker where both components are present and cover a meaningful
+   number of periods: add a `{"type": "sum", "tags": [interest_tag,
+   noninterest_tag]}` source to that ticker's effective `Revenue` config
+   (the `financial` profile override) at the lowest priority (after the
+   existing single-tag entries), non-regression-test it as usual, and report
+   the resulting coverage.
+4. For tickers where the components aren't both cleanly available, or where
+   step 1's validation doesn't hold well enough to trust the formula: do not
+   guess. Report as still-unresolved with the specific reason (missing
+   component / validation didn't hold / etc.) rather than adding a shaky sum.
+5. **Note on scope:** this changes the `financial` profile's shared `Revenue`
+   config, which every bank in `TICKER_PROFILES` uses — the non-regression
+   diff must cover all of them (JPM included), not just the 7 target tickers,
+   since a new low-priority sum source could in principle also fire for a
+   bank that wasn't part of this investigation if it happens to have a gap
+   too. That's fine if it only fills gaps, but it must be verified, not
+   assumed.
 
 ## Output
 
-One file, `priority_merge_report.md`: what the new mode does, confirmation
-that B1 was byte-identical (with the diff count, should be 0), what was added
-in B2 and the regression check result (should be 0 regressions), the Part C
-before/after table, and any open questions. No scratch scripts left behind.
+One file, `followup_report.md`, with one section per part (A, B, C), each
+reporting: what was checked, what was found, what was added (if anything)
+with its regression-test result, and what remains unresolved with a specific
+reason. If a part concludes "nothing to do," say so briefly rather than
+padding it. No scratch scripts left behind.

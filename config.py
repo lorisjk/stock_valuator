@@ -89,6 +89,7 @@ CONCEPT_CANDIDATES = {
             {"type": "sum", "tags": ["LongTermDebtNoncurrent", "LongTermDebtCurrent", "NotesPayableCurrent"]},
             {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligations"},
             {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities"},
+            {"type": "tag", "tag": "UnsecuredLongTermDebt"},
         ],
         "point_in_time": True,
         "mode": "priority_merge",
@@ -193,12 +194,13 @@ PROFILE_HIDDEN = {
 PROFILE_CONCEPT_OVERRIDES = {
     "financial": {
         "Revenue": {
-            "tags": [
-                "RevenuesNetOfInterestExpense",
-                "Revenues",
+            "sources": [
+                {"type": "tag", "tag": "RevenuesNetOfInterestExpense"},
+                {"type": "tag", "tag": "Revenues"},
+                {"type": "sum", "tags": ["InterestIncomeExpenseNet", "NoninterestIncome"]},
             ],
             "point_in_time": False,
-            "mode": "fallback",
+            "mode": "priority_merge",
         },
         "CashAndEquivalents": {
             "tags": [
