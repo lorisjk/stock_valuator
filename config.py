@@ -1,4 +1,4 @@
-TICKERS = ["JPM"]
+TICKERS = ["TRV"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
@@ -152,8 +152,8 @@ SEARCH_HINTS = {
 DEFAULT_PROFILE = "standard"
 
 TICKER_PROFILES = {
-    "BAC" : "financial",
-    "C" : "financial",    
+    "BAC": "financial",
+    "C": "financial",    
     "JPM": "financial",  
     "WFC": "financial",  
     "USB": "financial", 
@@ -171,6 +171,28 @@ TICKER_PROFILES = {
     "NTRS": "financial", 
     "SYF": "financial",
     "AXP": "financial",
+
+    "TRV": "insurance_pc",
+    "CB": "insurance_pc",
+    "PGR": "insurance_pc",
+    "ALL": "insurance_pc",
+    "AIG": "insurance_pc",
+    "WRB": "insurance_pc",
+    "CINF": "insurance_pc",
+    "ACGL": "insurance_pc",
+    "HIG": "insurance_pc",
+    "L": "insurance_pc",
+    "EG": "insurance_pc",
+
+    "MET": "insurance_life",
+    "PRU": "insurance_life",
+    "AFL": "insurance_life",
+    "PFG": "insurance_life",
+    "GL": "insurance_life",
+    "AIZ": "insurance_life",
+    "ERIE": "insurance_life",
+
+
 }
 
 PROFILE_HIDDEN = {
@@ -189,6 +211,44 @@ PROFILE_HIDDEN = {
         "debt_to_equity", "operating_margin", "rule_of_40",
         "pb_ratio",
     },
+    "insurance_pc":{
+        "pfcf_ttm", 
+        "ev_ebitda", 
+        "ev_sales",
+        "pfcf_ratio", 
+        "net_debt_to_ebitda", 
+        "fcf_margin",
+        "debt_to_equity", 
+        "operating_margin", 
+        "rule_of_40",
+        "pb_ratio",
+
+        "net_interest_margin",
+        "efficiency_ratio",
+        "roa",
+        "equity_to_assets",
+        "provision_ratio",
+        "p_ppnr"
+    },
+    "insurance_life":{
+        "pfcf_ttm", 
+        "ev_ebitda", 
+        "ev_sales",
+        "pfcf_ratio", 
+        "net_debt_to_ebitda", 
+        "fcf_margin",
+        "debt_to_equity", 
+        "operating_margin", 
+        "rule_of_40",
+        "pb_ratio",
+
+        "net_interest_margin",
+        "efficiency_ratio",
+        "roa",
+        "equity_to_assets",
+        "provision_ratio",
+        "p_ppnr"
+    }
 }
 
 PROFILE_CONCEPT_OVERRIDES = {
@@ -258,6 +318,14 @@ PROFILE_CONCEPT_OVERRIDES = {
             "mode": "fallback",
         },
     },
+
+    "insurance_pc": {
+
+    },
+
+    "insurance_life": {
+
+    },
 }
 
 PROFILE_EXCLUDED_CONCEPTS = {
@@ -267,6 +335,14 @@ PROFILE_EXCLUDED_CONCEPTS = {
         "LongTermDebt",
         "CashAndEquivalents",
     },
+
+    "insurance_pc": {
+
+    },
+
+    "insurance_life":{
+
+    }
 }
 
 
