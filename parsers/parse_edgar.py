@@ -44,10 +44,47 @@ def extract_merged_values(
     ]
 
 
+def extract_priority_merge(
+    us_gaap_data: dict,
+    sources: list[dict],
+    period: str,
+    is_point_in_time: bool,
+) -> list[dict]:
+    merged = {}
+    for source in sources:
+        if source["type"] == "tag":
+            concept_data = us_gaap_data.get(source["tag"])
+            if concept_data is None:
+                continue
+            values = (extract_annual_values if period == "annual" else extract_quarterly_values)(
+                concept_data, is_point_in_time=is_point_in_time
+            )
+        elif source["type"] == "sum":
+            values = extract_summed_values(
+                us_gaap_data, source["tags"], is_point_in_time=is_point_in_time, period=period
+            )
+        else:
+            raise ValueError(f"unknown source type: {source['type']}")
+
+        for v in values:
+            if v["end"] not in merged:
+                merged[v["end"]] = v
+
+    return sorted(merged.values(), key=lambda v: v["end"])
+
+
 def extract_with_mode(us_gaap_data: dict, cfg: dict, period: str) -> list[dict]:
     mode = cfg.get("mode", "fallback")
     is_point_in_time = cfg["point_in_time"]
-    
+
+    if mode == "priority_merge":
+        return extract_priority_merge(
+            us_gaap_data,
+            cfg["sources"],
+            period=period,
+            is_point_in_time=is_point_in_time,
+        )
+
     if mode == "fallback_then_sum":
         aggregate_values = extract_merged_values(
             us_gaap_data,

@@ -1,4 +1,4 @@
-TICKERS = ["MSFT"]
+TICKERS = ["JPM"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
@@ -12,6 +12,8 @@ CONCEPT_CANDIDATES = {
             "RevenueFromContractWithCustomerExcludingAssessedTax",
             "Revenues",
             "SalesRevenueNet",
+            "SalesRevenueGoodsNet",
+            "RevenueFromContractWithCustomerIncludingAssessedTax",
         ],
         "point_in_time": False,
         "mode": "fallback",
@@ -35,7 +37,10 @@ CONCEPT_CANDIDATES = {
         "mode": "fallback",
     },
     "StockholdersEquity": {
-        "tags": ["StockholdersEquity"],
+        "tags": [
+            "StockholdersEquity",
+            "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+        ],
         "point_in_time": True,
         "mode": "fallback",
     },
@@ -61,36 +66,39 @@ CONCEPT_CANDIDATES = {
         "mode": "fallback",
     },
    "DepreciationAndAmortization": {
-    "tags": [
-        "DepreciationDepletionAndAmortization",
-        "DepreciationAndAmortization",
-        "DepreciationAmortizationAndAccretionNet",
+    "sources": [
+        {"type": "tag", "tag": "DepreciationDepletionAndAmortization"},
+        {"type": "tag", "tag": "DepreciationAndAmortization"},
+        {"type": "tag", "tag": "DepreciationAmortizationAndAccretionNet"},
+        {"type": "sum", "tags": ["Depreciation", "AmortizationOfIntangibleAssets"]},
+        {"type": "tag", "tag": "AdjustmentForAmortization"},
+        {"type": "tag", "tag": "FiniteLivedIntangibleAssetsAmortizationExpense"},
     ],
-    "fallback_sum_tags": ["Depreciation", "AmortizationOfIntangibleAssets"],
     "point_in_time": False,
-    "mode": "fallback_sum",
+    "mode": "priority_merge",
     },
     "LongTermDebt": {
-        "tags": [
-            "LongTermDebt",
-            "DebtLongtermAndShorttermCombinedAmount",
-            "LongTermNotesAndLoans",
-            "ConvertibleLongTermNotesPayable",
-            "ConvertibleDebtNoncurrent",
-            "ConvertibleDebtCurrent",
-            "ConvertibleNotesPayableCurrent",
-        ],
-        "sum_tags": [
-            "LongTermDebtNoncurrent",
-            "LongTermDebtCurrent",
-            "NotesPayableCurrent",
+        "sources": [
+            {"type": "tag", "tag": "LongTermDebt"},
+            {"type": "tag", "tag": "DebtLongtermAndShorttermCombinedAmount"},
+            {"type": "tag", "tag": "LongTermNotesAndLoans"},
+            {"type": "tag", "tag": "ConvertibleLongTermNotesPayable"},
+            {"type": "tag", "tag": "ConvertibleDebtNoncurrent"},
+            {"type": "tag", "tag": "ConvertibleDebtCurrent"},
+            {"type": "tag", "tag": "ConvertibleNotesPayableCurrent"},
+            {"type": "sum", "tags": ["LongTermDebtNoncurrent", "LongTermDebtCurrent", "NotesPayableCurrent"]},
+            {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligations"},
+            {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities"},
         ],
         "point_in_time": True,
-        "mode": "fallback_then_sum",
+        "mode": "priority_merge",
     },
 
     "CashAndEquivalents": {
-        "tags": ["CashAndCashEquivalentsAtCarryingValue"],
+        "tags": [
+            "CashAndCashEquivalentsAtCarryingValue",
+            "CashAndCashEquivalentsAtCarryingValueIncludingDiscontinuedOperations",
+        ],
         "point_in_time": True,
         "mode": "fallback",
     },
@@ -120,36 +128,48 @@ TTM_CONCEPTS = [
 ]
 
 SEARCH_HINTS = {
-    "Revenue": ["revenue", "sales"],
+    "Revenue": ["revenue", "salesrevenue"],
     "NetIncomeLoss": ["netincome"],
     "OperatingIncomeLoss": ["operatingincome"],
     "OperatingCashFlow": ["operatingactivities"],
-    "Capex": ["acquire", "propertyplant"],
+    "Capex": ["propertyplant", "productiveassets"],
     "DepreciationAndAmortization": ["depreciation", "amortization"],
-    "LongTermDebt": ["debt", "notes", "borrowings"],
+    "LongTermDebt": ["longtermdebt", "borrowings", "notespayable"],
     "CashAndEquivalents": ["cashandcash"],
     "StockholdersEquity": ["stockholdersequity"],
     "SharesOutstanding": ["sharesoutstanding"],
     "DividendsPerShare": ["dividendspershare"],
+    # bank concepts:
     "Assets": ["assets"],
-    "NetInterestIncome": ["interest", "income"],
-    "NoninterestExpense": ["noninterest", "expense"],
-    "NoninterestIncome": ["noninterest", "income"],
+    "NetInterestIncome": ["interestincome", "interestexpensenet"],
+    "NoninterestExpense": ["noninterestexpense"],
+    "NoninterestIncome": ["noninterestincome"],
     "Goodwill": ["goodwill", "intangible"],
-    "ProvisionForCreditLosses": ["provision", "credit", "loss"],
+    "ProvisionForCreditLosses": ["provisionforloan", "provisionforcredit"],
 }
 
 DEFAULT_PROFILE = "standard"
 
 TICKER_PROFILES = {
-    "JPM" : "financial", 
-    "BAC": "financial",
-    "WFC": "financial",
-    "C": "financial", 
-    "USB": "financial",
-    "PNC": "financial", 
-    "TFC": "financial", 
-    "GS": "financial"
+    "BAC" : "financial",
+    "C" : "financial",    
+    "JPM": "financial",  
+    "WFC": "financial",  
+    "USB": "financial", 
+    "PNC": "financial",  
+    "TFC": "financial",  
+    "COF": "financial", 
+    "FITB": "financial",
+    "HBAN": "financial",
+    "KEY": "financial",
+    "MTB": "financial",
+    "RF": "financial",
+    "CFG": "financial", 
+    "BNY": "financial", 
+    "STT": "financial",
+    "NTRS": "financial", 
+    "SYF": "financial",
+    "AXP": "financial",
 }
 
 PROFILE_HIDDEN = {
@@ -208,8 +228,25 @@ PROFILE_CONCEPT_OVERRIDES = {
             "point_in_time": True,
             "mode": "fallback",
         },
+        "DepreciationAndAmortization": {
+            "sources": [
+                {"type": "tag", "tag": "DepreciationDepletionAndAmortization"},
+                {"type": "tag", "tag": "DepreciationAndAmortization"},
+                {"type": "tag", "tag": "DepreciationAmortizationAndAccretionNet"},
+                {"type": "sum", "tags": ["Depreciation", "AmortizationOfIntangibleAssets", "AmortizationOfMortgageServicingRightsMSRs"]},
+                {"type": "tag", "tag": "DepreciationNonproduction"},
+                {"type": "tag", "tag": "DepreciationPremisesAndEquipment"},
+                {"type": "tag", "tag": "CapitalizedComputerSoftwareAmortization"},
+            ],
+            "point_in_time": False,
+            "mode": "priority_merge",
+        },
         "ProvisionForCreditLosses": {
-            "tags": ["ProvisionForLoanLeaseAndOtherLosses"],
+            "tags": [
+                "ProvisionForLoanLeaseAndOtherLosses",
+                "ProvisionForLoanAndLeaseLosses",
+                "ProvisionForLoanLossesExpensed",
+            ],
             "point_in_time": False,
             "mode": "fallback",
         },
@@ -229,6 +266,8 @@ PROFILE_EXCLUDED_CONCEPTS = {
         "CashAndEquivalents",
     },
 }
+
+
 
 
 def get_expected_concepts(ticker: str) -> list[str]:

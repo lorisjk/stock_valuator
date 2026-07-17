@@ -17,7 +17,8 @@ from config import (
     get_expected_concepts,
     is_hidden, 
     filter_hidden_rows, 
-    get_concept_candidates
+    get_concept_candidates, 
+    
 )
 from metrics import (
     add_ttm_concepts,
@@ -31,7 +32,7 @@ from metrics import (
     get_latest_value,
     get_latest_row,
     to_long_format,
-    normalize_split_adjusted
+    normalize_split_adjusted, 
 )
 from figures import plot_fundamentals, plot_valuation
 from quality import print_data_quality
