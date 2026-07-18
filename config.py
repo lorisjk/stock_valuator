@@ -111,6 +111,11 @@ CONCEPT_CANDIDATES = {
         "point_in_time": False,
         "mode": "fallback",
     },
+    "Goodwill": {
+            "tags": ["Goodwill"],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
 
 }
 
@@ -126,6 +131,11 @@ TTM_CONCEPTS = [
     "NoninterestExpense",
     "ProvisionForCreditLosses",
     "NoninterestIncome",
+    "EarnedPremiums",
+    "IncurredLosses",
+    "BenefitsLossesAndExpenses",
+    "NetInvestmentIncome",
+    "RealizedInvestmentGains",
 ]
 
 SEARCH_HINTS = {
@@ -147,6 +157,13 @@ SEARCH_HINTS = {
     "NoninterestIncome": ["noninterestincome"],
     "Goodwill": ["goodwill", "intangible"],
     "ProvisionForCreditLosses": ["provisionforloan", "provisionforcredit"],
+    # insurance_pc concepts:
+    "EarnedPremiums": ["premiumsearned"],
+    "IncurredLosses": ["benefitsandclaims", "policyholderbenefits"],
+    "BenefitsLossesAndExpenses": ["benefitslossesandexpenses"],
+    "NetInvestmentIncome": ["netinvestmentincome"],
+    "Investments": ["investments"],
+    "ClaimsReserve": ["liabilityforclaims", "claimsadjustmentexpense"],
 }
 
 DEFAULT_PROFILE = "standard"
@@ -171,6 +188,7 @@ TICKER_PROFILES = {
     "NTRS": "financial", 
     "SYF": "financial",
     "AXP": "financial",
+    "GS": "financial",
 
     "TRV": "insurance_pc",
     "CB": "insurance_pc",
@@ -203,13 +221,25 @@ PROFILE_HIDDEN = {
         "roa",
         "equity_to_assets",
         "provision_ratio",
-        "p_ppnr"
+        "p_ppnr", 
+        "combined_ratio",
+        "loss_ratio",
+        "expense_ratio",
+        "net_investment_yield",
+        "reserve_growth",
+        "p_core_earnings",
     },
     "financial": {
         "pfcf_ttm", "ev_ebitda", "ev_sales",
         "pfcf_ratio", "net_debt_to_ebitda", "fcf_margin",
         "debt_to_equity", "operating_margin", "rule_of_40",
         "pb_ratio",
+        "combined_ratio",
+        "loss_ratio",
+        "expense_ratio",
+        "net_investment_yield",
+        "reserve_growth",
+        "p_core_earnings",
     },
     "insurance_pc":{
         "pfcf_ttm", 
@@ -285,11 +315,7 @@ PROFILE_CONCEPT_OVERRIDES = {
             "point_in_time": False,
             "mode": "fallback",
         },
-        "Goodwill": {
-            "tags": ["Goodwill"],
-            "point_in_time": True,
-            "mode": "fallback",
-        },
+        
         "DepreciationAndAmortization": {
             "sources": [
                 {"type": "tag", "tag": "DepreciationDepletionAndAmortization"},
@@ -320,6 +346,42 @@ PROFILE_CONCEPT_OVERRIDES = {
     },
 
     "insurance_pc": {
+        "EarnedPremiums": {
+            "tags": ["PremiumsEarnedNet"],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+        "IncurredLosses": {
+            "tags": ["PolicyholderBenefitsAndClaimsIncurredNet"],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+        "BenefitsLossesAndExpenses": {
+            "tags": ["BenefitsLossesAndExpenses"],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+        "NetInvestmentIncome": {
+            "tags": ["NetInvestmentIncome"],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+        "Investments": {
+            "tags": ["Investments"], 
+            "point_in_time": True, 
+            "mode": "fallback"
+        },
+        "ClaimsReserve": {
+        "tags": ["LiabilityForClaimsAndClaimsAdjustmentExpense"], 
+        "point_in_time": True, 
+        "mode": "fallback"
+        },
+        "RealizedInvestmentGains": {
+        "tags": ["RealizedInvestmentGainsLosses"],
+        "point_in_time": False,
+        "mode": "fallback",
+        },
+
 
     },
 
@@ -329,20 +391,29 @@ PROFILE_CONCEPT_OVERRIDES = {
 }
 
 PROFILE_EXCLUDED_CONCEPTS = {
+    "standard": {
+        "IncurredLosses",
+        "ClaimsReserve",
+        "NetInvestmentIncome",
+        "EarnedPremiums",
+        "BenefitsLossesAndExpenses",
+        "Investments",
+        "RealizedInvestmentGains",
+    },
     "financial": {
         "Capex",
         "OperatingIncomeLoss",
         "LongTermDebt",
         "CashAndEquivalents",
+        "RealizedInvestmentGains",
     },
 
     "insurance_pc": {
-
+    "Capex",
+    "CashAndEquivalents",
+    "OperatingIncomeLoss",
+    "CashAndEquivalents",
     },
-
-    "insurance_life":{
-
-    }
 }
 
 

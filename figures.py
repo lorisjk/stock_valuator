@@ -77,6 +77,11 @@ def plot_fundamentals(ticker: str, metrics_long: pd.DataFrame, output_path: str)
         ("roa", "Return on Assets", None, True, False),
         ("equity_to_assets", "Equity / Assets", None, True, False),
         ("provision_ratio", "Provision/Revenue", 0, True, False),
+        ("combined_ratio", "Combined Ratio", 1.0, True, False),
+        ("loss_ratio", "Loss Ratio", None, True, False),
+        ("expense_ratio", "Expense Ratio", None, True, False),
+        ("net_investment_yield", "Net Investment Yield", None, True, False),
+        ("reserve_growth", "Reserve Growth", 0, True, False),
     ]
     concepts_to_plot = [c for c in concepts_to_plot if not is_hidden(ticker, c[0])]
 
@@ -108,7 +113,9 @@ def plot_valuation(ticker: str, valuation_history: pd.DataFrame, output_path: st
         ("ev_sales", "EV/Sales", None, False),
         ("dividend_yield", "Dividendenrendite", None, True),
         ("p_tbv", "P/TBV", None, False),
-        ("p_ppnr", "P/PPNR", None, False)
+        ("p_ppnr", "P/PPNR", None, False),
+        ("peg_ratio", "PEG", None, False),
+        ("p_core_earnings", "P/Core Earnings", None, False),
         
     ]
 

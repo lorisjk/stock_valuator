@@ -106,6 +106,17 @@ def calculate_sum_from_dfs(
 
     return merged[["ticker", "end", result_name]]
 
+def calculate_difference_from_dfs(
+    df1: pd.DataFrame,
+    df2: pd.DataFrame,
+    column1: str,
+    column2: str,
+    result_name: str,
+) -> pd.DataFrame:
+    merged = pd.merge(df1, df2, on=["ticker", "end"])
+    merged[result_name] = merged[column1] - merged[column2]
+    return merged[["ticker", "end", result_name]]
+
 
 def calculate_ttm(df: pd.DataFrame, concept: str, result_name: str) -> pd.DataFrame:
     filtered_df = df[df["concept"] == concept].copy()

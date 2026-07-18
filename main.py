@@ -28,6 +28,7 @@ from metrics import (
     calculate_difference,
     calculate_ratio_from_dfs,
     calculate_sum_from_dfs,
+    calculate_difference_from_dfs,
     calculate_rolling_average,
     get_latest_value,
     get_latest_row,
@@ -102,6 +103,14 @@ def add_derived_concepts(facts: pd.DataFrame) -> pd.DataFrame:
     ppnr["concept"] = "PPNR"
     facts = pd.concat([facts, ppnr[["ticker", "end", "concept", "value"]]], ignore_index=True)
 
+    ni = facts[facts["concept"] == "NetIncomeLoss_TTM"][["ticker", "end", "value"]].rename(columns={"value": "ni"})
+    realized = facts[facts["concept"] == "RealizedInvestmentGains_TTM"][["ticker", "end", "value"]].rename(columns={"value": "realized"})
+
+    core_earnings = ni.merge(realized, on=["ticker", "end"])
+    core_earnings["value"] = core_earnings["ni"] - core_earnings["realized"]
+    core_earnings["concept"] = "CoreOperatingEarnings"
+    facts = pd.concat([facts, core_earnings[["ticker", "end", "concept", "value"]]], ignore_index=True)
+
     return facts
 
 
@@ -161,7 +170,21 @@ def calculate_all_metrics(facts: pd.DataFrame) -> dict:
     m["provision_ratio"] = calculate_ratio(
         facts, "ProvisionForCreditLosses_TTM", "Revenue_TTM", "provision_ratio"
     )
-
+    m["combined_ratio"] = calculate_ratio(
+        facts, "BenefitsLossesAndExpenses_TTM", "EarnedPremiums_TTM", "combined_ratio"
+    )
+    m["loss_ratio"] = calculate_ratio(
+        facts, "IncurredLosses_TTM", "EarnedPremiums_TTM", "loss_ratio"
+    )
+    m["expense_ratio"] = calculate_difference_from_dfs(
+        m["combined_ratio"], m["loss_ratio"], "combined_ratio", "loss_ratio", "expense_ratio"
+    )
+    m["net_investment_yield"] = calculate_ratio(
+        facts, "NetInvestmentIncome_TTM", "Investments", "net_investment_yield"
+    )
+    m["reserve_growth"] = calculate_growth(
+        facts, "ClaimsReserve", 4, "reserve_growth"
+    )
     return m
 
 
@@ -181,6 +204,11 @@ def build_metrics_long(metrics: dict) -> pd.DataFrame:
         (metrics["roa"], "roa", "roa"),
         (metrics["equity_to_assets"], "equity_to_assets", "equity_to_assets"),
         (metrics["provision_ratio"], "provision_ratio", "provision_ratio"),
+        (metrics["combined_ratio"], "combined_ratio", "combined_ratio"),
+        (metrics["loss_ratio"], "loss_ratio", "loss_ratio"),
+        (metrics["expense_ratio"], "expense_ratio", "expense_ratio"),
+        (metrics["net_investment_yield"], "net_investment_yield", "net_investment_yield"),
+        (metrics["reserve_growth"], "reserve_growth", "reserve_growth"),
     ]
 
     rows = [to_long_format(df, value_col, name) for df, value_col, name in spec]
@@ -219,7 +247,8 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame) ->
         "FCF_TTM",
         "EBITDA_TTM",
         "TangibleEquity",
-        "PPNR"
+        "PPNR", 
+        "CoreOperatingEarnings",
     ]
 
     wide = (
@@ -240,10 +269,12 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame) ->
         by="ticker",
         direction="backward",
     )
+    wide["revenue_yoy_growth"] = wide.groupby("ticker")["Revenue_TTM"].pct_change(periods=4)
 
     wide["market_cap"] = wide["close"] * wide["SharesOutstanding"]
     wide["net_debt"] = wide["LongTermDebt"] - wide["CashAndEquivalents"]
     wide["ev"] = wide["market_cap"] + wide["net_debt"]
+    
 
     wide["pe_ratio"] = wide["close"] / wide["EPS_TTM_CALC"].where(wide["EPS_TTM_CALC"] > 0)
     wide["pb_ratio"] = wide["market_cap"] / wide["StockholdersEquity"].where(wide["StockholdersEquity"] > 0)
@@ -251,15 +282,17 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame) ->
     wide["ev_ebitda"] = wide["ev"] / wide["EBITDA_TTM"].where(wide["EBITDA_TTM"] > 0)
     wide["ev_sales"] = wide["ev"] / wide["Revenue_TTM"].where(wide["Revenue_TTM"] > 0)
     wide["dividend_yield"] = (wide["DividendsPerShare_TTM"].where(wide["DividendsPerShare_TTM"] >= 0) / wide["close"])
-
+    wide["peg_ratio"] = wide["pe_ratio"] / (wide["revenue_yoy_growth"] * 100)
+    
     wide["p_tbv"] = wide["market_cap"] / wide["TangibleEquity"].where(wide["TangibleEquity"] > 0)
     wide["p_ppnr"] = wide["market_cap"] / wide["PPNR"].where(wide["PPNR"] > 0)
+    wide["p_core_earnings"] = wide["market_cap"] / wide["CoreOperatingEarnings"].where(wide["CoreOperatingEarnings"] > 0)
 
-    value_cols = ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_ebitda", "ev_sales", "dividend_yield", "p_tbv", "p_ppnr"]
+    value_cols = ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_ebitda", "ev_sales", "dividend_yield", "p_tbv", "p_ppnr", "p_core_earnings", "peg_ratio"]
 
     MAX_MULTIPLE = 200
 
-    for col in ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_ebitda", "ev_sales", "p_tbv", "p_ppnr"]:
+    for col in ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_ebitda", "ev_sales", "p_tbv", "p_ppnr", "p_core_earnings"]:
         wide[col] = wide[col].where(wide[col] <= MAX_MULTIPLE)
 
     long = wide.melt(
@@ -278,6 +311,7 @@ def apply_profile_filter(snap: pd.DataFrame) -> pd.DataFrame:
         for col in snap.columns:
             if is_hidden(ticker, col):
                 snap.at[idx, col] = None
+                
     return snap
 
 def build_snapshot(
@@ -310,6 +344,12 @@ def build_snapshot(
     equity_to_assets = get_latest_row(metrics["equity_to_assets"])
     provision_ratio = get_latest_row(metrics["provision_ratio"])
     ppnr_latest = get_latest_value(facts, "PPNR").rename(columns={"value": "ppnr_ttm"})
+    combined_ratio = get_latest_row(metrics["combined_ratio"])
+    loss_ratio = get_latest_row(metrics["loss_ratio"])
+    expense_ratio = get_latest_row(metrics["expense_ratio"])
+    net_investment_yield = get_latest_row(metrics["net_investment_yield"])
+    reserve_growth = get_latest_row(metrics["reserve_growth"])
+    core_earnings_latest = get_latest_value(facts, "CoreOperatingEarnings").rename(columns={"value": "core_earnings_ttm"})
 
     for df, cols in [
         (eps, ["ticker", "eps_ttm"]),
@@ -329,6 +369,12 @@ def build_snapshot(
         (equity_to_assets, ["ticker", "equity_to_assets"]),
         (provision_ratio, ["ticker", "provision_ratio"]),
         (ppnr_latest, ["ticker", "ppnr_ttm"]),
+        (combined_ratio, ["ticker", "combined_ratio"]),
+        (loss_ratio, ["ticker", "loss_ratio"]),
+        (expense_ratio, ["ticker", "expense_ratio"]),
+        (net_investment_yield, ["ticker", "net_investment_yield"]),
+        (reserve_growth, ["ticker", "reserve_growth"]),
+        (core_earnings_latest, ["ticker", "core_earnings_ttm"]),
     ]:
         snap = pd.merge(snap, df[cols], on="ticker", how="left")
 
@@ -344,7 +390,7 @@ def build_snapshot(
     snap["dividend_yield"] = snap["dividends_ttm"] / snap["price"]
     snap["p_tbv"] = snap["market_cap"] / snap["tangible_equity"]
     snap["p_ppnr"] = snap["market_cap"] / snap["ppnr_ttm"]
-    
+    snap["p_core_earnings"] = snap["market_cap"] / snap["core_earnings_ttm"]
 
     snap = apply_profile_filter(snap)
     return snap
@@ -386,7 +432,8 @@ def main():
     facts = load_facts()
     facts = normalize_split_adjusted(facts, ["SharesOutstanding"])
    
-    print_data_quality(facts, get_expected_concepts(TICKERS[0]), SEARCH_HINTS)
+    expected_by_ticker = {ticker: get_expected_concepts(ticker) for ticker in TICKERS}
+    print_data_quality(facts, expected_by_ticker, SEARCH_HINTS)
     
     
 

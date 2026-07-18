@@ -1,23 +1,28 @@
 import pandas as pd
 
 
-def check_data_quality(df: pd.DataFrame, expected_concepts: list[str], threshold: float = 0.5) -> pd.DataFrame:
-    df = df[df["concept"].isin(expected_concepts)]
-    counts = df.groupby(["ticker", "concept"]).size().reset_index(name="count")
-
-    missing_rows = []
+def check_data_quality(df: pd.DataFrame, expected_concepts_by_ticker: dict, threshold: float = 0.5) -> pd.DataFrame:
+    rows = []
     for ticker in df["ticker"].unique():
-        present = set(counts[counts["ticker"] == ticker]["concept"])
-        for concept in set(expected_concepts) - present:
-            missing_rows.append({"ticker": ticker, "concept": concept, "count": 0})
+        expected = set(expected_concepts_by_ticker.get(ticker, []))
+        ticker_df = df[(df["ticker"] == ticker) & (df["concept"].isin(expected))]
+        counts = ticker_df.groupby("concept").size().reset_index(name="count")
 
-    if missing_rows:
-        counts = pd.concat([counts, pd.DataFrame(missing_rows)], ignore_index=True)
+        present = set(counts["concept"])
+        missing = expected - present
+        if missing:
+            counts = pd.concat(
+                [counts, pd.DataFrame([{"concept": c, "count": 0} for c in missing])],
+                ignore_index=True,
+            )
+        counts["ticker"] = ticker
+        rows.append(counts)
 
-    counts["max_for_ticker"] = counts.groupby("ticker")["count"].transform("max")
-    counts["ratio"] = counts["count"] / counts["max_for_ticker"]
+    all_counts = pd.concat(rows, ignore_index=True)
+    all_counts["max_for_ticker"] = all_counts.groupby("ticker")["count"].transform("max")
+    all_counts["ratio"] = all_counts["count"] / all_counts["max_for_ticker"]
 
-    problems = counts[counts["ratio"] < threshold].copy()
+    problems = all_counts[all_counts["ratio"] < threshold].copy()
     return problems.sort_values(["ticker", "ratio"])[
         ["ticker", "concept", "count", "max_for_ticker", "ratio"]
     ]
