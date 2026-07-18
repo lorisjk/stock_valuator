@@ -164,6 +164,7 @@ SEARCH_HINTS = {
     "NetInvestmentIncome": ["netinvestmentincome"],
     "Investments": ["investments"],
     "ClaimsReserve": ["liabilityforclaims", "claimsadjustmentexpense"],
+    "RealizedInvestmentGains": ["realizedgain", "realizedinvestment"],
 }
 
 DEFAULT_PROFILE = "standard"
@@ -347,12 +348,12 @@ PROFILE_CONCEPT_OVERRIDES = {
 
     "insurance_pc": {
         "EarnedPremiums": {
-            "tags": ["PremiumsEarnedNet"],
+            "tags": ["PremiumsEarnedNet", "PremiumsEarnedNetPropertyAndCasualty"],
             "point_in_time": False,
             "mode": "fallback",
         },
         "IncurredLosses": {
-            "tags": ["PolicyholderBenefitsAndClaimsIncurredNet"],
+            "tags": ["PolicyholderBenefitsAndClaimsIncurredNet", "IncurredClaimsPropertyCasualtyAndLiability"],
             "point_in_time": False,
             "mode": "fallback",
         },
@@ -362,18 +363,18 @@ PROFILE_CONCEPT_OVERRIDES = {
             "mode": "fallback",
         },
         "NetInvestmentIncome": {
-            "tags": ["NetInvestmentIncome"],
+            "tags": ["NetInvestmentIncome", "InvestmentIncomeNet"],
             "point_in_time": False,
             "mode": "fallback",
         },
         "Investments": {
-            "tags": ["Investments"], 
-            "point_in_time": True, 
+            "tags": ["Investments", "InvestmentsFairValueDisclosure", "SummaryOfInvestmentsOtherThanInvestmentsInRelatedPartiesCarryingAmount"],
+            "point_in_time": True,
             "mode": "fallback"
         },
         "ClaimsReserve": {
-        "tags": ["LiabilityForClaimsAndClaimsAdjustmentExpense"], 
-        "point_in_time": True, 
+        "tags": ["LiabilityForClaimsAndClaimsAdjustmentExpense", "LiabilityForClaimsAndClaimsAdjustmentExpensePropertyCasualtyLiability"],
+        "point_in_time": True,
         "mode": "fallback"
         },
         "RealizedInvestmentGains": {
@@ -382,6 +383,25 @@ PROFILE_CONCEPT_OVERRIDES = {
         "mode": "fallback",
         },
 
+        "LongTermDebt": {
+            "sources": [
+                {"type": "tag", "tag": "LongTermDebt"},
+                {"type": "tag", "tag": "DebtLongtermAndShorttermCombinedAmount"},
+                {"type": "tag", "tag": "LongTermNotesAndLoans"},
+                {"type": "tag", "tag": "ConvertibleLongTermNotesPayable"},
+                {"type": "tag", "tag": "ConvertibleDebtNoncurrent"},
+                {"type": "tag", "tag": "ConvertibleDebtCurrent"},
+                {"type": "tag", "tag": "ConvertibleNotesPayableCurrent"},
+                {"type": "sum", "tags": ["LongTermDebtNoncurrent", "LongTermDebtCurrent", "NotesPayableCurrent"]},
+                {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligations"},
+                {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities"},
+                {"type": "tag", "tag": "UnsecuredLongTermDebt"},
+                {"type": "tag", "tag": "SeniorLongTermNotes"},
+                {"type": "sum", "tags": ["SeniorNotes", "NotesPayable", "SubordinatedDebt"]},
+            ],
+            "point_in_time": True,
+            "mode": "priority_merge",
+        },
 
     },
 
