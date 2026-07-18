@@ -6,6 +6,84 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-07-18 — Third stock-type profile: insurance_pc (P&C insurers), split cleanly from insurance_life
+
+Following the financials (banks) and tech profiles, insurance was next — but "insurance" in
+GICS Financials is itself three different businesses that don't share economics: P&C/multiline
+(short-tail, annually-repriced, underwriting-driven), life/annuities (long-tail, spread-driven,
+closer to a bank than to a P&C insurer), and brokers (MMC, AON, AJG, BRO, WTW — carry no
+underwriting risk at all, economically a service business). Brokers were deliberately left on
+the `standard` profile rather than mis-filed, same logic as keeping Visa/Mastercard out of
+`financial` earlier. `insurance_pc` and `insurance_life` were split into two profiles from the
+start (not merged-then-split later) — eleven P&C names (TRV, CB, PGR, ALL, AIG, WRB, CINF, ACGL,
+HIG, L, EG) and seven life/annuity names (MET, PRU, AFL, PFG, GL, AIZ, ERIE) — with `insurance_life`
+built empty for now, ready for its own metric definitions when that profile is tackled directly.
+
+### Why P&C needs its own metric vocabulary
+
+The central discovery, mirroring the bank NIM/efficiency-ratio work: P&C's defining ratios
+don't exist as single XBRL tags. **Combined Ratio has no tag at all** — verified by search, not
+assumed — so it's built like PPNR was for banks: `BenefitsLossesAndExpenses_TTM /
+EarnedPremiums_TTM`, validated against TRV's own reported combined ratios (98.4%, 99.3%, 100.6%,
+95.9% for 2021–2024 — matches real disclosed figures almost to the point). Loss Ratio and
+Expense Ratio decompose it (`IncurredLosses_TTM / EarnedPremiums_TTM`, and Expense Ratio as the
+pure residual `combined − loss` — no separate underwriting-expense tag needed at all, since the
+only candidate found, `AmortizationOfDeferredAcquisitionCostsDAC`, stopped being tagged in 2010
+and would've been useless anyway).
+
+Nine fundamentals for `insurance_pc`: revenue/income growth, ROE, payout (inherited) + Combined
+Ratio, Loss Ratio, Expense Ratio, Net Investment Yield (`NetInvestmentIncome_TTM / Investments`),
+Reserve Growth (YoY change in `LiabilityForClaimsAndClaimsAdjustmentExpense` — a credit-quality-style
+early-warning signal, same role the provision ratio plays for banks). Five valuation metrics, not a
+forced six: P/E, P/TBV (replaces P/B, `Goodwill` moved from the `financial` override into the base
+config since it's a universal GAAP concept, not bank-specific — available to every profile now),
+Dividend Yield, PEG, and P/Core Operating Earnings (`market_cap / (NetIncome_TTM −
+RealizedInvestmentGains_TTM)` — strips out realized investment gains/losses, which are market noise,
+not underwriting performance; the insurance analogue to PPNR). New raw concepts: `EarnedPremiums`
+(`PremiumsEarnedNet`), `IncurredLosses` (`PolicyholderBenefitsAndClaimsIncurredNet`),
+`BenefitsLossesAndExpenses`, `NetInvestmentIncome`, `Investments`, `ClaimsReserve`, and
+`RealizedInvestmentGains` — all TRV-verified before scaling, same discipline as JPM for banks.
+
+### Two long-standing pipeline gaps surfaced and fixed along the way, unrelated to insurance itself
+
+`peg_ratio` had silently never existed in `build_valuation_history` — it was only ever computed
+in `build_snapshot`, so every profile's valuation *chart* (not just insurance's) had shown "keine
+Daten" for PEG since the feature was built, unnoticed until insurance's chart made it obvious.
+Fixed by computing `revenue_yoy_growth` directly inside `build_valuation_history`
+(`wide.groupby("ticker")["Revenue_TTM"].pct_change(periods=4)`) — a simplified version without the
+`min_base_ratio` near-zero-base guard from the July growth-rate fix, accepted as a deliberate,
+narrower-scope tradeoff for chart display only. Separately, `check_data_quality` was still being
+called with a single ticker's expected-concepts list for the whole batch (`TICKERS[0]`) — harmless
+with one ticker, silently wrong the moment a second profile entered the same run (TRV's insurance
+concepts were being checked against MSFT). Fixed by moving the whole function to a per-ticker
+expected-concepts dict, closing a gap flagged as a known limitation weeks earlier and left
+unaddressed until it actually broke.
+
+### Second successful Claude Code scan-and-apply run, same non-regression discipline
+
+Scanned the remaining 10 `insurance_pc` tickers against the TRV-verified pattern, authorized to
+apply `priority_merge` mode migrations directly if needed (expected, since several concepts
+needed genuine `sum` combinations of coexisting debt instruments — EG's `SeniorNotes` +
+`NotesPayable`, WRB's `NotesPayable` + `SubordinatedDebt`). Every change diffed against the full
+122-ticker cached universe, TRV included as the reference that must never move. One candidate
+tag was added, then caught and reverted mid-task: a realized-gains component that looked fine for
+L (no baseline to check against) turned out, once cross-checked against AIG's known total, to be
+off by more than 10x — a partial component silently masquerading as the total. Final result: **0
+regressions, 569 new data points, 9 of 22 flagged gaps fully resolved**, the rest documented with
+a specific, verified reason (annual-only tagging confirmed via raw `fp`/`start` fields, sign
+mismatches at the only overlap point, order-of-magnitude component checks) rather than a vague
+"structural gap."
+
+### Deliberately left alone
+
+Four RealizedInvestmentGains/BenefitsLossesAndExpenses gaps (ACGL, AIG, CB, WRB) would need a
+full itemized multi-era tag reconstruction to close safely — same "not worth the fragility" call
+as Micron's lease amortization and JPM's minor intangibles. AIG's and ACGL's annual-only
+`Goodwill` tagging is a filer limitation, not fixable by tag substitution; the general fix (forward-
+filling point-in-time values between annual reports) would be a pipeline-wide architecture change
+affecting every profile's balance-sheet concepts, not an insurance-specific patch — flagged for a
+dedicated session, not bundled into this one.
+
 ## 2026-07-17 — Claude Code as a tag-discovery scout, and a real architecture bug it caught
 
 The financials work (2026-07-16) proved the tag-hunting method — search, verify magnitude/overlap,
