@@ -283,7 +283,7 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame) ->
     wide["ev_sales"] = wide["ev"] / wide["Revenue_TTM"].where(wide["Revenue_TTM"] > 0)
     wide["dividend_yield"] = (wide["DividendsPerShare_TTM"].where(wide["DividendsPerShare_TTM"] >= 0) / wide["close"])
     wide["peg_ratio"] = wide["pe_ratio"] / (wide["revenue_yoy_growth"] * 100)
-    
+
     wide["p_tbv"] = wide["market_cap"] / wide["TangibleEquity"].where(wide["TangibleEquity"] > 0)
     wide["p_ppnr"] = wide["market_cap"] / wide["PPNR"].where(wide["PPNR"] > 0)
     wide["p_core_earnings"] = wide["market_cap"] / wide["CoreOperatingEarnings"].where(wide["CoreOperatingEarnings"] > 0)
@@ -306,12 +306,20 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame) ->
 
 def apply_profile_filter(snap: pd.DataFrame) -> pd.DataFrame:
     snap = snap.copy()
+
     for idx, row in snap.iterrows():
         ticker = row["ticker"]
         for col in snap.columns:
             if is_hidden(ticker, col):
                 snap.at[idx, col] = None
-                
+
+    tickers_in_snap = snap["ticker"].unique()
+    cols_to_drop = [
+        col for col in snap.columns
+        if col != "ticker" and all(is_hidden(t, col) for t in tickers_in_snap)
+    ]
+    snap = snap.drop(columns=cols_to_drop)
+
     return snap
 
 def build_snapshot(
@@ -463,7 +471,7 @@ def main():
         hist_snapshot = build_snapshot_as_of(cutoff, facts, metrics, price_history, rolling_pe)
         
         print(f"\n--- Snapshot as of {cutoff} ---")
-        print(hist_snapshot[["ticker", "price", "pe_ttm", "avg_pe_5y", "pb_ratio", "ev_ebitda", "peg_ratio"]])
+        print(hist_snapshot[["ticker", "price", "shares_outstanding", "market_cap"]])
         print(f"\n-------------------------------")
 
     metrics_long = filter_hidden_rows(metrics_long)
@@ -474,7 +482,7 @@ def main():
     valuation_history.to_csv(os.path.join(DATA_DIR, "valuation_history.csv"), index=False)
     snapshot.to_csv(os.path.join(DATA_DIR, "current_snapshot.csv"), index=False)
 
-    print(snapshot[["ticker", "price", "pe_ttm", "avg_pe_5y", "pb_ratio", "ev_ebitda", "peg_ratio"]])
+    print(snapshot[["ticker", "price", "shares_outstanding", "market_cap"]])
 
     for ticker in TICKERS:
         plot_fundamentals(ticker, metrics_long, os.path.join(FIGURE_DIR, f"{ticker}_fundamentals.png"))

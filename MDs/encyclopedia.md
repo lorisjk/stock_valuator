@@ -436,6 +436,188 @@ Treat PEG as a rough sanity check on P/E, never as a decision criterion.
 
 ---
 
+## Combined Ratio; the following metrics can be used for insurance_pc
+
+**What it is:** (Incurred losses + underwriting expenses) divided by earned premiums —
+`BenefitsLossesAndExpenses / EarnedPremiums`. The single most important number in P&C insurance.
+
+**Why it matters:** It answers the most basic question about an insurer: does it make money
+*just from underwriting*, before any investment income is added in? A combined ratio below
+100% means yes — the company would be profitable even if its investment portfolio earned
+nothing. Above 100% means the underwriting side loses money and the company is relying on
+investment income to stay profitable overall.
+
+**How to read it:**
+- **Lower is better** — this is the one insurance metric where under 100% is the pass/fail line
+- Below 95%: strong underwriting discipline
+- 95–100%: profitable but not exceptional
+- Above 100%: underwriting loss, common in years with major catastrophes (hurricanes, wildfires)
+- TRV's own history shows this clearly: it spiked above 109% in 2012 (a heavy catastrophe year)
+  and has run in the 89–96% range more recently — reading the trend matters more than any single
+  quarter
+
+**Where it lies:**
+- There's no XBRL tag for "combined ratio" — it's computed here from two components, not pulled
+  from a single reported line. It should closely match what the company itself discloses (verified
+  against TRV's own reported figures), but always sanity-check a new ticker's value against its own
+  investor materials before trusting it blindly
+- A single quarter's combined ratio can be swung heavily by one large event (a hurricane, a
+  reserve adjustment) — read it as a trend, not a single-period verdict
+- It says nothing about *how* the number was achieved — a low combined ratio from aggressively
+  raising prices isn't the same as one from genuinely better risk selection
+
+---
+
+## Loss Ratio
+
+**What it is:** Incurred losses divided by earned premiums — the claims-only half of the combined
+ratio, with the expense side stripped out.
+
+**Why it matters:** It isolates *underwriting risk selection* from *cost efficiency*. A company
+can have a mediocre combined ratio for two very different reasons — bad pricing/risk selection
+(high loss ratio) or bloated operations (high expense ratio) — and the loss ratio tells you which
+one it is.
+
+**How to read it:**
+- Typically the larger of the two components — TRV's loss ratio runs roughly double its expense
+  ratio
+- Rising loss ratio with a stable expense ratio points to worsening claims experience (more
+  frequent or more severe claims, or prices that haven't kept up with claim cost inflation)
+- Compare it against the expense ratio's trend, not in isolation — see Expense Ratio below
+
+**Where it lies:**
+- Like the combined ratio, single-quarter spikes are normal in a catastrophe-exposed business and
+  don't necessarily signal a structural problem
+- A "good" loss ratio depends heavily on the line of business — auto, homeowners, and commercial
+  liability all run at structurally different loss ratios, so this is much more useful compared to
+  a company's *own* history than across unrelated insurers
+
+---
+
+## Expense Ratio (Insurance)
+
+**What it is:** The underwriting-cost share of the combined ratio — computed here as
+`combined ratio − loss ratio`, since no single tag captures total underwriting expense cleanly.
+
+**Why it matters:** It's the pure efficiency read on the underwriting operation: commissions,
+policy acquisition costs, and administrative overhead, all relative to premium volume.
+
+**How to read it:**
+- **Lower is better**, same direction as the combined ratio
+- A steadily *falling* expense ratio (as seen in TRV's own multi-year trend) signals genuine
+  operating leverage — the same premium base is being serviced more cheaply over time
+- Unlike the loss ratio, this one is much less affected by any single catastrophe event, so a
+  sudden jump here is more likely a real cost problem than bad luck
+
+**Where it lies:**
+- Because it's computed as a residual (combined minus loss), any error in either of the two
+  source ratios flows directly into this one — it inherits both of their data-quality caveats
+  rather than having its own independent verification
+- Don't confuse "insurance expense ratio" with a normal company's operating-expense ratio; they
+  measure conceptually different things and aren't comparable across those two contexts
+
+---
+
+## Net Investment Yield
+
+**What it is:** Net investment income divided by total invested assets — how much return the
+insurer earns on the pool of capital backing its policies (the "float").
+
+**Why it matters:** This is an insurer's second profit engine, separate from underwriting. A
+company with a mediocre combined ratio can still be a good business if it invests its float
+skillfully; conversely, a great underwriter with a poorly-run investment book leaves money on
+the table.
+
+**How to read it:**
+- Typically in the 3–5% range for a conservatively-invested P&C book (mostly high-grade bonds)
+- Moves with the broader interest-rate environment more than with anything company-specific — a
+  rise from ~3% to ~4% across the industry usually reflects rates generally, not a change in
+  investment skill
+- TRV's own yield dipped toward ~2.7% during the zero-rate years and climbed back above 4% as
+  rates rose — read this alongside the macro rate backdrop, not as a standalone skill signal
+
+**Where it lies:**
+- The denominator here is total investments, not risk-adjusted or duration-matched assets — two
+  companies with the same yield can carry very different levels of interest-rate or credit risk
+  to get there
+- Doesn't capture unrealized gains/losses sitting in the portfolio, only the income actually
+  earned and recognized
+
+---
+
+## Reserve Growth
+
+**What it is:** Year-over-year growth in the liability for unpaid claims and claims adjustment
+expense — how fast the insurer's loss reserves are increasing.
+
+**Why it matters:** Reserves are the company's own estimate of what it will eventually have to
+pay out on claims already incurred but not yet settled. Watching how this estimate changes over
+time is one of the earliest available signals of developing claims trouble — the bank-world
+equivalent of the provision ratio.
+
+**How to read it:**
+- Reserves growing roughly in line with premium growth is normal and expected
+- Reserves growing meaningfully *faster* than premiums can indicate the company is having to set
+  aside more for claims than its pricing assumed — a warning sign worth investigating further
+- Reserves growing *slower* than premiums (as seen in TRV's own history) is generally a good
+  sign — reflects genuine growth without a matching escalation in claims liability
+- Can occasionally go negative — reserves do shrink when old claims settle for less than
+  reserved, or a book of business runs off
+
+**Where it lies:**
+- Reserve levels involve real actuarial judgment, not a hard fact — a company can be
+  under-reserving in good times to flatter earnings, and this metric alone won't distinguish
+  "genuinely improving claims experience" from "reserves quietly being run too thin"
+- Only tells you about the balance, not why it changed — a reserve increase could be organic
+  claims development or simply the addition of a new, larger book of business
+
+---
+
+## P/TBV (Insurance)
+
+**What it is:** Same construction as the banking version — market cap divided by tangible book
+value (equity minus goodwill) — replacing P/B as the primary book-value valuation metric for
+this profile.
+
+**Why it matters:** Insurers, like banks, are valued largely against their book value, since
+that book directly represents the capital backing future claims-paying ability. Stripping out
+goodwill (an accounting artifact from past acquisitions, not real claims-paying capital) gives a
+cleaner read than plain P/B.
+
+**How to read it:** Same logic as the banking version — read against the company's own history,
+and expect it to run modestly higher than P/B for a company with real goodwill on the books
+(TRV's P/TBV runs a bit above its P/B, reflecting its ~$4B of goodwill against ~$33B of equity).
+
+**Where it lies:** Only goodwill is stripped out here, not other intangibles — fine for a company
+like TRV where goodwill dominates any intangible balance, but worth checking before trusting this
+blindly on an insurer with a large separately-tagged intangible-asset base.
+
+---
+
+## P/Core Operating Earnings
+
+**What it is:** Market cap divided by net income with realized investment gains and losses
+removed — `market_cap / (NetIncome_TTM − RealizedInvestmentGains_TTM)`. The insurance analogue
+to a bank's P/PPNR: a valuation multiple built on an earnings base cleaned of market noise.
+
+**Why it matters:** GAAP net income for an insurer includes realized gains and losses on its
+investment portfolio, which are driven by market timing and portfolio decisions, not by how well
+the company underwrote risk or managed its float that quarter. A large one-off realized gain (or
+loss) can make P/E look artificially cheap (or expensive) for a quarter that says little about
+ongoing earning power.
+
+**How to read it:** Should sit close to, but not identical to, the plain P/E — the gap between
+the two is a direct measure of how much of reported earnings came from realized investment
+trading rather than core operations. A small, stable gap (as seen in TRV, where the two multiples
+track closely) suggests realized gains/losses are a minor, non-distorting factor for that company.
+
+**Where it lies:**
+- Only removes *realized* gains/losses — unrealized mark-to-market moves sitting in book value
+  aren't touched by this at all
+- Like PPNR, this is assembled from raw tag data rather than a single reported line, so it
+  inherits whatever tagging gaps exist in its inputs — verify the underlying `RealizedInvestment
+  Gains` tag has clean, continuous coverage for a given ticker before trusting this multiple on it
+
 # Part 3: How to actually use this
 
 **Start with the fundamentals chart.** Ignore the price entirely. Is revenue growing? Are margins stable or improving? Is the debt manageable? Is free cash flow real? If the answer to any of these is a clear no, the valuation doesn't matter — you can stop.
