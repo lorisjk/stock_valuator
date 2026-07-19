@@ -6,6 +6,96 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-07-19 — Fourth stock-type profile: insurance_life, and a new architecture limit surfaced
+
+Following `insurance_pc`, life/annuity insurers were split off as their own profile from the
+start rather than merged in — MET, PRU, AFL, PFG, GL (five names; ERIE and AIZ were routed to
+`standard`/`insurance_pc` respectively at classification time, since Erie Indemnity is a fee-based
+management company with no underwriting risk of its own, and Assurant is now predominantly
+specialty P&C after selling its life block years ago).
+
+### Same nine-fundamental / five-valuation shape, reusing insurance_pc's exact concept names
+
+The key design choice: `insurance_life`'s raw concepts share identical names with
+`insurance_pc`'s (`EarnedPremiums`, `IncurredLosses`, `BenefitsLossesAndExpenses`,
+`NetInvestmentIncome`, `Investments`, `ClaimsReserve`, `RealizedInvestmentGains`) even where the
+underlying tags differ. This let every metric formula (Combined/Loss/Expense Ratio, Net
+Investment Yield, Reserve Growth, P/Core Earnings) transfer to Life without writing a single new
+line of calculation code — only the profile's tag overlay changed. Verified end-to-end on GL
+before scaling: Combined Ratio computed from `BenefitsLossesAndExpenses/EarnedPremiums` matched
+GL's real reported ratios almost exactly (95.4%, 95.4%, 95.7% for FY2022–24) and, notably, came
+out far more stable year-to-year than P&C's — expected, since life/health claims are actuarially
+predictable in a way catastrophe-exposed P&C claims aren't. Net Investment Yield ran structurally
+higher than P&C (5.8% vs. TRV's ~4%), consistent with life insurers running longer-duration
+portfolios against long-duration liabilities. `DepreciationAndAmortization` and
+`CashAndEquivalents` are excluded for this profile (same reasoning as `insurance_pc` — neither
+concept nor any metric depending on it applies structurally); notably `Capex` and
+`OperatingIncomeLoss`, both excluded for P&C, were *not* flagged for GL, confirming the two
+sub-profiles genuinely needed independent exclusion lists rather than a shared one.
+
+### One real difference from P&C: RealizedInvestmentGains needed a genuine two-tag sum for GL
+
+TRV had a single clean tag for realized investment gains/losses. GL does not — its current gains
+are split across `GainLossOnSaleOfInvestments` (the dominant figure) and
+`GainLossOnSaleOfOtherInvestments` (a small, genuinely separate line, likely real estate/equity-
+method investments), both continuously present with clearly different, non-duplicate values —
+confirmed additive, not the same fact under two names, before summing. `mode: "sum"` was
+sufficient (no overlap risk, unlike the debt cases that needed `priority_merge`).
+
+### LDTI (ASU 2018-12) restatement confirmed as a real, recurring pattern, not noise
+
+Anticipated before scanning (long-duration contract accounting changed materially in 2023) and
+then verified directly in raw `filed` timestamps across GL, PRU, and PFG: the same reporting
+period's `LiabilityForFuturePolicyBenefits` value gets refiled at a materially different number
+after the transition (GL's 2021-12-31 figure moved from $16.0B to $24.5B between filings; PRU's
+2022-12-31 moved from $281.2B to $261.8B) — a genuine same-fact basis revision, not a data error
+or two competing facts. The pipeline's existing "latest `filed` wins" tie-break already handles
+this correctly by construction; no code change was needed, only correct recognition of the
+pattern before treating a value jump as a bug.
+
+### Second Claude Code scan-and-apply run for this profile, same non-regression discipline
+
+3 of 10 flagged gaps resolved cleanly (AFL LongTermDebt via `NotesPayable`; AFL and PFG
+`RealizedInvestmentGains` via `GainLossOnInvestments`, migrated to `priority_merge` with the
+usual two-stage byte-identical-then-extend discipline). 0 regressions across the full 127-ticker
+cached universe. MET required no changes at all.
+
+### The interesting result: a candidate was found and *correctly rejected* for architectural reasons
+
+PRU has an excellent, fully continuous `RealizedInvestmentGainsLosses` tag that would resolve its
+gap outright — but that exact tag name, checked against GL at all 29 overlapping dates, disagreed
+with GL's already-verified total by up to an order of magnitude (e.g. $240K vs. -$26.1M at one
+date). This isn't an ambiguous edge case — it's conclusive evidence the same tag name means a
+different reporting scope for GL than for PRU. Since `PROFILE_CONCEPT_OVERRIDES` only supports
+profile-wide tag lists, not per-ticker exceptions within a profile, there is currently no way to
+give PRU this tag without also silently exposing GL to it (or building a per-ticker override
+layer, which doesn't exist yet). Correctly left unresolved and documented rather than forced —
+the same "empirical proof over stated confidence" discipline that caught the debt-merge bug
+in an earlier session, this time working preventively instead of after the fact.
+
+### Deliberately left alone
+
+AFL's `Investments` has no consolidated tag at all (only fragmented components) — same "not
+worth a fragile multi-tag reconstruction" call as Micron's lease amortization. AFL's and PRU's
+annual-only `Goodwill` tagging is the same filer-frequency limit already logged for ACGL/AIG.
+PFG's and PRU's `ClaimsReserve` gap has a fuller alternative tag
+(`LiabilityForFuturePolicyBenefitsAndUnpaidClaimsAndClaimsAdjustmentExpense`) but its margin over
+the narrower reference definition was inconsistent (~1%–13% across dates) rather than a clean,
+explainable constant — left unresolved rather than silently redefining what `ClaimsReserve` means
+for two tickers. PFG additionally has one genuine, unexplained single-quarter gap
+(`LiabilityForFuturePolicyBenefits` at 2021-12-31) inside otherwise-complete annual data — flagged
+as-is, not guessed at.
+
+### Open, going into future sessions
+
+The PRU case is the first time this session hit a limitation worth naming explicitly: a **per-
+ticker override mechanism within a profile** doesn't exist yet — only profile-level overlays. This
+wasn't needed for any prior fix (bank/tech tag differences were always profile-wide), but it's
+now a concrete, documented gap rather than a hypothetical one. Not building it now — same
+"dedicated session, not bundled into this one" call as the earlier point-in-time forward-fill
+question — but it's the natural next architecture item once enough of these single-ticker
+exceptions accumulate to justify it.
+
 ## 2026-07-18 — Third stock-type profile: insurance_pc (P&C insurers), split cleanly from insurance_life
 
 Following the financials (banks) and tech profiles, insurance was next — but "insurance" in

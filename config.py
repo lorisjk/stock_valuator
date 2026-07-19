@@ -1,4 +1,4 @@
-TICKERS = ["TRV"]
+TICKERS = ["GL"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
@@ -163,7 +163,7 @@ SEARCH_HINTS = {
     "BenefitsLossesAndExpenses": ["benefitslossesandexpenses"],
     "NetInvestmentIncome": ["netinvestmentincome"],
     "Investments": ["investments"],
-    "ClaimsReserve": ["liabilityforclaims", "claimsadjustmentexpense"],
+    "ClaimsReserve": ["liabilityforclaims", "claimsadjustmentexpense", "futurepolicybenefits"],
     "RealizedInvestmentGains": ["realizedgain", "realizedinvestment"],
 }
 
@@ -202,14 +202,14 @@ TICKER_PROFILES = {
     "HIG": "insurance_pc",
     "L": "insurance_pc",
     "EG": "insurance_pc",
+    "AIZ": "insurance_pc",
 
     "MET": "insurance_life",
     "PRU": "insurance_life",
     "AFL": "insurance_life",
     "PFG": "insurance_life",
     "GL": "insurance_life",
-    "AIZ": "insurance_life",
-    "ERIE": "insurance_life",
+
 
 
 }
@@ -406,7 +406,62 @@ PROFILE_CONCEPT_OVERRIDES = {
     },
 
     "insurance_life": {
-
+        "EarnedPremiums": {
+            "tags": ["PremiumsEarnedNet"],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+        "IncurredLosses": {
+            "tags": ["PolicyholderBenefitsAndClaimsIncurredNet"],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+        "BenefitsLossesAndExpenses": {
+            "tags": ["BenefitsLossesAndExpenses"],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+        "NetInvestmentIncome": {
+            "tags": ["NetInvestmentIncome"],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+        "Investments": {
+            "tags": ["Investments"],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+        "ClaimsReserve": {
+            "tags": ["LiabilityForFuturePolicyBenefits"],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+        "RealizedInvestmentGains": {
+            "sources": [
+                {"type": "sum", "tags": ["GainLossOnSaleOfInvestments", "GainLossOnSaleOfOtherInvestments"]},
+                {"type": "tag", "tag": "GainLossOnInvestments"},
+            ],
+            "point_in_time": False,
+            "mode": "priority_merge",
+        },
+        "LongTermDebt": {
+            "sources": [
+                {"type": "tag", "tag": "LongTermDebt"},
+                {"type": "tag", "tag": "DebtLongtermAndShorttermCombinedAmount"},
+                {"type": "tag", "tag": "LongTermNotesAndLoans"},
+                {"type": "tag", "tag": "ConvertibleLongTermNotesPayable"},
+                {"type": "tag", "tag": "ConvertibleDebtNoncurrent"},
+                {"type": "tag", "tag": "ConvertibleDebtCurrent"},
+                {"type": "tag", "tag": "ConvertibleNotesPayableCurrent"},
+                {"type": "sum", "tags": ["LongTermDebtNoncurrent", "LongTermDebtCurrent", "NotesPayableCurrent"]},
+                {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligations"},
+                {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities"},
+                {"type": "tag", "tag": "UnsecuredLongTermDebt"},
+                {"type": "tag", "tag": "NotesPayable"},
+            ],
+            "point_in_time": True,
+            "mode": "priority_merge",
+        },
     },
 }
 
@@ -434,6 +489,14 @@ PROFILE_EXCLUDED_CONCEPTS = {
     "OperatingIncomeLoss",
     "CashAndEquivalents",
     },
+     "insurance_life": {
+    "Capex",
+    "CashAndEquivalents",
+    "OperatingIncomeLoss",
+    "CashAndEquivalents",
+    "DepreciationAndAmortization",
+    },
+
 }
 
 
