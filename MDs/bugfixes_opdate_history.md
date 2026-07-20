@@ -6,6 +6,71 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-07-20 — Eighth stock-type profile: health_services split out of pharma_medtech, hidden set decided from evidence rather than copied
+
+Executed the split the pharma_medtech scan (immediately below) recommended: DGX, LH, HCA, DVA,
+UHS, CVS moved out of `pharma_medtech` into a new `health_services` profile. Life-science-tools/CRO
+(A, TECH, CRL, IQV, MTD, RVTY, WAT, TMO) stayed put — out of scope for this task.
+
+### The reassignment itself had to preserve extraction, not just move a label
+
+`health_services` started with no `PROFILE_CONCEPT_OVERRIDES` entry of its own. Since
+`get_concept_candidates` resolves purely from `PROFILE_CONCEPT_OVERRIDES[profile]` — no
+inheritance between profiles — leaving it empty would have silently dropped
+`ResearchAndDevelopmentExpense` extraction for all 6 tickers the moment they moved, deleting
+LH's 3 genuinely-real quarters of R&D data ($2.5–3M each, 2009–2010) in the process. Copied
+`pharma_medtech`'s `ResearchAndDevelopment` and `Capex` overrides verbatim into a new
+`health_services` entry before touching anything else, and verified the reassignment alone (before
+any hidden/excluded decision) produced **zero** change across the full 225-ticker cached universe —
+0 changed, 0 removed, 0 new fills. Confirms the reassignment is what it should be: a routing change,
+not a data change.
+
+### The task's own instruction not to copy wholesale turned out to matter
+
+The brief explicitly warned against copying `pharma_medtech`'s `PROFILE_HIDDEN`/
+`PROFILE_EXCLUDED_CONCEPTS` and said to verify `OperatingIncomeLoss` coverage per ticker rather than
+assume all 6 share HCA's problem. Checked directly:
+
+```
+DGX    OperatingIncomeLoss: 71/71 quarters (100%), 2008–2026 continuous
+LH     OperatingIncomeLoss: 71/71 quarters (100%), 2008–2026 continuous
+DVA    OperatingIncomeLoss: 71 quarters, 2008–2026 continuous (effectively full — the "37" revenue-
+                            quarter denominator in the raw check was itself an unrelated DVA
+                            revenue-tag artifact, not an OperatingIncomeLoss problem)
+UHS    OperatingIncomeLoss: 67/65 quarters (103%), 2009–2026 continuous
+HCA    OperatingIncomeLoss: 0/37 quarters (0%)
+```
+
+Only HCA has the gap. `pharma_medtech` hides `operating_margin`/`net_debt_to_ebitda`/`ev_ebitda`
+profile-wide because the diversified-conglomerate `OperatingIncomeLoss` fragility pattern shows up
+repeatedly across that batch (JNJ, NKE, ADM, BG, CASY, CLX, GPC, TJX, ROST — a real, recurring
+pattern there). Here it's 1 gap out of 6, not a pattern. **Kept these three metrics visible for
+`health_services`** — the opposite call from `pharma_medtech`, made deliberately rather than by
+default. HCA itself: confirmed via a live `calculate_all_metrics` run that its failure mode is
+`n=0` (empty merge, no rows) for all three metrics, not a wrong number — the same "fails silently,
+produces nothing rather than garbage" behavior this whole log is built around, not new risk.
+Verified DGX/LH/DVA/UHS/CVS's `operating_margin` values are real and sane (1.5%–15.1%, CVS's 1.5%
+consistent with its already-known low-margin retail/PBM mix from the pharma_medtech scan) and that
+`DepreciationAndAmortization` — excluded for `pharma_medtech` only because it fed the now-hidden
+EBITDA chain there — correctly stays *un*-excluded here, since that same chain is visible for this
+profile.
+
+`rd_intensity`: confirmed R&D intensity is ~0% for all 6 (real business characteristic, matching
+the CRL/IQV "service provider, not innovator" finding from the pharma_medtech entry) and that
+`ResearchAndDevelopment` has exactly one consumer anywhere in the codebase (`rd_intensity` itself,
+confirmed by grep across `main.py`/`metrics.py`/`figures.py`) — hidden and excluded together, same
+"nothing visible depends on it" reasoning as every other exclusion in this project.
+
+### Non-regression
+
+Full before/after diff across all 225 cached tickers, run after every config change (reassignment
++ hidden/excluded decisions): 0 changed, 0 removed, 0 new fills — confirms the entire split changed
+*visibility* only, exactly as the brief required. Spot-checked `metrics_long` directly for all 6
+tickers plus two `pharma_medtech` references (JNJ, MDT): `rd_intensity` correctly empty for the 6
+and present for JNJ/MDT; `operating_margin`/`net_debt_to_ebitda` correctly populated with sane
+values for 5 of 6 and empty for HCA; both correctly empty for JNJ/MDT (untouched, still hidden
+under `pharma_medtech`).
+
 ## 2026-07-20 — Seventh stock-type profile: pharma_medtech, and a net-vs-gross capex substitution caught and reverted
 
 48 tickers (JNJ reference + 47 new). `pharma_medtech` reuses `standard`'s whole metric set,

@@ -289,17 +289,14 @@ TICKER_PROFILES = {
     "CRL": "pharma_medtech",
     "COO": "pharma_medtech",
     "DHR": "pharma_medtech",
-    "DVA": "pharma_medtech",
     "DXCM": "pharma_medtech",
     "EW": "pharma_medtech",
     "GEHC": "pharma_medtech",
     "GILD": "pharma_medtech",
-    "HCA": "pharma_medtech",
     "IDXX": "pharma_medtech",
     "PODD": "pharma_medtech",
     "IQV": "pharma_medtech",
     "ISRG": "pharma_medtech",
-    "LH": "pharma_medtech",
     "LLY": "pharma_medtech",
     "MDT": "pharma_medtech",
     "MRK": "pharma_medtech",
@@ -312,7 +309,6 @@ TICKER_PROFILES = {
     "STE": "pharma_medtech",
     "SYK": "pharma_medtech",
     "TMO": "pharma_medtech",
-    "UHS": "pharma_medtech",
     "VEEV": "pharma_medtech",
     "VTRS": "pharma_medtech",
     "VRTX": "pharma_medtech",
@@ -320,8 +316,13 @@ TICKER_PROFILES = {
     "WST": "pharma_medtech",
     "ZBH": "pharma_medtech",
     "ZTS": "pharma_medtech",
-    "CVS": "pharma_medtech",
-    "DGX": "pharma_medtech",
+
+    "DGX": "health_services",
+    "LH": "health_services",
+    "HCA": "health_services",
+    "DVA": "health_services",
+    "UHS": "health_services",
+    "CVS": "health_services",
 }
 
 PROFILE_HIDDEN = {
@@ -416,10 +417,32 @@ PROFILE_HIDDEN = {
         "reserve_growth", "p_core_earnings",
         "rule_of_40",
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
-        "operating_margin",       
-        "net_debt_to_ebitda",     
-        "ev_ebitda",             
-        
+        "operating_margin",
+        "net_debt_to_ebitda",
+        "ev_ebitda",
+
+    },
+
+    "health_services": {
+        # Same bank/insurance/retail/rule_of_40 hides as pharma_medtech — those reasons
+        # (irrelevant metric categories) apply here too, not in question.
+        "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
+        "equity_to_assets", "provision_ratio", "p_ppnr", "combined_ratio",
+        "loss_ratio", "expense_ratio", "net_investment_yield",
+        "reserve_growth", "p_core_earnings",
+        "rule_of_40",
+        "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
+        # rd_intensity: confirmed ~0% R&D for all 6 tickers (DGX, LH, HCA, DVA, UHS, CVS) —
+        # a real business characteristic, not missing data. See report.
+        "rd_intensity",
+        # operating_margin / net_debt_to_ebitda / ev_ebitda are DELIBERATELY NOT hidden here,
+        # unlike pharma_medtech. Checked OperatingIncomeLoss coverage per ticker rather than
+        # copying pharma_medtech's blanket hide: DGX, LH, DVA, UHS, CVS all have clean,
+        # complete OperatingIncomeLoss coverage (100%+); only HCA is at 0%. Hiding these three
+        # metrics for the whole profile to protect against HCA's one gap would throw away real,
+        # correct data for 5 of 6 tickers. HCA itself will simply show no data for these three
+        # metrics (empty merge, not a wrong number) — an acceptable, self-explaining trade-off.
+        # See health_services_split_report.md for the full per-ticker evidence.
     },
 }
 
@@ -695,6 +718,25 @@ PROFILE_CONCEPT_OVERRIDES = {
             "mode": "fallback",
         },
     },
+    "health_services": {
+        "ResearchAndDevelopment": {
+            "tags": [
+                "ResearchAndDevelopmentExpense",
+                "ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+        "Capex": {
+            "tags": [
+                "PaymentsToAcquirePropertyPlantAndEquipment",
+                "PaymentsToAcquireProductiveAssets",
+                "PaymentsToAcquireOtherPropertyPlantAndEquipment",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+    },
 }
 
 
@@ -736,7 +778,22 @@ PROFILE_EXCLUDED_CONCEPTS = {
     "pharma_medtech": {
         "OperatingIncomeLoss",
         "DepreciationAndAmortization",
-    }
+    },
+    "health_services": {
+        # ResearchAndDevelopment: confirmed no visible metric depends on it once
+        # rd_intensity is hidden (grep of main.py/metrics.py/figures.py: rd_intensity is
+        # its only consumer, anywhere). Same reasoning as pharma_medtech's OperatingIncomeLoss
+        # exclusion, applied to a different concept for this profile.
+        #
+        # OperatingIncomeLoss and DepreciationAndAmortization are DELIBERATELY NOT excluded
+        # here, unlike pharma_medtech: operating_margin / net_debt_to_ebitda / ev_ebitda stay
+        # visible for this profile (see PROFILE_HIDDEN above), so both concepts still feed a
+        # visible metric for 5 of 6 tickers. Excluding them would silence the coverage-scan
+        # flag for HCA's genuine OperatingIncomeLoss gap — which should stay visible as a
+        # known, open data gap, not be suppressed the way pharma_medtech's profile-wide gap
+        # was.
+        "ResearchAndDevelopment",
+    },
 
 }
 
