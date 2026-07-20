@@ -618,6 +618,80 @@ track closely) suggests realized gains/losses are a minor, non-distorting factor
   inherits whatever tagging gaps exist in its inputs — verify the underlying `RealizedInvestment
   Gains` tag has clean, continuous coverage for a given ticker before trusting this multiple on it
 
+---
+
+## Inventory turnover; following metrics are retail only
+
+**What it is:** Cost of goods sold divided by inventory on hand. How many times per year the company sells through its entire stock of merchandise.
+
+**Why it matters:** Inventory is capital sitting on a shelf. The faster it turns, the less cash is tied up doing nothing, and the less exposure to markdowns, spoilage, or obsolescence. For a retailer, this is one of the purest measures of operational discipline.
+
+**How to read it:**
+- The absolute level is only meaningful *within a business type*. Off-price and grocery-adjacent retailers turn inventory 8–12x a year; specialty/luxury retailers with slower-moving, higher-margin goods might turn 2–4x. Comparing across these is like comparing operating margins across software and supermarkets — it tells you they're different businesses, not which is better run
+- The **trend** matters more than the level. A falling turnover ratio over several quarters usually means unsold goods are piling up — a leading indicator of future markdowns
+- Watch this alongside revenue growth: turnover falling while revenue grows can mean the company is over-ordering ahead of demand that isn't materializing
+
+**Where it lies:** This tool uses the inventory balance at period-end, not an average of the period. A retailer's inventory level right before a big seasonal restock (e.g. a quarter-end that lands just before holiday season) will look artificially low-turnover for that one snapshot — that's a timing artifact, not a real change in efficiency. It also can't tell you whether the inventory sitting there is fresh and sellable or quietly going stale; the tag just counts dollars, not shelf life.
+
+---
+
+## Days Inventory Outstanding (DIO)
+
+**What it is:** The same idea as inventory turnover, restated as a time span instead of a ratio — roughly how many days, on average, a unit of merchandise sits before it's sold.
+
+**Why it matters:** "2.4x turnover a year" is an abstract ratio; "150 days" is something you can intuitively picture. This is also the building block for the cash conversion cycle below.
+
+**How to read it:** Lower generally means leaner, faster-moving operations — but again, only within the same kind of business. A grocery-adjacent retailer at 150 days would be a red flag; a luxury goods retailer at 150 days might be completely normal.
+
+**Where it lies:** Same period-end snapshot issue as inventory turnover above. Also sensitive to genuine mix shift — a retailer expanding into a category that naturally holds inventory longer (say, moving from apparel into furniture) will show DIO rising even though nothing about its execution has gotten worse. Check what's actually being sold before reading a DIO increase as decay.
+
+---
+
+## Days Sales Outstanding (DSO)
+
+**What it is:** Accounts receivable divided by revenue, restated in days — how long, on average, the company waits between a sale and actually collecting the cash for it.
+
+**Why it matters:** Revenue booked isn't the same as cash collected. A rising DSO means more of the top line exists as an IOU rather than money in the bank.
+
+**How to read it:**
+- For a pure cash-and-card consumer retailer, this should sit near zero — there's no meaningful gap between the sale and the cash
+- A real, non-trivial DSO at a consumer-facing retailer usually means a genuine secondary channel exists — commercial accounts, trade credit to business customers, a private-label credit program — not a data error. Several retailers that look like simple consumer retailers on the surface carry real receivables for exactly this reason; check what the business actually sells before assuming DSO should be zero
+- A DSO that's rising over time, especially alongside slowing organic growth, can mean the company is loosening credit terms to keep sales numbers up — a classic way to disguise decelerating demand for a few quarters
+
+**Where it lies:** This metric can't distinguish "healthy, growing B2B channel" from "generous terms propping up a weakening core business." Cross-check against revenue growth and margin trends before drawing a conclusion either way.
+
+---
+
+## Days Payable Outstanding (DPO)
+
+**What it is:** Accounts payable divided by cost of goods sold, restated in days — how long, on average, the company takes to pay its own suppliers.
+
+**Why it matters:** Every day a bill goes unpaid, the company is effectively using its supplier's cash instead of its own. This is interest-free financing, and how much of it a company can command says a lot about its negotiating leverage.
+
+**How to read it:**
+- Higher is generally favorable for the retailer — it's holding onto cash longer
+- Large, scaled retailers can typically command longer payment terms simply because of their purchasing volume; a smaller competitor with a lower DPO isn't necessarily worse-run, it may just have less leverage over the same suppliers
+- A DPO that's rising sharply alongside weak or falling free cash flow margin is a different story — that can mean the company is stretching payments because it's short on cash, not because it's negotiating well. Read DPO next to `fcf_margin`, not in isolation
+
+**Where it lies:** A high DPO driven by genuine negotiating power and a high DPO driven by cash-flow stress can look identical in the number alone. The company's cash flow trend is what tells them apart.
+
+---
+
+## Cash Conversion Cycle (CCC)
+
+**What it is:** DIO + DSO − DPO. The net number of days between the company paying cash out for inventory and collecting cash in from selling it — after accounting for how long it strung out its own suppliers in between.
+
+**Why it matters:** This is the single cleanest summary of how much working capital a retail business actually ties up to operate. A short cycle means the business is close to self-funding; a long one means growth requires ongoing external capital just to stock the shelves.
+
+**How to read it:**
+- Lower is better; shorter cycles mean less capital trapped in day-to-day operations
+- A **negative** CCC — where supplier payment terms are longer than the time it takes to sell the inventory and collect the cash — means the customer's money effectively arrives before the company ever has to pay for the goods it sold them. This is one of the more powerful structural traits a retail business can have, seen in a few of the tightly-run specialty retailers in this dataset
+- Compare within the same business type, same as its three components
+
+**Where it lies:** Inherits every caveat from DIO, DSO, and DPO above. It's also a blended number — a DIO that's quietly getting worse and a DPO that's improving for unrelated reasons can offset each other and produce a flat, unremarkable CCC that hides two real, opposite-direction stories underneath. If the CCC looks static for several quarters, check its three components individually before assuming nothing is changing.
+
+---
+
 # Part 3: How to actually use this
 
 **Start with the fundamentals chart.** Ignore the price entirely. Is revenue growing? Are margins stable or improving? Is the debt manageable? Is free cash flow real? If the answer to any of these is a clear no, the valuation doesn't matter — you can stop.

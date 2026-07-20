@@ -119,7 +119,7 @@ def plot_valuation(ticker: str, valuation_history: pd.DataFrame, output_path: st
         ("dividend_yield", "Dividendenrendite", None, True),
         ("p_tbv", "P/TBV", None, False),
         ("p_ppnr", "P/PPNR", None, False),
-        ("peg_ratio", "PEG", None, False),
+      
         ("p_core_earnings", "P/Core Earnings", None, False),
         
     ]

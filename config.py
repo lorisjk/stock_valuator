@@ -1,4 +1,4 @@
-TICKERS = ["LULU"]
+TICKERS = ["ORLY"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
@@ -311,7 +311,8 @@ PROFILE_HIDDEN = {
         "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
         "equity_to_assets", "provision_ratio", "p_ppnr", "combined_ratio",
         "loss_ratio", "expense_ratio", "net_investment_yield",
-        "reserve_growth", "p_core_earnings", "rule_of_40"
+        "reserve_growth", "p_core_earnings", "rule_of_40","operating_margin",  
+        "net_debt_to_ebitda", "payout_ratio",
     }
 }
 
@@ -588,6 +589,9 @@ PROFILE_EXCLUDED_CONCEPTS = {
     "CashAndEquivalents",
     "DepreciationAndAmortization",
     },
+    "retail": {
+        "Goodwill"
+    }
 
 }
 
