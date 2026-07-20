@@ -1,4 +1,4 @@
-TICKERS = ["ORLY"]
+TICKERS = ["KO"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
@@ -235,6 +235,42 @@ TICKER_PROFILES = {
     "TPR": "retail",
     "HAS": "retail",
     "GRMN": "retail",
+
+    "MO": "consumer_staples",
+    "ADM": "consumer_staples",
+    "BF-B": "consumer_staples",
+    "BG": "consumer_staples",
+    "CPB": "consumer_staples",
+    "CASY": "consumer_staples",
+    "CHD": "consumer_staples",
+    "CLX": "consumer_staples",
+    "KO": "consumer_staples",
+    "CAG": "consumer_staples",
+    "STZ": "consumer_staples",
+    "COST": "consumer_staples",
+    "DG": "consumer_staples",
+    "DLTR": "consumer_staples",
+    "EL": "consumer_staples",
+    "GIS": "consumer_staples",
+    "HSY": "consumer_staples",
+    "HRL": "consumer_staples",
+    "KVUE": "consumer_staples",
+    "KDP": "consumer_staples",
+    "KMB": "consumer_staples",
+    "KHC": "consumer_staples",
+    "KR": "consumer_staples",
+    "MKC": "consumer_staples",
+    "TAP": "consumer_staples",
+    "MDLZ": "consumer_staples",
+    "MNST": "consumer_staples",
+    "PEP": "consumer_staples",
+    "PM": "consumer_staples",
+    "PG": "consumer_staples",
+    "SJM": "consumer_staples",
+    "SYY": "consumer_staples",
+    "TGT": "consumer_staples",
+    "TSN": "consumer_staples",
+    "WMT": "consumer_staples",
 }
 
 PROFILE_HIDDEN = {
@@ -313,7 +349,14 @@ PROFILE_HIDDEN = {
         "loss_ratio", "expense_ratio", "net_investment_yield",
         "reserve_growth", "p_core_earnings", "rule_of_40","operating_margin",  
         "net_debt_to_ebitda", "payout_ratio",
-    }
+    },
+     "consumer_staples": {
+        "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
+        "equity_to_assets", "provision_ratio", "p_ppnr", "combined_ratio",
+        "loss_ratio", "expense_ratio", "net_investment_yield",
+        "reserve_growth", "p_core_earnings",
+        "rule_of_40",
+     },
 }
 
 PROFILE_CONCEPT_OVERRIDES = {
@@ -553,6 +596,18 @@ PROFILE_CONCEPT_OVERRIDES = {
             ],
             "point_in_time": True,
             "mode": "priority_merge",
+        },
+    },
+
+    "consumer_staples": {
+        "CashAndEquivalents": {
+            "tags": [
+                "CashAndCashEquivalentsAtCarryingValue",
+                "CashAndCashEquivalentsAtCarryingValueIncludingDiscontinuedOperations",
+                "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+            ],
+            "point_in_time": True,
+            "mode": "fallback",
         },
     },
 }

@@ -6,6 +6,143 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-07-20 — Sixth stock-type profile: consumer_staples, and a rejected FIFO/LIFO substitution
+
+The `consumer_staples` profile (34 tickers, KO as reference) reuses `standard`'s entire concept set
+unchanged — the profile exists purely to branch hidden-metric logic away from `standard`, no
+`PROFILE_CONCEPT_OVERRIDES` entry was needed going in. Scoped as "the cleanest batch yet," and it
+mostly was — one clean fix, one flagged ticker's own taxonomy sitting on the wrong side of a
+methodology line, and a wall of genuinely structural gaps.
+
+### BF.B: two data sources, two different silent-failure modes
+
+Brown-Forman's ticker string needed resolving before any fetching. SEC's `company_tickers.json`
+keys it `BF-B` (hyphen); the `TICKER_PROFILES` entry as drafted used `BF.B` (dot). Neither data
+source accepts the dot form, and they fail differently: `get_cik("BF.B", ...)` raises an explicit
+`ValueError` (loud, safe), but `yfinance.Ticker("BF.B").info` returns a *populated-looking* dict
+where every field (`currentPrice`, `sharesOutstanding`, ...) is silently `None` — exactly the
+"worse than an explicit error" case the brief warned about. Fixed by using `BF-B` as the ticker
+string everywhere (`TICKER_PROFILES` key, cache filename, fetch calls) — confirmed working end to
+end (CIK `0000014693`, live price via yfinance) before including it in the batch.
+
+### The one clean fix: a cash tag that helped six tickers beyond the one that was flagged
+
+Only `TGT`'s `CashAndEquivalents` was flagged outright (18/74, 24%), but the raw tag data pointed
+at a broader gap: TGT stops populating `CashAndCashEquivalentsAtCarryingValue` after FY2019 and
+switches to `CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents` — the post-ASU-2016-18
+tag that folds restricted cash into the same reconciliation line, adopted market-wide around
+2018–2019. Checked for a magnitude trap before trusting it (restricted cash could inflate the
+figure): at every one of the three dates where old and new tags overlap for TGT, the values are
+**exactly identical** — TGT's restricted cash is $0, so the new tag is a safe superset here, not a
+different economic figure. Added as a third fallback tag on a `consumer_staples`-scoped
+`CashAndEquivalents` override (byte-identical-copy-first discipline: Stage B1 zero diffs, Stage B2
+154 new fills, 0 changed, 0 removed, across the full 178-ticker cached universe). The fill landed
+on eight tickers, not one — `TGT` (+32), `EL` (+31), `HSY` (+27), `SJM` (+27), `PG` (+26), `KDP`
+(+5), `KVUE` (+5), `BG` (+1) — all `consumer_staples`, confirming the profile scoping held and the
+gap was an industry-wide tag migration rather than a TGT-specific quirk.
+
+### A trap worth naming: FIFO/LIFO substitution looks like a fix and isn't
+
+Kroger's `Inventory` coverage (checked as part of the Step 2 retail-likeness investigation below)
+was 6% under the current `retail`-style candidate tags. The obvious next tag, `FIFOInventoryAmount`
+(140 raw points, excellent coverage), is *not* the same figure as `InventoryNet` — Kroger discloses
+inventory on a FIFO basis with a separately-tagged LIFO reserve, and the balance sheet carrying
+value is FIFO minus the reserve. Verified exactly at every overlap date:
+`FIFOInventoryAmount(2010-01-30) − InventoryLIFOReserve(2010-01-30) = InventoryNet(2010-01-30)` to
+the dollar, and the same held at the two other overlap dates checked. The reserve is material
+(~14–16% of the FIFO figure) — using `FIFOInventoryAmount` as a fallback would silently overstate
+Kroger's inventory by that much whenever it kicks in. `extract_summed_values`'s `"sum"` source type
+only adds; there's no subtraction primitive to compose `FIFO − Reserve` cleanly. **Not added.**
+Logged as the batch's headline trap: a tag with excellent coverage and a plausible name can still
+be measuring a different number entirely — same family as the fair-value-vs-carrying-value
+rejection pattern, new instance.
+
+### Step 2: are COST/TGT/WMT/DG/DLTR/KR secretly retail?
+
+GICS classifies these six as Consumer Staples; operationally they're merchandise retailers. Tested
+`retail`'s four working-capital tags against all six without reassigning anyone (a taxonomy call
+left for a human). Findings, most to least clean:
+
+- **COST, WMT** — 96–101% coverage on all four tags. Look exactly like the 19 already-built
+  `retail` tickers.
+- **TGT, DG** — 90–101% on `Inventory`/`CostOfRevenue`/`AccountsPayable`; `AccountsReceivable` at
+  0%, same "pure consumer checkout, no trade receivable line" pattern already confirmed for
+  several `retail` tickers in the 2026-07-19 entry — expected, not a gap.
+- **DLTR** — `CostOfRevenue`/`AccountsPayable` clean, `AccountsReceivable` near-zero (same
+  pattern), but `Inventory` at 0% under `retail`'s current tags. DLTR's real tag is
+  `RetailRelatedInventoryMerchandise` (180 raw points, smooth $741M→$2.5B growth) — not in
+  `retail`'s candidate list today. If reassigned, `retail` itself would need a small tag addition
+  first; noted, not acted on.
+- **KR** — the outlier. `AccountsReceivable`/`AccountsPayable` look fine once corrected for a
+  Kroger-specific artifact (see below); `Inventory` needs the FIFO/LIFO fix that doesn't exist (see
+  above); `CostOfRevenue` at 60% shares the same root cause as the `Capex`/`OperatingCashFlow` gap.
+
+Recommendation only, no config change: COST and WMT are as clean a `retail` fit as any of the
+current 19; TGT and DG fit modulo the already-expected AR exception; DLTR fits but needs one more
+tag first; KR's inventory accounting genuinely doesn't map onto the current retail concept model
+without a subtraction primitive the pipeline doesn't have.
+
+### A second Kroger-specific artifact: no Q1 cash-flow disclosure, ever
+
+`KR`'s `Capex` and `OperatingCashFlow` sit at 47% — traced to the raw filings, not just the merged
+output. Every fiscal year, Kroger's cash-flow-statement tags start at a ~16-week (not ~13-week)
+cumulative duration — there is no Q1-alone or Q1-cumulative fact for these concepts anywhere in the
+company-facts history. `decumulate_period_values` can only recover one genuine discrete quarter per
+year from this shape (the H1→9-month difference), and its Q4-backsolve needs three preceding
+quarters it never has. No alternate tag fixes this: Kroger's own interim filings simply don't
+disclose a Q1 cash-flow statement figure for these lines. Confirmed structural.
+
+### Everything else: genuinely structural, confirmed rather than assumed
+
+- **`ADM`, `BG`, `CASY`, `CLX` — `OperatingIncomeLoss`, 0%.** None of the four have ever tagged
+  `OperatingIncomeLoss` (confirmed via a full `*income*`/`*operating*` tag dump for each) — same
+  "no discrete operating-income subtotal in the income statement" pattern as NKE in the
+  2026-07-20 retail entry above, now confirmed in four more filers. Worth naming as a
+  consumer-staples-relevant recurrence, not a one-off.
+- **`STZ` — `SharesOutstanding` and `DividendsPerShare`, both 0%.** No
+  `WeightedAverageNumberOf*SharesOutstanding`, no `CommonStockSharesOutstanding`, no
+  `EarningsPerShareBasic/Diluted`, no per-share dividend tag — anywhere in the company-facts dump.
+  Constellation Brands' Class A/Class B dual-class structure is the likely cause: filers with
+  multiple share classes often tag per-share and share-count concepts only with a
+  `ClassOfStockAxis` dimension, and SEC's non-dimensional `companyfacts` view excludes anything
+  that's never reported as a plain default-member fact. No fix available inside this pipeline
+  (it doesn't consume dimensional facts at all).
+- **`HSY`, `TSN` — `DividendsPerShare`, 8% and 0%.** Both are real, long-standing dividend payers;
+  neither tags a per-share figure in any of the modern (post-2010) filings checked — HSY's own
+  `CommonStockDividendsPerShareCashPaid` tag has exactly 10 points, all from 2008–2010, then
+  nothing ever again. Per-share dividend disclosure is optional prose/table content in many
+  filings, not a required primary-statement XBRL element — some filers simply never tag it.
+- **`KVUE` — `DividendsPerShare`, 35%.** Not a gap: KVUE spun off from J&J in mid-2023 and the
+  first dividend followed shortly after. The existing tag (`CommonStockDividendsPerShareCashPaid`)
+  is already being used correctly; the low ratio is just a young company with a short history,
+  confirmed by inspecting the full 13-point series (continuous and complete from initiation
+  onward).
+- **`MNST` — `LongTermDebt`, 7%.** Monster Beverage was a genuinely debt-free company for most of
+  its public history — `LongTermDebt` tags a literal `$0` at 2023-12-31, then real debt appears
+  from mid-2024 onward. Same "no debt is not a bug" pattern as GRMN/Reddit in the 2026-07-20 retail
+  entry — confirmed, not fixed.
+- **`COST`, `TGT` — `Goodwill`, 16% and 23%.** Both tag `Goodwill` at fiscal year-end only, never
+  in an interim 10-Q, across their entire cached history (TGT: 17 dates, one per year, 2010–2026
+  without exception). A stable, deliberate filer choice for an immaterial-and-usually-unchanged
+  balance-sheet line, not a transition or a gap — same underlying cause as the "static value not
+  re-tagged" issue documented earlier in this project, just permanent here rather than temporary.
+- **`SYY` — `DepreciationAndAmortization`, 48%.** The most surprising one: SYY tagged full
+  quarterly D&A (`Depreciation`, `AmortizationOfIntangibleAssets`, `DepreciationAndAmortization`)
+  from FY2010 through FY2015, then **every one of those tags goes annual-only for FY2016–FY2024** —
+  nine straight fiscal years with zero quarterly duration facts for any D&A-related concept, before
+  quarterly tagging resumes in FY2025. Checked across all six candidate tags, not just the primary
+  one — the gap is total, not a single-tag artifact. No substitute exists because the underlying
+  quarterly disclosure wasn't made. Worth naming alongside the ROST/LOW/WSM "all started at once"
+  pattern as its mirror image: a filer that *stopped*, then *resumed*, tagging the same concept
+  years apart, with no tag-search fix possible either way.
+
+### Non-regression, Step 5
+
+Full before/after diff across all 178 cached tickers (every profile, not just `consumer_staples`),
+for the one concept actually touched (`CashAndEquivalents`): 0 changed, 0 removed, 154 new fills,
+all eight affected tickers within `consumer_staples`. No other concept was modified this session, so
+no other diff was needed.
+
 ## 2026-07-20 — Fifth stock-type profile: retail, and a generic denominator-near-zero guard
 
 Two independent pieces of work, kept deliberately separate (different files, different
