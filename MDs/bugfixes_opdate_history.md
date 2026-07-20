@@ -6,6 +6,154 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-07-20 — Seventh stock-type profile: pharma_medtech, and a net-vs-gross capex substitution caught and reverted
+
+48 tickers (JNJ reference + 47 new). `pharma_medtech` reuses `standard`'s whole metric set,
+excludes `OperatingIncomeLoss` outright (JNJ's own is structurally thin/discontinued, and with
+`operating_margin`/`net_debt_to_ebitda`/`ev_ebitda` all hidden for the profile, nothing visible
+depends on it), and adds one new concept/metric pair: `ResearchAndDevelopment` → `rd_intensity`.
+Both were already built and verified correct going into this session; the work here was scaling
+tag coverage to the other 47 names and resolving two structural questions the brief left open.
+
+### DepreciationAndAmortization: the same reasoning as OperatingIncomeLoss, checked rather than assumed
+
+The brief asked explicitly to verify D&A sits in the same position as `OperatingIncomeLoss` before
+excluding it too — only feeding the already-hidden `EBITDA_TTM` chain (`net_debt_to_ebitda`,
+`ev_ebitda`), with no other visible metric or chart touching it. Traced every consumer: `ebitda`
+in `calculate_all_metrics` is D&A's only use, and both of *its* consumers are hidden for this
+profile; `figures.py` only ever plots `metrics_long`/`valuation_history` concepts (never raw facts
+directly), and neither plot list references D&A or anything derived from it outside the EBITDA
+chain. Confirmed, not assumed — excluded via `PROFILE_EXCLUDED_CONCEPTS["pharma_medtech"]`.
+
+### The one real fix: LLY's capex tag switch, right as the GLP-1 buildout needed it most
+
+LLY's `Capex` was 16% (12/74) — `PaymentsToAcquireProductiveAssets` only has data for FY2018–2022,
+nothing before or after. The raw tag dump showed `PaymentsToAcquireOtherPropertyPlantAndEquipment`
+spanning 2007–2026 continuously — checked for a magnitude trap before trusting it (an "Other"-
+prefixed tag is exactly the pattern this project already treats with suspicion): at all three dates
+where the two tags overlap (2022 Q1–Q3), the values match **exactly**. Added as a third fallback
+tag on a new `pharma_medtech`-scoped `Capex` override (byte-identical-copy-first discipline: Stage
+B1 zero diffs). The 14 new quarters it recovers are exactly LLY's current manufacturing capex ramp
+— $500M/quarter in early 2023 growing to $2.5B/quarter by late 2025, tracking the real, well-known
+GLP-1 capacity buildout. Coverage: 16% → 35% (still below the 50% line, but the added history is
+the economically important part — the recent ramp — not padding from old, low-relevance quarters).
+
+### A second candidate tag looked fine on inspection and broke on the broad check — reverted
+
+WAT's `Capex` was 2% (2/96). The obvious next tag, `PaymentsForProceedsFromProductiveAssets`,
+has 67 unique dates for WAT spanning 2008–2025 — checked at the three dates where it overlaps
+WAT's existing tag: two exact matches, one off by ~1%, good enough to look like a safe substitute.
+Added to the same shared `pharma_medtech` `Capex` override (there's no per-ticker override
+mechanism in this codebase, only per-profile — a tag added for one ticker's gap is live for all 48).
+The mandatory non-regression check, run across the *whole* cached universe rather than just the
+tickers it was meant to fix, caught what the narrow WAT-only check couldn't: for **LLY**, this same
+tag produced a genuinely nonsensical **negative** capex value (-$220.9M at 2008-09-30). The tag name
+says exactly why — "Payments **for**, and proceeds **from**, productive assets" is a *net* figure
+(capex minus disposal proceeds), not gross capex. WAT's disposals happened to be small enough at
+the three checked dates that net ≈ gross there; LLY's weren't, in a quarter with a real one-time
+divestiture. Same rejection rule as every "different economic basis" trap in this log (fair-value
+vs. carrying-value, FIFO vs. LIFO) — a *shared* tag that verifies cleanly against one ticker's
+narrow overlap window is not the same claim as verifying it against the concept it's supposed to
+represent. **Reverted.** WAT's `Capex` gap (2%) stays open and structural — no clean fix found.
+
+### Everything else: structural, confirmed by inspection rather than left as a bare percentage
+
+- **A dozen-plus growth-stage names with `DividendsPerShare`/`LongTermDebt` at or near 0%** (ALGN,
+  BIIB, BSX, CRL, DHR¹, DVA, DXCM, EW, IDXX, ISRG, MTD, PODD, SOLV, VEEV, VRTX, WAT for dividends;
+  ALGN, ISRG, VEEV for debt) — checked each rather than batch-assumed. Three (BSX, DVA, ISRG) have
+  an aggregate `PaymentsOfDividends`-family tag reporting a literal `$0` for most periods,
+  confirming genuine non-payer status directly rather than inferring it from tag absence; ISRG
+  shows one isolated $8M distribution in mid-2024 that reverts to $0 in 2025 — a one-time item, not
+  an ongoing per-share program. ¹DHR is a real, longstanding payer (`PaymentsOfDividends` exists
+  and is nonzero) that has simply never tagged a per-share figure — same "abandoned/never-tagged
+  per-share dividend" pattern as HSY/TSN from the 2026-07-20 consumer_staples entry, now confirmed
+  in a fourth filer.
+- **REGN — `Goodwill`, 0%.** No `Goodwill` tag anywhere in the company-facts dump, only
+  `IntangibleAssetsNetExcludingGoodwill` (which, by its own name, explicitly isn't it). Consistent
+  with Regeneron's real acquisition history — overwhelmingly organic growth, no major M&A — a
+  genuine "no goodwill" balance sheet, same "confirmed absence, not a bug" pattern as GRMN's debt.
+- **COO — `DividendsPerShare`, 20%, and a new tagging-convention trap.** COO's primary dividend tag
+  has 145 raw points, but most (58 of them) carry **no `start` date at all** — an instant-style
+  fact for what should be a duration concept — and get silently dropped by
+  `extract_period_values`'s `"start" in item` check. Of the remainder, most use a narrow
+  declaration-to-record-date window (~30 days) rather than a fiscal-period duration, which fails
+  the 80–380-day quarterly validity range and gets dropped too. The handful that do show up as
+  quarterly data are the coincidental few with both a `start` date and a long-enough window. The
+  underlying value ($0.03/share, stable for years) is correct; the pipeline's duration-based
+  extraction just can't reconstruct a clean quarterly series from this particular tagging
+  convention. New pattern, distinct from every previously-logged dividend gap (abandoned tag,
+  dual-class, young-company, genuine non-payer) — worth naming for future batches.
+- **BSX — `NetIncomeLoss`, 42%.** A ~7-year gap (2011–2017) where *neither* candidate tag
+  (`NetIncomeLoss`, `NetIncomeLossAvailableToCommonStockholdersBasic`) has any data at all — the
+  first time this severe a gap has shown up in a universal, non-profile-specific base concept this
+  project tracks. No substitute found; `IncomeLossFromContinuingOperationsBeforeIncomeTaxes...` is
+  a different (pre-tax) income-statement level and was rejected on that basis, same rule as always.
+- **HCA — `Goodwill`, 6%; IDXX — `LongTermDebt`, 46%.** Both show the same "real tag, but annual-
+  only for part of history" shape already logged for TGT/COST/SYY in the consumer_staples entry
+  above — HCA tags `Goodwill` only around its 2011 post-LBO re-IPO window and then stops; IDXX has
+  only fiscal-year-end `LongTermDebt` before 2019, with `LongTermDebtNoncurrent` picking up cleanly
+  from 2019 onward. Structural, not fixable by more tag search.
+- **VRTX — `LongTermDebt`, 4%.** A genuine trap avoided rather than a gap left unfixed:
+  `ConvertibleSubordinatedDebtNoncurrent` has 27 points covering 2010–2013, but checked against
+  `LongTermDebt` at the three dates where both exist, the values don't match ($400M vs. $105M) —
+  two real, *concurrent*, non-equivalent debt tranches, not alternates. Adding it as a fallback
+  would silently pick whichever tranche happened to be tagged for a given date rather than the
+  total. Not added; VRTX has been close to debt-free since ~2013 regardless.
+- **CRL, IQV — `ResearchAndDevelopment`, 0% each — two more expected-zero cases beyond the brief's
+  named six.** Neither is a health-services name (the brief's DGX/LH/HCA/DVA/UHS/CVS group); both
+  are CROs (contract research organizations). CRL has no R&D-expense tag at all. IQV has one, but
+  only 9 points (2011–2014, values in the low millions — immaterial next to IQVIA's actual revenue)
+  before it was abandoned. Consistent with the CRO business model: the research they perform is
+  billed as service revenue with a cost-of-revenue counterpart, not booked as the company's own
+  R&D expense. Confirmed, not assumed — same discipline as the brief's own six.
+- **The rest of the named six (DGX, LH, HCA, DVA, UHS, CVS) plus LH's thin 4%** — verified directly
+  rather than waved through. All five 0%-coverage names have no R&D-expense tag whatsoever, exactly
+  as expected. LH's 3 non-zero points (2009–2010, $2.5–3M/quarter, since abandoned) are real but
+  immaterial next to Labcorp's revenue — not "unexpectedly high," so the brief's second-look
+  trigger didn't fire.
+- **Segment-reconciliation caution (ABT, DHR, BDX, TMO, BAX)** — none of the five needed a
+  segment-level reconstruction for any flagged concept this session (their only flagged item, DHR's
+  `DividendsPerShare`, turned out to be the abandoned-tag pattern above, unrelated to segments), so
+  the caution wasn't triggered. Noted rather than silently skipped.
+
+### Step 2: does the 14-ticker life-science-tools/diagnostics subset actually belong here?
+
+Compared revenue growth, operating margin, and R&D intensity (TTM, computed directly from cached
+data) against the seven named core references (JNJ, LLY, MRK, PFE, ABT, MDT, SYK) — no reassignment
+performed, config left as-is, per the brief.
+
+**Life science tools/CRO (A, TECH, CRL, IQV, MTD, RVTY, WAT, TMO)**: revenue growth (4.3–10.7% mean)
+and volatility sit comfortably inside the core group's own range (3.7–8.6% mean, 4.5–27.6% stdev) —
+nothing distinctive there. R&D intensity is the real signal: 3.6–8.7% across the group, versus
+14.1–25.2% for the pure-pharma core names (LLY, MRK, PFE, JNJ) — though notably *close* to the
+medtech core names' own 6.3–8.1% (MDT, SYK). The group also isn't internally homogeneous: TECH/WAT
+run 27–28% operating margins (medtech-instrument-like), while the two CROs in the group (CRL 11%,
+IQV 10%) run service-business margins and have no R&D tag at all (see above) — a bigger gap from
+the "tools" half of their own bucket than from core medtech.
+
+**Health services/diagnostics (DGX, LH, HCA, DVA, UHS, CVS)**: R&D intensity is essentially zero
+across the board (confirmed in Step 1) — a real structural difference, not sampling noise. Margins
+run lower and more service/facility-driven (11.6–16.4%) than core pharma/medtech's 13.8–24.2%
+range, and CVS's 4.8% sits well below anything in the core group, reflecting its retail/PBM-heavy
+mix. LH's revenue growth stdev (39.6%) is an outlier even within this group — a real, known
+artifact of 2020–2021 COVID-testing revenue swings, not a data problem.
+
+**Recommendation** (findings only, no config change): health-services/diagnostics is the stronger
+candidate for eventually splitting out — the zero-R&D pattern is structural, not just numerically
+low, and CVS's margin profile is qualitatively different from anything else in the profile. Life-
+science-tools/CRO is more borderline — revenue dynamics look like core pharma/medtech fine, but the
+group is itself split between instrument-makers (medtech-like) and CROs (their own thing); if this
+gets revisited, splitting the two CROs (CRL, IQV) out specifically looks more justified than moving
+all eight.
+
+### Non-regression, Step 5
+
+Full before/after diff across all 225 cached tickers (every profile) for the concept actually
+changed (`Capex`): 0 changed, 0 removed, 14 new fills, all on LLY. (The rejected
+`PaymentsForProceedsFromProductiveAssets` addition was caught and backed out before this final
+diff — see above.) `DepreciationAndAmortization`'s exclusion touches only the coverage-check
+whitelist (`get_expected_concepts`), not extraction, so no facts diff applies to it.
+
 ## 2026-07-20 — Sixth stock-type profile: consumer_staples, and a rejected FIFO/LIFO substitution
 
 The `consumer_staples` profile (34 tickers, KO as reference) reuses `standard`'s entire concept set

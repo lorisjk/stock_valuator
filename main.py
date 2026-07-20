@@ -211,6 +211,9 @@ def calculate_all_metrics(facts: pd.DataFrame) -> dict:
     m["cash_conversion_cycle"] = calculate_difference_from_dfs(
         dio_plus_dso, m["dpo"], "dio_plus_dso", "dpo", "cash_conversion_cycle"
     )
+    m["rd_intensity"] = calculate_ratio(
+    facts, "ResearchAndDevelopment_TTM", "Revenue_TTM", "rd_intensity"
+    )
     return m
 
 
@@ -240,6 +243,7 @@ def build_metrics_long(metrics: dict) -> pd.DataFrame:
         (metrics["dso"], "dso", "dso"),
         (metrics["dpo"], "dpo", "dpo"),
         (metrics["cash_conversion_cycle"], "cash_conversion_cycle", "cash_conversion_cycle"),
+        (metrics["rd_intensity"], "rd_intensity", "rd_intensity")
     ]
 
     rows = [to_long_format(df, value_col, name) for df, value_col, name in spec]
@@ -394,6 +398,7 @@ def build_snapshot(
     dso = get_latest_row(metrics["dso"])
     dpo = get_latest_row(metrics["dpo"])
     ccc = get_latest_row(metrics["cash_conversion_cycle"])
+    rd_intensity = get_latest_row(metrics["rd_intensity"])
 
     for df, cols in [
         (eps, ["ticker", "eps_ttm"]),
@@ -424,6 +429,7 @@ def build_snapshot(
         (dso, ["ticker", "dso"]),
         (dpo, ["ticker", "dpo"]),
         (ccc, ["ticker", "cash_conversion_cycle"]),
+        (rd_intensity, ["ticker", "rd_intensity"])
     ]:
         snap = pd.merge(snap, df[cols], on="ticker", how="left")
 

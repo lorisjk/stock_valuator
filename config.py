@@ -1,4 +1,4 @@
-TICKERS = ["KO"]
+TICKERS = ["JNJ"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
@@ -137,6 +137,7 @@ TTM_CONCEPTS = [
     "NetInvestmentIncome",
     "RealizedInvestmentGains",
     "CostOfRevenue",
+    "ResearchAndDevelopment",
 ]
 
 SEARCH_HINTS = {
@@ -166,11 +167,12 @@ SEARCH_HINTS = {
     "Investments": ["investments"],
     "ClaimsReserve": ["liabilityforclaims", "claimsadjustmentexpense", "futurepolicybenefits"],
     "RealizedInvestmentGains": ["realizedgain", "realizedinvestment"],
-    #retail concepts 1a: 
+    #retail concepts : 
     "Inventory": ["inventorynet", "merchandiseinventory", "inventoryfinishedgoods"],
     "CostOfRevenue": ["costofgoods", "costofrevenue", "costofsales"],
     "AccountsReceivable": ["accountsreceivable", "receivablesnet"],
     "AccountsPayable": ["accountspayable"],
+    "ResearchAndDevelopment": ["researchanddevelopment", "rndexpense"],
 }
 
 DEFAULT_PROFILE = "standard"
@@ -235,6 +237,11 @@ TICKER_PROFILES = {
     "TPR": "retail",
     "HAS": "retail",
     "GRMN": "retail",
+    "WMT": "retail",
+    "COST": "retail",
+    "TGT": "retail",
+    "DG": "retail",
+    "DLTR": "retail",
 
     "MO": "consumer_staples",
     "ADM": "consumer_staples",
@@ -247,9 +254,6 @@ TICKER_PROFILES = {
     "KO": "consumer_staples",
     "CAG": "consumer_staples",
     "STZ": "consumer_staples",
-    "COST": "consumer_staples",
-    "DG": "consumer_staples",
-    "DLTR": "consumer_staples",
     "EL": "consumer_staples",
     "GIS": "consumer_staples",
     "HSY": "consumer_staples",
@@ -268,9 +272,56 @@ TICKER_PROFILES = {
     "PG": "consumer_staples",
     "SJM": "consumer_staples",
     "SYY": "consumer_staples",
-    "TGT": "consumer_staples",
     "TSN": "consumer_staples",
-    "WMT": "consumer_staples",
+
+    "JNJ": "pharma_medtech",
+    "ABT": "pharma_medtech",
+    "ABBV": "pharma_medtech",
+    "A": "pharma_medtech",
+    "ALGN": "pharma_medtech",
+    "AMGN": "pharma_medtech",
+    "BAX": "pharma_medtech",
+    "BDX": "pharma_medtech",
+    "TECH": "pharma_medtech",
+    "BIIB": "pharma_medtech",
+    "BSX": "pharma_medtech",
+    "BMY": "pharma_medtech",
+    "CRL": "pharma_medtech",
+    "COO": "pharma_medtech",
+    "DHR": "pharma_medtech",
+    "DVA": "pharma_medtech",
+    "DXCM": "pharma_medtech",
+    "EW": "pharma_medtech",
+    "GEHC": "pharma_medtech",
+    "GILD": "pharma_medtech",
+    "HCA": "pharma_medtech",
+    "IDXX": "pharma_medtech",
+    "PODD": "pharma_medtech",
+    "IQV": "pharma_medtech",
+    "ISRG": "pharma_medtech",
+    "LH": "pharma_medtech",
+    "LLY": "pharma_medtech",
+    "MDT": "pharma_medtech",
+    "MRK": "pharma_medtech",
+    "MTD": "pharma_medtech",
+    "PFE": "pharma_medtech",
+    "REGN": "pharma_medtech",
+    "RMD": "pharma_medtech",
+    "RVTY": "pharma_medtech",
+    "SOLV": "pharma_medtech",
+    "STE": "pharma_medtech",
+    "SYK": "pharma_medtech",
+    "TMO": "pharma_medtech",
+    "UHS": "pharma_medtech",
+    "VEEV": "pharma_medtech",
+    "VTRS": "pharma_medtech",
+    "VRTX": "pharma_medtech",
+    "WAT": "pharma_medtech",
+    "WST": "pharma_medtech",
+    "ZBH": "pharma_medtech",
+    "ZTS": "pharma_medtech",
+    "CVS": "pharma_medtech",
+    "DGX": "pharma_medtech",
 }
 
 PROFILE_HIDDEN = {
@@ -357,7 +408,21 @@ PROFILE_HIDDEN = {
         "reserve_growth", "p_core_earnings",
         "rule_of_40",
      },
+
+    "pharma_medtech": {
+        "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
+        "equity_to_assets", "provision_ratio", "p_ppnr", "combined_ratio",
+        "loss_ratio", "expense_ratio", "net_investment_yield",
+        "reserve_growth", "p_core_earnings",
+        "rule_of_40",
+        "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
+        "operating_margin",       
+        "net_debt_to_ebitda",     
+        "ev_ebitda",             
+        
+    },
 }
+
 
 PROFILE_CONCEPT_OVERRIDES = {
     "financial": {
@@ -547,6 +612,7 @@ PROFILE_CONCEPT_OVERRIDES = {
                 "InventoryNet",
                 "InventoryFinishedGoodsNetOfReserves",
                 "InventoryFinishedGoods",
+                "RetailRelatedInventoryMerchandise"
             ],
             "point_in_time": True,
             "mode": "fallback",
@@ -610,7 +676,27 @@ PROFILE_CONCEPT_OVERRIDES = {
             "mode": "fallback",
         },
     },
+    "pharma_medtech": {
+        "ResearchAndDevelopment": {
+            "tags": [
+                "ResearchAndDevelopmentExpense",
+                "ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+        "Capex": {
+            "tags": [
+                "PaymentsToAcquirePropertyPlantAndEquipment",
+                "PaymentsToAcquireProductiveAssets",
+                "PaymentsToAcquireOtherPropertyPlantAndEquipment",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+    },
 }
+
 
 
 PROFILE_EXCLUDED_CONCEPTS = {
@@ -646,6 +732,10 @@ PROFILE_EXCLUDED_CONCEPTS = {
     },
     "retail": {
         "Goodwill"
+    }, 
+    "pharma_medtech": {
+        "OperatingIncomeLoss",
+        "DepreciationAndAmortization",
     }
 
 }

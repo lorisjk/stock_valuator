@@ -87,6 +87,7 @@ def plot_fundamentals(ticker: str, metrics_long: pd.DataFrame, output_path: str)
         ("dso", "Days Sales Outstanding", None, False, False),
         ("dpo", "Days Payable Outstanding", None, False, False),
         ("cash_conversion_cycle", "Cash Conversion Cycle (Tage)", 0, False, False),
+        ("rd_intensity", "R&D-Intensität (% Umsatz)", None, True, False),
     ]
     concepts_to_plot = [c for c in concepts_to_plot if not is_hidden(ticker, c[0])]
 
