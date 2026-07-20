@@ -6,6 +6,124 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-07-20 — Fifth stock-type profile: retail, and a generic denominator-near-zero guard
+
+Two independent pieces of work, kept deliberately separate (different files, different
+non-regression checks): extending the `retail` profile's tag coverage to 18 more tickers, and a
+generic fix for a `StockholdersEquity`-denominator explosion bug found in ORLY while doing so —
+the fix turned out to reach far beyond retail.
+
+### Retail: nine fundamentals stay the same, four new balance-sheet concepts
+
+`retail` reuses `standard`'s whole metric set unchanged and adds four working-capital concepts on
+top — `Inventory` (`InventoryNet`), `CostOfRevenue` (`CostOfGoodsAndServicesSold`),
+`AccountsReceivable` (`AccountsReceivableNetCurrent`), `AccountsPayable`
+(`AccountsPayableCurrent`) — feeding five new fundamentals: inventory turnover, DIO, DSO, DPO,
+cash conversion cycle. ORLY-verified before scaling to AZO, BBY, GPC, HD, LOW, LULU, NKE, POOL,
+RL, ROST, TJX, TSCO, ULTA, WSM, DECK, TPR, HAS, GRMN (19 tickers total, only HD previously
+cached — the other 18, ORLY included, were fetched fresh this session).
+
+### A named assumption that didn't survive contact with the data
+
+The task brief named ORLY, AZO, ROST, TJX, ULTA, TSCO, WSM as "expected" near-zero
+`AccountsReceivable` cases (pure consumer-cash checkout, no trade receivable line). Checked
+directly rather than taken on faith: **six of the seven have excellent AR coverage (92–99%)** —
+almost certainly real commercial/professional-account receivables (ORLY's and AZO's DIFM/commercial
+programs selling to independent repair shops being the clearest case) rather than nothing. Only
+TSCO actually matches the assumed pattern, confirmed via exhaustive tag search (nothing beyond a
+tax-receivable tag and a one-time M&A footnote item). Reported as found, not forced to fit the
+brief's expectation.
+
+### Three clean fixes, and a lot of confirmed structural gaps
+
+GPC's `AccountsReceivable` (0%→95%, via `AccountsNotesAndLoansReceivableNetCurrent` — a combined
+accounts+notes+loans line typical of wholesale distributors) and DECK's / LULU's `LongTermDebt`
+(both 0%→real-but-sparse, via `NotesPayable` and `OtherBorrowings` respectively — LULU's tag is
+notably always exactly $0, a confirmed "no debt" reading rather than an unknown). `LongTermDebt`
+wasn't previously overridable for `retail` at all; migrated to a profile-specific `priority_merge`
+override with the usual byte-identical-copy-first discipline (0 diffs across all 145 cached
+tickers before the two new tags were appended).
+
+Everything else flagged (13 of 16 gaps) turned out structural on inspection: NKE has never tagged
+a discrete operating-income concept at all (confirmed via a full raw scan of every "income" tag in
+its filings — the income statement goes straight from expenses to pretax income); GPC and TJX
+both discontinued their `OperatingIncomeLoss`/COGS tags mid-history with no successor found;
+ROST, LOW, and WSM all *started* tagging a previously-bundled line (operating income, AR, COGS
+respectively) at almost exactly the same point in FY2024/2025 — three unrelated companies
+independently beginning disclosure at the same time reads as a shared external cause (a
+disaggregation-of-expenses change around then) rather than three coincidental gaps, though not
+chased down to a specific citation. GRMN, ULTA carry essentially no debt (Garmin: no debt tag
+exists at all; ULTA: one $800M COVID-era revolver draw, repaid within months) — same "no debt is
+not a bug" pattern as Reddit. 0 regressions, 118 new data points, across the full cached universe.
+
+### The equity-denominator bug: found while building ORLY, fixed generically
+
+ORLY's `roe` and `debt_to_equity` explode to nonsense (-27,999% / -591x) at 2021-03-31, where
+`StockholdersEquity` crosses to -$6.977M against $12.2B of TTM revenue — the same failure mode as
+the growth-rate near-zero-base bug from 2026-07-15, this time in a ratio *denominator* rather than
+a growth *base*. Generalized rather than patched locally, since the task brief was explicit that
+any profile with a `StockholdersEquity`/`TangibleEquity`-denominator ratio is exposed:
+
+```python
+MIN_DENOMINATOR_SCALE_RATIO = 0.01
+
+def apply_denominator_scale_guard(ratio, denominator, scale_reference, min_denominator_scale_ratio):
+    too_small = denominator.abs() < min_denominator_scale_ratio * scale_reference.abs()
+    too_small = too_small & scale_reference.notna()
+    return ratio.where(~too_small)
+```
+
+`Revenue_TTM` as the scale reference (present in every profile, unlike `Assets`). Wired into
+`calculate_ratio` as two new optional parameters (off by default, same additive shape as
+`min_base_ratio`), applied to `roe`, `debt_to_equity`, and `build_snapshot`'s `pb_ratio`/`p_tbv`.
+
+### AZO checked, not assumed — and turned out to be a different phenomenon
+
+The brief asked to confirm whether AZO (same aggressive-buyback reputation) shows the same
+pattern. It doesn't: AZO's equity has been **continuously, stably negative since 2009** — a
+large, deliberate, permanent capital-structure choice, not a brief crossing-through-zero like
+ORLY's. AZO's smallest-ever `|equity|/revenue` is 6.35%, more than 6x above the chosen threshold;
+its ROE/D-E stay bounded (roughly -0.5 to -2, -1.7 to -6.6) even though equity is negative
+throughout. The guard correctly leaves all of AZO's history untouched — verified, not inferred
+from the "similar company" framing.
+
+### The threshold problem was bigger than ORLY vs. AZO
+
+Running the same equity/revenue computation across all 145 cached tickers surfaced that near-zero
+or negative `StockholdersEquity` relative to revenue is a **common pattern in `standard`-profile
+names with long buyback histories** — CDW, HD, HPQ, DELL, MSI, MCHP, CIEN, STX, VRSN, GDDY, IT,
+GEN, AMD, FTNT all show it, confirming the brief's "not retail-specific" framing empirically. This
+also killed the hope of an IBM-style clean bimodal gap (that growth-rate fix's separation doesn't
+exist here — the distribution is continuous). `0.01` was chosen as a deliberately conservative
+threshold: it catches every value with genuinely extreme (`|roe|`/`|debt_to_equity|` in the high
+single digits to several hundred) resulting ratios, while sitting 6x below AZO's smallest
+legitimate value and >26x below the smallest already-validated financial/insurance equity/revenue
+ratio anywhere in the cached universe (ALL, 26.1%). A few of ORLY's own milder elevated quarters
+(e.g. 2021-09-30 at roe=-14.5, ratio=1.09%) are deliberately left unmasked rather than chasing a
+looser threshold that would sweep into the broad thin-but-stable tech population.
+
+### A bug in the guard's first version, caught by its own non-regression check
+
+The first implementation treated a missing scale reference (`Revenue_TTM` unavailable for that
+date) as "can't verify → mask." This silently masked 144 previously-clean values, including
+**Goldman Sachs' entire 2009–2012 ROE series (13%–21%, completely sane)** — not because GS's
+equity was ever small, but because `Revenue_TTM` has its own unrelated coverage gaps for that era
+(the same class of bank-Revenue-tag issue documented in the 2026-07-17 entry). Caught by the
+"diff against the old logic across the full cached universe" check before being kept, same
+discipline as every fix in this log. Fixed: a missing scale reference now means "can't judge,
+don't mask" rather than "mask" — `too_small = too_small & scale_reference.notna()`. Final result:
+0 unexplained changes, 37 intentionally masked `(ticker, end)` ROE/D-E pairs (all `standard`
+profile plus ORLY), every one genuinely extreme, zero `financial`/`insurance_pc`/`insurance_life`
+tickers touched.
+
+### Deliberately left alone
+
+`build_valuation_history`'s time-series `pb_ratio`/`p_tbv` (as opposed to `build_snapshot`'s
+single-latest-value versions) have the identical exposure and were not fixed — the task scoped
+the guard to "snapshot-level" specifically. Flagged as a known, parallel gap rather than silently
+patched or silently ignored, same "narrower-scope tradeoff, documented" call as the `peg_ratio`
+fix's simplified growth calc from the 2026-07-18 entry.
+
 ## 2026-07-19 — Fourth stock-type profile: insurance_life, and a new architecture limit surfaced
 
 Following `insurance_pc`, life/annuity insurers were split off as their own profile from the

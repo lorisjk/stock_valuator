@@ -82,6 +82,11 @@ def plot_fundamentals(ticker: str, metrics_long: pd.DataFrame, output_path: str)
         ("expense_ratio", "Expense Ratio", None, True, False),
         ("net_investment_yield", "Net Investment Yield", None, True, False),
         ("reserve_growth", "Reserve Growth", 0, True, False),
+        ("inventory_turnover", "Inventory Turnover (x/Jahr)", None, False, False),
+        ("dio", "Days Inventory Outstanding", None, False, False),
+        ("dso", "Days Sales Outstanding", None, False, False),
+        ("dpo", "Days Payable Outstanding", None, False, False),
+        ("cash_conversion_cycle", "Cash Conversion Cycle (Tage)", 0, False, False),
     ]
     concepts_to_plot = [c for c in concepts_to_plot if not is_hidden(ticker, c[0])]
 

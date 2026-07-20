@@ -1,4 +1,4 @@
-TICKERS = ["GL"]
+TICKERS = ["LULU"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
@@ -136,6 +136,7 @@ TTM_CONCEPTS = [
     "BenefitsLossesAndExpenses",
     "NetInvestmentIncome",
     "RealizedInvestmentGains",
+    "CostOfRevenue",
 ]
 
 SEARCH_HINTS = {
@@ -157,7 +158,7 @@ SEARCH_HINTS = {
     "NoninterestIncome": ["noninterestincome"],
     "Goodwill": ["goodwill", "intangible"],
     "ProvisionForCreditLosses": ["provisionforloan", "provisionforcredit"],
-    # insurance_pc concepts:
+    # insurance concepts:
     "EarnedPremiums": ["premiumsearned"],
     "IncurredLosses": ["benefitsandclaims", "policyholderbenefits"],
     "BenefitsLossesAndExpenses": ["benefitslossesandexpenses"],
@@ -165,6 +166,11 @@ SEARCH_HINTS = {
     "Investments": ["investments"],
     "ClaimsReserve": ["liabilityforclaims", "claimsadjustmentexpense", "futurepolicybenefits"],
     "RealizedInvestmentGains": ["realizedgain", "realizedinvestment"],
+    #retail concepts 1a: 
+    "Inventory": ["inventorynet", "merchandiseinventory", "inventoryfinishedgoods"],
+    "CostOfRevenue": ["costofgoods", "costofrevenue", "costofsales"],
+    "AccountsReceivable": ["accountsreceivable", "receivablesnet"],
+    "AccountsPayable": ["accountspayable"],
 }
 
 DEFAULT_PROFILE = "standard"
@@ -210,8 +216,25 @@ TICKER_PROFILES = {
     "PFG": "insurance_life",
     "GL": "insurance_life",
 
-
-
+    "ORLY": "retail",
+    "AZO": "retail",
+    "BBY": "retail",
+    "GPC": "retail",
+    "HD": "retail",
+    "LOW": "retail",
+    "LULU": "retail",
+    "NKE": "retail",
+    "POOL": "retail",
+    "RL": "retail",
+    "ROST": "retail",
+    "TJX": "retail",
+    "TSCO": "retail",
+    "ULTA": "retail",
+    "WSM": "retail",
+    "DECK": "retail",
+    "TPR": "retail",
+    "HAS": "retail",
+    "GRMN": "retail",
 }
 
 PROFILE_HIDDEN = {
@@ -229,6 +252,7 @@ PROFILE_HIDDEN = {
         "net_investment_yield",
         "reserve_growth",
         "p_core_earnings",
+        "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
     },
     "financial": {
         "pfcf_ttm", "ev_ebitda", "ev_sales",
@@ -241,6 +265,7 @@ PROFILE_HIDDEN = {
         "net_investment_yield",
         "reserve_growth",
         "p_core_earnings",
+        "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
     },
     "insurance_pc":{
         "pfcf_ttm", 
@@ -259,7 +284,8 @@ PROFILE_HIDDEN = {
         "roa",
         "equity_to_assets",
         "provision_ratio",
-        "p_ppnr"
+        "p_ppnr",
+        "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
     },
     "insurance_life":{
         "pfcf_ttm", 
@@ -278,7 +304,14 @@ PROFILE_HIDDEN = {
         "roa",
         "equity_to_assets",
         "provision_ratio",
-        "p_ppnr"
+        "p_ppnr",
+        "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
+    },
+    "retail": {
+        "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
+        "equity_to_assets", "provision_ratio", "p_ppnr", "combined_ratio",
+        "loss_ratio", "expense_ratio", "net_investment_yield",
+        "reserve_growth", "p_core_earnings", "rule_of_40"
     }
 }
 
@@ -463,7 +496,66 @@ PROFILE_CONCEPT_OVERRIDES = {
             "mode": "priority_merge",
         },
     },
+
+    "retail": {
+        "Inventory": {
+            "tags": [
+                "InventoryNet",
+                "InventoryFinishedGoodsNetOfReserves",
+                "InventoryFinishedGoods",
+            ],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+        "CostOfRevenue": {
+            "tags": [
+                "CostOfGoodsAndServicesSold",
+                "CostOfRevenue",
+                "CostOfGoodsSold",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+        "AccountsReceivable": {
+            "tags": [
+                "AccountsReceivableNetCurrent",
+                "ReceivablesNetCurrent",
+                "AccountsReceivableTradeNetCurrent",
+                "AccountsNotesAndLoansReceivableNetCurrent",
+            ],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+        "AccountsPayable": {
+            "tags": [
+                "AccountsPayableCurrent",
+                "AccountsPayableTradeCurrent",
+            ],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+        "LongTermDebt": {
+            "sources": [
+                {"type": "tag", "tag": "LongTermDebt"},
+                {"type": "tag", "tag": "DebtLongtermAndShorttermCombinedAmount"},
+                {"type": "tag", "tag": "LongTermNotesAndLoans"},
+                {"type": "tag", "tag": "ConvertibleLongTermNotesPayable"},
+                {"type": "tag", "tag": "ConvertibleDebtNoncurrent"},
+                {"type": "tag", "tag": "ConvertibleDebtCurrent"},
+                {"type": "tag", "tag": "ConvertibleNotesPayableCurrent"},
+                {"type": "sum", "tags": ["LongTermDebtNoncurrent", "LongTermDebtCurrent", "NotesPayableCurrent"]},
+                {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligations"},
+                {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities"},
+                {"type": "tag", "tag": "UnsecuredLongTermDebt"},
+                {"type": "tag", "tag": "NotesPayable"},
+                {"type": "tag", "tag": "OtherBorrowings"},
+            ],
+            "point_in_time": True,
+            "mode": "priority_merge",
+        },
+    },
 }
+
 
 PROFILE_EXCLUDED_CONCEPTS = {
     "standard": {

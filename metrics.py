@@ -1,6 +1,18 @@
 import pandas as pd
 import numpy as np
 COMMON_SPLIT_FACTORS = [1, 2, 3, 4, 5, 6, 7, 8, 10, 15, 20, 25, 30, 40, 50]
+MIN_DENOMINATOR_SCALE_RATIO = 0.01
+
+
+def apply_denominator_scale_guard(
+    ratio: pd.Series,
+    denominator: pd.Series,
+    scale_reference: pd.Series,
+    min_denominator_scale_ratio: float,
+) -> pd.Series:
+    too_small = denominator.abs() < min_denominator_scale_ratio * scale_reference.abs()
+    too_small = too_small & scale_reference.notna()
+    return ratio.where(~too_small)
 
 
 def calculate_growth(df: pd.DataFrame, concept: str, periods: int, result_name: str, min_base_ratio: float = 0.33) -> pd.DataFrame:
@@ -27,6 +39,8 @@ def calculate_ratio(
     denominator_concept: str,
     result_name: str,
     require_positive_denominator: bool = False,
+    min_denominator_scale_ref: str = None,
+    min_denominator_scale_ratio: float = None,
 ) -> pd.DataFrame:
 
     numerator = df[df["concept"] == numerator_concept].copy()
@@ -46,6 +60,15 @@ def calculate_ratio(
         merged[denominator_col] = merged[denominator_col].where(merged[denominator_col] > 0)
 
     merged[result_name] = merged[numerator_col] / merged[denominator_col]
+
+    if min_denominator_scale_ref is not None and min_denominator_scale_ratio is not None:
+        scale = df[df["concept"] == min_denominator_scale_ref][["ticker", "end", "value"]].rename(
+            columns={"value": "_scale_ref"}
+        )
+        merged = pd.merge(merged, scale, on=["ticker", "end"], how="left")
+        merged[result_name] = apply_denominator_scale_guard(
+            merged[result_name], merged[denominator_col], merged["_scale_ref"], min_denominator_scale_ratio
+        )
 
     return merged[["ticker", "end", result_name]]
 

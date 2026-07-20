@@ -33,7 +33,9 @@ from metrics import (
     get_latest_value,
     get_latest_row,
     to_long_format,
-    normalize_split_adjusted, 
+    normalize_split_adjusted,
+    apply_denominator_scale_guard,
+    MIN_DENOMINATOR_SCALE_RATIO,
 )
 from figures import plot_fundamentals, plot_valuation
 from quality import print_data_quality
@@ -123,14 +125,20 @@ def calculate_all_metrics(facts: pd.DataFrame) -> dict:
     m["operating_margin"] = calculate_ratio(
         facts, "OperatingIncomeLoss_TTM", "Revenue_TTM", "operating_margin"
     )
-    m["roe"] = calculate_ratio(facts, "NetIncomeLoss_TTM", "StockholdersEquity", "roe")
+    m["roe"] = calculate_ratio(
+        facts, "NetIncomeLoss_TTM", "StockholdersEquity", "roe",
+        min_denominator_scale_ref="Revenue_TTM",
+        min_denominator_scale_ratio=MIN_DENOMINATOR_SCALE_RATIO,
+    )
     m["payout_ratio"] = calculate_ratio(
         facts, "DividendsPerShare_TTM", "EPS_TTM_CALC", "payout_ratio",
         require_positive_denominator=True,
     )
 
     m["debt_to_equity"] = calculate_ratio(
-        facts, "LongTermDebt", "StockholdersEquity", "debt_to_equity"
+        facts, "LongTermDebt", "StockholdersEquity", "debt_to_equity",
+        min_denominator_scale_ref="Revenue_TTM",
+        min_denominator_scale_ratio=MIN_DENOMINATOR_SCALE_RATIO,
     )
     m["net_debt"] = calculate_difference(
         facts, "LongTermDebt", "CashAndEquivalents", "net_debt", "-"
@@ -185,6 +193,24 @@ def calculate_all_metrics(facts: pd.DataFrame) -> dict:
     m["reserve_growth"] = calculate_growth(
         facts, "ClaimsReserve", 4, "reserve_growth"
     )
+  
+    m["inventory_turnover"] = calculate_ratio(
+        facts, "CostOfRevenue_TTM", "Inventory", "inventory_turnover"
+    )
+
+    m["dio"] = calculate_ratio(facts, "Inventory", "CostOfRevenue_TTM", "dio")
+    m["dio"]["dio"] = m["dio"]["dio"] * 365
+
+    m["dso"] = calculate_ratio(facts, "AccountsReceivable", "Revenue_TTM", "dso")
+    m["dso"]["dso"] = m["dso"]["dso"] * 365
+
+    m["dpo"] = calculate_ratio(facts, "AccountsPayable", "CostOfRevenue_TTM", "dpo")
+    m["dpo"]["dpo"] = m["dpo"]["dpo"] * 365
+
+    dio_plus_dso = calculate_sum_from_dfs(m["dio"], m["dso"], "dio", "dso", "dio_plus_dso")
+    m["cash_conversion_cycle"] = calculate_difference_from_dfs(
+        dio_plus_dso, m["dpo"], "dio_plus_dso", "dpo", "cash_conversion_cycle"
+    )
     return m
 
 
@@ -209,6 +235,11 @@ def build_metrics_long(metrics: dict) -> pd.DataFrame:
         (metrics["expense_ratio"], "expense_ratio", "expense_ratio"),
         (metrics["net_investment_yield"], "net_investment_yield", "net_investment_yield"),
         (metrics["reserve_growth"], "reserve_growth", "reserve_growth"),
+        (metrics["inventory_turnover"], "inventory_turnover", "inventory_turnover"),
+        (metrics["dio"], "dio", "dio"),
+        (metrics["dso"], "dso", "dso"),
+        (metrics["dpo"], "dpo", "dpo"),
+        (metrics["cash_conversion_cycle"], "cash_conversion_cycle", "cash_conversion_cycle"),
     ]
 
     rows = [to_long_format(df, value_col, name) for df, value_col, name in spec]
@@ -358,6 +389,11 @@ def build_snapshot(
     net_investment_yield = get_latest_row(metrics["net_investment_yield"])
     reserve_growth = get_latest_row(metrics["reserve_growth"])
     core_earnings_latest = get_latest_value(facts, "CoreOperatingEarnings").rename(columns={"value": "core_earnings_ttm"})
+    inventory_turnover = get_latest_row(metrics["inventory_turnover"])
+    dio = get_latest_row(metrics["dio"])
+    dso = get_latest_row(metrics["dso"])
+    dpo = get_latest_row(metrics["dpo"])
+    ccc = get_latest_row(metrics["cash_conversion_cycle"])
 
     for df, cols in [
         (eps, ["ticker", "eps_ttm"]),
@@ -383,6 +419,11 @@ def build_snapshot(
         (net_investment_yield, ["ticker", "net_investment_yield"]),
         (reserve_growth, ["ticker", "reserve_growth"]),
         (core_earnings_latest, ["ticker", "core_earnings_ttm"]),
+        (inventory_turnover, ["ticker", "inventory_turnover"]),
+        (dio, ["ticker", "dio"]),
+        (dso, ["ticker", "dso"]),
+        (dpo, ["ticker", "dpo"]),
+        (ccc, ["ticker", "cash_conversion_cycle"]),
     ]:
         snap = pd.merge(snap, df[cols], on="ticker", how="left")
 
@@ -390,13 +431,17 @@ def build_snapshot(
     snap["ev"] = snap["market_cap"] + snap["net_debt"]
 
     snap["pe_ttm"] = snap["price"] / snap["eps_ttm"]
-    snap["pb_ratio"] = snap["market_cap"] / snap["equity"]
+    snap["pb_ratio"] = apply_denominator_scale_guard(
+        snap["market_cap"] / snap["equity"], snap["equity"], snap["revenue_ttm"], MIN_DENOMINATOR_SCALE_RATIO
+    )
     snap["pfcf_ttm"] = snap["market_cap"] / snap["fcf_ttm"]
     snap["ev_ebitda"] = snap["ev"] / snap["ebitda_ttm"]
     snap["ev_sales"] = snap["ev"] / snap["revenue_ttm"]
     snap["peg_ratio"] = snap["pe_ttm"] / (snap["yoy_growth"] * 100)
     snap["dividend_yield"] = snap["dividends_ttm"] / snap["price"]
-    snap["p_tbv"] = snap["market_cap"] / snap["tangible_equity"]
+    snap["p_tbv"] = apply_denominator_scale_guard(
+        snap["market_cap"] / snap["tangible_equity"], snap["tangible_equity"], snap["revenue_ttm"], MIN_DENOMINATOR_SCALE_RATIO
+    )
     snap["p_ppnr"] = snap["market_cap"] / snap["ppnr_ttm"]
     snap["p_core_earnings"] = snap["market_cap"] / snap["core_earnings_ttm"]
 
