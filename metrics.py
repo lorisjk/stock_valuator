@@ -3,6 +3,11 @@ import numpy as np
 COMMON_SPLIT_FACTORS = [1, 2, 3, 4, 5, 6, 7, 8, 10, 15, 20, 25, 30, 40, 50]
 MIN_DENOMINATOR_SCALE_RATIO = 0.01
 MIN_OPERATING_LEVERAGE_REVENUE_GROWTH = 0.02
+MAX_OPERATING_LEVERAGE_ABS = 15
+MIN_NET_DEBT_TO_EBITDA_ABS = 10_000_000
+MIN_DEBT_TO_EQUITY_SCALE_RATIO = 0.05
+REVENUE_SELF_SCALE_WINDOW = 8
+MIN_REVENUE_SELF_SCALE_RATIO = 0.10
 
 
 def apply_denominator_scale_guard(
@@ -14,6 +19,26 @@ def apply_denominator_scale_guard(
     too_small = denominator.abs() < min_denominator_scale_ratio * scale_reference.abs()
     too_small = too_small & scale_reference.notna()
     return ratio.where(~too_small)
+
+
+def apply_self_relative_scale_guard(
+    df: pd.DataFrame,
+    value_col: str,
+    reference_col: str,
+    window: int,
+    min_self_scale_ratio: float,
+) -> pd.Series:
+    work = df[["ticker", "end", reference_col]].copy().sort_values(["ticker", "end"])
+    work["_abs_ref"] = work[reference_col].abs()
+    work["_window_max"] = (
+        work.groupby("ticker")["_abs_ref"]
+        .rolling(window=2 * window + 1, center=True, min_periods=1)
+        .max()
+        .reset_index(level=0, drop=True)
+    )
+    too_small = work["_abs_ref"] < min_self_scale_ratio * work["_window_max"]
+    too_small = too_small.reindex(df.index)
+    return df[value_col].where(~too_small)
 
 
 def calculate_growth(df: pd.DataFrame, concept: str, periods: int, result_name: str, min_base_ratio: float = 0.33) -> pd.DataFrame:
@@ -110,6 +135,7 @@ def calculate_ratio_from_dfs(
     denominator_column: str,
     result_name: str,
     min_denominator_abs: float = None,
+    max_abs_result: float = None,
 ) -> pd.DataFrame:
 
     merged = pd.merge(numerator_df, denominator_df, on=["ticker", "end"])
@@ -118,6 +144,10 @@ def calculate_ratio_from_dfs(
     if min_denominator_abs is not None:
         too_small = merged[denominator_column].abs() < min_denominator_abs
         merged[result_name] = merged[result_name].where(~too_small)
+
+    if max_abs_result is not None:
+        too_large = merged[result_name].abs() > max_abs_result
+        merged[result_name] = merged[result_name].where(~too_large)
 
     return merged[["ticker", "end", result_name]]
 
@@ -212,29 +242,29 @@ def add_as_concept(facts: pd.DataFrame, df: pd.DataFrame, value_col: str, concep
 def _normalize_series(values: pd.Series, dates: pd.Series) -> pd.Series:
     if len(values) < 2:
         return values
- 
+
     anchor = values.iloc[-1]
     if anchor <= 0 or pd.isna(anchor):
         return values
- 
+
     normalized = []
     for v in values:
         if pd.isna(v) or v <= 0:
             normalized.append(v)
             continue
- 
+
         best = v
         best_err = abs(np.log(v / anchor))
- 
+
         for f in COMMON_SPLIT_FACTORS:
             for candidate in (v * f, v / f):
                 err = abs(np.log(candidate / anchor))
                 if err < best_err:
                     best = candidate
                     best_err = err
- 
+
         normalized.append(best)
- 
+
     return pd.Series(normalized, index=values.index)
  
  

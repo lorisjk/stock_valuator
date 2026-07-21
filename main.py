@@ -35,8 +35,14 @@ from metrics import (
     to_long_format,
     normalize_split_adjusted,
     apply_denominator_scale_guard,
+    apply_self_relative_scale_guard,
     MIN_DENOMINATOR_SCALE_RATIO,
     MIN_OPERATING_LEVERAGE_REVENUE_GROWTH,
+    MAX_OPERATING_LEVERAGE_ABS,
+    MIN_NET_DEBT_TO_EBITDA_ABS,
+    MIN_DEBT_TO_EQUITY_SCALE_RATIO,
+    REVENUE_SELF_SCALE_WINDOW,
+    MIN_REVENUE_SELF_SCALE_RATIO,
 )
 from figures import plot_fundamentals, plot_valuation
 from quality import print_data_quality
@@ -128,6 +134,7 @@ def calculate_all_metrics(facts: pd.DataFrame) -> dict:
     )
     m["roe"] = calculate_ratio(
         facts, "NetIncomeLoss_TTM", "StockholdersEquity", "roe",
+        require_positive_denominator=True,
         min_denominator_scale_ref="Revenue_TTM",
         min_denominator_scale_ratio=MIN_DENOMINATOR_SCALE_RATIO,
     )
@@ -138,8 +145,9 @@ def calculate_all_metrics(facts: pd.DataFrame) -> dict:
 
     m["debt_to_equity"] = calculate_ratio(
         facts, "LongTermDebt", "StockholdersEquity", "debt_to_equity",
-        min_denominator_scale_ref="Revenue_TTM",
-        min_denominator_scale_ratio=MIN_DENOMINATOR_SCALE_RATIO,
+        require_positive_denominator=True,
+        min_denominator_scale_ref="LongTermDebt",
+        min_denominator_scale_ratio=MIN_DEBT_TO_EQUITY_SCALE_RATIO,
     )
     m["net_debt"] = calculate_difference(
         facts, "LongTermDebt", "CashAndEquivalents", "net_debt", "-"
@@ -152,13 +160,30 @@ def calculate_all_metrics(facts: pd.DataFrame) -> dict:
         facts, "OperatingIncomeLoss_TTM", "DepreciationAndAmortization_TTM", "ebitda", "+"
     )
 
-    revenue_ttm_rows = facts[facts["concept"] == "Revenue_TTM"][["ticker", "end", "value"]]
+    revenue_ttm_rows = facts[facts["concept"] == "Revenue_TTM"][["ticker", "end", "value"]].rename(
+        columns={"value": "Revenue_TTM"}
+    )
+
+    m["operating_margin"] = m["operating_margin"].merge(revenue_ttm_rows, on=["ticker", "end"], how="left")
+    m["operating_margin"]["operating_margin"] = apply_self_relative_scale_guard(
+        m["operating_margin"], "operating_margin", "Revenue_TTM",
+        window=REVENUE_SELF_SCALE_WINDOW, min_self_scale_ratio=MIN_REVENUE_SELF_SCALE_RATIO,
+    )
+    m["operating_margin"] = m["operating_margin"][["ticker", "end", "operating_margin"]]
 
     m["fcf_margin"] = calculate_ratio_from_dfs(
-        m["fcf"], revenue_ttm_rows, "fcf", "value", "fcf_margin"
+        m["fcf"], revenue_ttm_rows, "fcf", "Revenue_TTM", "fcf_margin"
     )
+    m["fcf_margin"] = m["fcf_margin"].merge(revenue_ttm_rows, on=["ticker", "end"], how="left")
+    m["fcf_margin"]["fcf_margin"] = apply_self_relative_scale_guard(
+        m["fcf_margin"], "fcf_margin", "Revenue_TTM",
+        window=REVENUE_SELF_SCALE_WINDOW, min_self_scale_ratio=MIN_REVENUE_SELF_SCALE_RATIO,
+    )
+    m["fcf_margin"] = m["fcf_margin"][["ticker", "end", "fcf_margin"]]
+
     m["net_debt_to_ebitda"] = calculate_ratio_from_dfs(
-        m["net_debt"], m["ebitda"], "net_debt", "ebitda", "net_debt_to_ebitda"
+        m["net_debt"], m["ebitda"], "net_debt", "ebitda", "net_debt_to_ebitda",
+        min_denominator_abs=MIN_NET_DEBT_TO_EBITDA_ABS,
     )
     m["rule_of_40"] = calculate_sum_from_dfs(
         m["revenue_growth"], m["fcf_margin"], "yoy_growth", "fcf_margin", "rule_of_40"
@@ -222,6 +247,7 @@ def calculate_all_metrics(facts: pd.DataFrame) -> dict:
         m["operating_income_growth"], m["revenue_growth"],
         "operating_income_yoy_growth", "yoy_growth", "operating_leverage",
         min_denominator_abs=MIN_OPERATING_LEVERAGE_REVENUE_GROWTH,
+        max_abs_result=MAX_OPERATING_LEVERAGE_ABS,
     )
     m["capex_intensity"] = calculate_ratio(
     facts, "Capex_TTM", "Revenue_TTM", "capex_intensity"

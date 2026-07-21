@@ -6,6 +6,576 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-07-21 — Targeted fix for BAC/Assets and ROK+STX/DividendsPerShare: a third mechanism, pinned to exact facts
+
+The generalization attempt (previous entry) proved a generic rescale mechanism can't safely cover
+the confirmed scale-mismatch cases beyond `SharesOutstanding`. This entry fixes only the three
+cases that actually break a currently-visible metric today — BAC's `equity_to_assets` (`inf`) and
+ROK/STX's `payout_ratio` (triple-digit-plus distortions) — with a third, deliberately narrower
+mechanism: a hardcoded, per-fact drop-list.
+
+### Why not the two existing mechanisms
+
+`TICKER_CONCEPT_OVERRIDES` replaces a ticker's tag list for a concept — the wrong shape here, since
+the tag itself is correct at every date except one restated comparative; swapping tags would lose
+the tag's otherwise-good data entirely. `_normalize_scale_outliers` rescales based on a chronological
+anchor — already proven unsafe to extend beyond `SharesOutstanding` (previous entry). Both bugs here
+are a strictly simpler shape: one specific filing, on one specific date, reported one specific fact
+at the wrong scale, and the pre-existing "later filed wins" tie-break in `extract_period_values`
+picks it over the correct value still sitting in an earlier filing. The fix that matches this shape
+exactly: stop that one bad fact from ever reaching the tie-break, and let the correct one win
+unchanged.
+
+### The mechanism: `_KNOWN_BAD_FACTS` in `parsers/parse_edgar.py`
+
+A dict keyed by `(ticker, tag)`, each entry a list of `{end, filed, val}` triples individually
+verified against the raw cached JSON. `_drop_known_bad_facts()` runs once per ticker in
+`build_dataframe()`, before any extraction, and removes only items matching **all three** fields —
+not "any zero," not "any value over N," not "any fact for this ticker/tag" — so it is structurally
+incapable of touching a fact that isn't individually listed. Zero heuristics, zero inference.
+
+### Severity check on the other 14 `DividendsPerShare` tickers
+
+Before finalizing scope, checked whether any of AVGO, CDW, EL, HBAN, HWM, KHC, LRCX, MA, MAS, NVDA,
+ROST, SYK, UHS, XYL currently produce a distorted (million-scale) value the way ROK/STX do. None
+do — for every one of them, a later, correctly-scaled filing already exists and already wins the
+tie-break today (confirmed by calling `extract_quarterly_values` directly against each ticker's raw
+JSON). A few show small negative values from an unrelated, pre-existing decumulation quirk (mixed
+annual/quarterly tagging producing an odd Q4 delta) — not this bug, not touched, left as a
+documented, separate, low-priority observation. None pulled into scope.
+
+### What's actually in the drop-list
+
+- **BAC, `Assets`**: one fact (`2008-12-31`, filed `2011-02-25`, `val=0`) — a 2011 10-K comparative
+  restatement to exactly zero, when three earlier filings consistently reported $1,817,943,000,000.
+- **ROK, `CommonStockDividendsPerShareDeclared`**: 10 facts across three consecutive fiscal-2019
+  10-Qs (filed 2019-01-31, 2019-04-25, 2019-07-25), each of which reported *every* dividend figure
+  in that filing — both the current quarter and the prior-year comparative, both the standalone
+  quarterly figure and the fiscal-YTD cumulative figure — at exactly 1,000,000x scale. Only 3 of the
+  10 were currently winning the tie-break (`2017-12-31`, `2018-03-31`, `2018-06-30`); the other 7
+  self-corrected via a later filing already, but were dropped anyway since they're the same
+  demonstrably-bad facts and leaving them in the raw data is a latent risk for no benefit.
+- **STX, `CommonStockDividendsPerShareDeclared`**: 3 facts, all from the single FY2024 10-K (filed
+  2024-08-02), which reported the current and two prior fiscal years' annual dividend totals all at
+  1,000,000x scale. Only 1 (`2022-07-01`) was currently winning; the other 2 (`2023-06-30`,
+  `2024-06-28`) had already self-corrected via a later 10-K.
+
+### A side effect worth naming: ROK's `2018-09-30` Q4 also self-corrected
+
+`decumulate_period_values` derives a missing Q4 as `annual − (Q1+Q2+Q3)`. With the bad Q1/Q2/Q3
+values in place, ROK's FY2018 Q4 computed as `3.51 − 3,510,000 ≈ -3,509,996.49` — an impossible
+negative dividend. Dropping the three bad quarters fixes this derived value too, automatically, with
+no separate entry needed in the drop-list: `0.835 + 0.835 + 0.92 = 2.59`, `3.51 − 2.59 = 0.92`, a
+sane result matching the surrounding quarters. Not something the task asked for explicitly, but
+confirmed correct and left in place — the same "verify, don't just accept the absence of an error"
+standard used for every fix in this project.
+
+### Non-regression
+
+Extracted every concept for every one of 323 cached tickers, before vs. after. **6 rows changed,
+all explicitly in scope, everything else byte-identical:**
+
+| Ticker | Concept | End | Before | After |
+|---|---|---|---|---|
+| BAC | Assets | 2008-12-31 | 0 | $1,817,943,000,000 |
+| ROK | DividendsPerShare | 2017-12-31 | 835,000 | 0.835 |
+| ROK | DividendsPerShare | 2018-03-31 | 835,000 | 0.835 |
+| ROK | DividendsPerShare | 2018-06-30 | 1,840,000 | 0.92 |
+| ROK | DividendsPerShare | 2018-09-30 | -3,509,996.49 | 0.92 (Q4-derivation side effect, see above) |
+| STX | DividendsPerShare | 2022-07-01 | 2,769,997.93 | 0.70 |
+
+Resulting metrics confirmed sane, not just non-`inf`/non-absurd: BAC's `equity_to_assets` is now
+9.7%–11.4% across 2008–2009 (in line with every other quarter in its history); ROK's `payout_ratio`
+runs 0.47–1.07 through the affected window (in line with its normal 0.4–1.0 range); STX's is 0.38 at
+`2022-07-01` (in line with its steady ~0.33–0.51 range in adjacent quarters). KMB's single-filing
+event, the other 14 `DividendsPerShare` tickers, and the scattered `BMY`/`CHD`/`COHR`/`KDP`/`MTD`/
+`ZBH`/`ANET`/`TECH` cases are confirmed untouched — they don't appear anywhere in the 6-row diff,
+remaining exactly as documented in the previous entry: real, confirmed, and deliberately left
+unfixed.
+
+---
+
+## 2026-07-21 — Scale-outlier generalization attempt: scanned project-wide, shipped nothing, reverted cleanly
+
+The `SharesOutstanding` scale-mismatch fix (`_normalize_scale_outliers` in `parsers/parse_edgar.py`)
+was checked against every concept in `CONCEPT_CANDIDATES` and every profile override, not just the
+two instances (`Assets`/BAC, `DividendsPerShare`/ROK+STX) found incidentally during the ratio guard
+audit. The scan found the same tag-scale-mismatch signature in 11 more concepts. None of them got
+the fix. Every one was tested against real data and rejected for a concrete, demonstrated reason —
+this is a full changelog entry about **why nothing shipped**, not a summary of what did.
+
+### Step 1 — full-universe scan
+
+Replicated `extract_period_values`'s validity filter without its tie-break, keeping every raw
+`(tag, end)` collision instead of silently resolving it, across all 323 cached tickers using each
+ticker's own resolved `get_concept_candidates()` (so every profile's concepts were covered, not just
+the base set). Flagged any collision where two on-file values differ by a near-exact power of ten
+(tight log10 residual, same sign — the same signature already confirmed for `SharesOutstanding`,
+`Assets`, and `DividendsPerShare`).
+
+After filtering out coincidental ~10x differences from real restatements (a real business change
+essentially never lands on a *clean*, low-residual power-of-ten ratio — confirmed by checking sign:
+several `~9-11x` "matches," like CVS 2018-06-30 and MGM 2011-12-31, had a sign flip alongside the
+magnitude change, which a genuine scale bug never has), confirmed genuine bugs remained in:
+`DividendsPerShare` (16 tickers — AVGO, CDW, EL, HBAN, HWM, KHC, LRCX, MA, MAS, NVDA, ROK, ROST, STX,
+SYK, UHS, XYL), `DepreciationAndAmortization` (BMY, CHD, COHR, KDP, KMB), `Capex` (ACGL, KMB, NCLH),
+`Goodwill` (KMB, MTD), `LongTermDebt` (KMB, ZBH), `NetIncomeLoss` (ANET, KMB), `OperatingIncomeLoss`
+(KMB, TECH), `CashAndEquivalents` (KMB), `OperatingCashFlow` (KMB), `Revenue` (KMB), `StockholdersEquity`
+(KMB). KMB shows up in nearly every concept for the exact same two dates (2009-03-31, 2010-03-31) —
+one filing (2010-05-07, later corrected 2010-05-14) that reported nearly every dollar figure in
+thousands instead of dollars, not eight separate bugs. `Assets` had zero power-of-ten matches — its
+one confirmed instance (BAC) is a filer error reporting an exact `0` for a real, large, historically
+consistent value, a different signature entirely (see below).
+
+### Step 2 — the assumption checks, and why they failed
+
+Extended `_normalize_scale_outliers` with a per-concept candidate-factor override
+(`_CONCEPT_SCALE_FACTORS`, since `DividendsPerShare` needed `10x` in its factor list — the default
+list starts at `100x` specifically to avoid confusing a real stock split with `SharesOutstanding`,
+but several genuine `DividendsPerShare` bugs, e.g. LRCX/NVDA/MA/MAS/AVGO, are exactly `10x`) and
+added all 11 concepts to `_SCALE_CORRECTED_CONCEPTS`. Ran the full non-regression diff (all
+concepts, all 323 tickers, before vs. after) before drawing any conclusion — and found two distinct,
+serious failure modes, not the clean generalization hoped for:
+
+**Dollar-magnitude concepts (`Goodwill`, `CashAndEquivalents`, `Capex`, `DepreciationAndAmortization`,
+`LongTermDebt`, `NetIncomeLoss`, `OperatingCashFlow`, `OperatingIncomeLoss`, `Revenue`,
+`StockholdersEquity`) are exactly the risk the task asked to check for — a real, legitimate large
+jump (an acquisition, a restructuring) can exceed the mechanism's `32x` gate, and once it does, the
+running anchor adopts the new, larger *real* scale and starts "correcting" every earlier, smaller,
+equally-real value to match it.** Caught directly, not theoretically: ALGN's real 2009-2011 Goodwill
+($478,000 — genuinely small, this was a small company) got inflated to $47,800,000 (100x); AMD's real
+2009-2011 Goodwill ($323M) got inflated to $32.3B — a figure larger than AMD's entire market cap at
+the time. Both are legitimate historical values, both got wrongly "fixed" once a later, real, much
+larger Goodwill figure (from actual subsequent acquisitions) became the anchor. 1,397 rows changed
+across 11 concepts and ~40 tickers in this first pass; a meaningful fraction were confirmed wrong the
+same way as ALGN/AMD.
+
+**`DividendsPerShare`, despite passing the raw-scan signature check cleanly, fails for a completely
+different reason: `decumulate_period_values`.** This concept is not point-in-time, so it's run
+through the same YTD-cumulative-to-quarterly-delta decumulation as flow concepts like Revenue.
+Confirmed directly for GEN (Gen Digital, formerly NortonLifeLock): its 2016 fiscal-year-end change
+produced a genuine "stub period" quarterly delta of **$4.15** at `2016-04-01` — not a real dividend,
+a decumulation artifact, but only about 27x away from the surrounding ~$0.15 quarters, just inside
+the `32x` gate. The sweep adopted it as the new anchor, and every subsequent real, correct
+$0.075–$0.125/quarter value (36 quarters running, essentially GEN's entire post-2016 history) got
+"corrected" upward by 100x to $7.50–$12.50 — a dividend GEN never paid. Confirmed the same pattern
+for MGM (real $0.0025/quarter inflated to $0.25) and TPR (real value inflated 1,000x). This is a
+**different** anchor-poisoning failure mode than the ones already hardened against for
+`SharesOutstanding` (AIG's single garbage fact, WAT's poisoned seed) — here the poisoning value isn't
+an obviously-wrong outlier or a boundary seed, it's a genuine but non-representative artifact that
+sits just inside the existing gate. Even narrowing the fix to *only* `DividendsPerShare` (dropping
+all 10 dollar-magnitude concepts) still produced this false correction for 4 tickers.
+
+**`Assets` was never actually correctable by this mechanism at all.** BAC's confirmed instance is a
+filer reporting an exact `0` for a period that three earlier, consistent filings reported at
+$1,817,943,000,000. `_normalize_scale_outliers` works by finding a multiplicative rescale factor —
+there is no factor that turns `0` into `$1.8T`; the sweep's own `if not val: continue` guard treats
+zero as "no data" and passes over it untouched. This needs a structurally different mechanism (reject
+an implausible zero surrounded by consistent large values), not a variant of this one.
+
+### Step 3 — nothing shipped
+
+Given both attempts (11 concepts, then narrowed to the 2 most textbook-looking ones) produced
+confirmed false corrections on real data, and per this project's standing rule (`roe`/`payout_ratio`
+in the immediately preceding task, `normalize_split_adjusted`'s WAT gap before that) to log an honest
+negative result rather than ship a fix that trades confirmed real bugs for newly-broken real values —
+**`_SCALE_CORRECTED_CONCEPTS` was reverted to `{"SharesOutstanding"}` and the per-concept factor
+addition was removed.** `parsers/parse_edgar.py` is confirmed byte-for-byte reverted to its state
+before this task (`_normalize_scale_outliers`, `_sweep_scale_outliers`, `_closest_scale_factor` all
+back to their original signatures, `_CONCEPT_SCALE_FACTORS` no longer exists).
+
+### Step 4 — non-regression
+
+Full facts extraction (every concept, every one of 323 cached tickers) before vs. after: **0 rows
+changed, 0 rows added, 0 rows removed** — confirming the revert is complete and this task shipped no
+behavior change of any kind. BAC's `Assets` at `2008-12-31` is still `0` (its `equity_to_assets`
+still `inf`); ROK's `DividendsPerShare` at `2017-12-31`/`2018-03-31`/`2018-06-30` is still
+`835,000`/`835,000`/`1,840,000` (its `payout_ratio` distortion is unchanged). Both remain confirmed,
+open, unfixed — reported here rather than papered over.
+
+### What this leaves open
+
+`DividendsPerShare` (16 tickers, ROK/STX among them), `Assets` (1 ticker, BAC), and the 9 other
+dollar-magnitude concepts (mostly the single KMB filing event plus BMY/CHD/COHR/KDP/MTD/ZBH/ANET/TECH)
+all have real, confirmed instances of a tag-scale or filer-error bug. None is safe to fix with
+`_normalize_scale_outliers` as it exists today. A future fix would need either a decumulation-aware
+guard (skip or flag stub-period deltas before they can poison an anchor) for `DividendsPerShare`, a
+real-event-aware gate (e.g. cross-checking a large jump against a real M&A/restructuring signal, or
+requiring corroboration from more than one subsequent period before trusting a new anchor) for the
+dollar-magnitude concepts, or a dedicated "reject an implausible instant zero" rule for `Assets` — none
+of which existed going into this task and none of which this task built, consistent with its own
+explicit instruction not to force a fix that can't be validated.
+
+---
+
+## 2026-07-21 — Tier-1 ratio guard fixes: five metrics, three mechanisms, and two deliberately-not-fixed cases
+
+The ratio guard audit (`ratio_guard_audit_report.md`) confirmed real, current explosions in seven
+metrics. This entry covers the five that got a working fix; the other two (`roe`, `payout_ratio`)
+were investigated just as thoroughly and are documented below as **not fixed** — the obvious
+mechanism was tested against real data and demonstrably doesn't generalize, and shipping it anyway
+would have traded a small number of real explosions for a much larger number of newly-suppressed
+legitimate values. Every threshold below was calibrated from where explosions actually cluster in
+the full 323-ticker cache, the same discipline as every guard in this project.
+
+### Fix 1 — `net_debt_to_ebitda`: absolute EBITDA floor (new, `min_denominator_abs=$10M`)
+
+Unguarded; 53 confirmed explosions up to ±3,446x. Plotting caught-vs-collateral across a dollar
+floor sweep showed no clean separation — a company's absolute EBITDA size just doesn't predict
+whether its `net_debt_to_ebitda` reading is explosive (a mega-cap in earnings distress and a
+small-cap mid-scaling both post tiny-dollar EBITDA). The curve does have a genuine elbow at $10M:
+20 of 53 explosions caught (CRWD, DDOG, EFX, LYV, PANW, PODD, TTWO, EA, CIEN — all genuinely
+tiny-dollar EBITDA, the classic near-zero-denominator case) for only 12 collateral rows; the next
+$5M of floor buys just 2 more catches for 10 more collateral. The remaining 33 explosions (BA, WBD,
+INTC, RCL, NCLH, LVS, WYNN, HLT, MAR, MAS, CAG, VTRS, STX, EL — all with EBITDA in the tens-to-
+hundreds-of-millions) are a **different failure mode** — genuinely large debt against genuinely
+compressed (but not tiny) earnings — that an absolute floor can't reach without masking thousands
+of legitimate mid-cap ratios elsewhere. Left unaddressed, flagged for a scale-relative mechanism as
+a follow-up, not force-fit into this one.
+
+### Fix 2 — `debt_to_equity`: scale reference changed from `Revenue_TTM` to `LongTermDebt` (`roe` left unchanged)
+
+The existing guard compared equity to Revenue — the wrong yardstick, since a company's equity can
+be comfortably above 1% of revenue while still being tiny relative to its *own debt* (NCLH: equity
+1.4% of revenue, 0.5% of debt). Changed `min_denominator_scale_ref` to `LongTermDebt` (the ratio's
+own numerator) and recalibrated `min_denominator_scale_ratio` to **0.05** — chosen because it
+reproduces the audit's own `>20x` explosion boundary exactly (`equity < 5% of debt ⟺ debt/equity >
+20`), so it catches all 68 confirmed explosions with **zero collateral by construction**. As a
+bonus, it also *unmasked* 5 values the old Revenue-based guard was incorrectly suppressing (e.g.
+MAR 2023-03-31: debt_to_equity 0.40, an entirely normal reading, previously hidden only because
+equity was small relative to Marriott's asset-light revenue, not because the ratio itself was bad).
+
+**`roe` was left unchanged.** The obvious parallel move — reference `NetIncomeLoss_TTM` — was
+tested and rejected: of the 129 remaining `roe` "explosions," 118 are positive and belong to
+famous, real high-ROE buyback names (HD, MCD, ORLY, LMT, LLY, PM, LOW, CLX, KMB, GDDY, FTNT, MSI,
+VRSK, MTD — a company generating strong profit against equity kept thin by decades of buybacks is
+exactly what "high ROE" means, not a broken ratio). A NetIncomeLoss-based guard would suppress
+nearly all of them. The 11 negative cases (NCLH, WYNN, CIEN, ADSK, QCOM, PANW) trace to real,
+documented one-time events (COVID losses, ADSK's subscription-transition writedown, QCOM's 2018
+Apple-dispute charge) at similarly-thin-but-real equity — mathematically symmetric with the
+positive cases, so there's no principled sign-based cut either. `Assets` was checked as an
+alternative reference and isn't populated outside the banking profile, so it isn't universally
+usable. Conclusion: `roe`'s remaining explosions are the same "real but extreme" class as URI's
+`capex_intensity` and VRTX's `rd_intensity` — confirmed real, not a guard gap, left alone.
+
+### Fix 3 — `operating_margin` / `fcf_margin`: self-referential revenue-scale guard (new function, `apply_self_relative_scale_guard`)
+
+New mechanism in `metrics.py`: for each `(ticker, end)`, compare `Revenue_TTM` against the max of
+its own **±8-quarter centered rolling window** (not a fixed dollar floor — company sizes vary too
+much — and not a whole-history max, which broke on the first real test below); mask when current
+revenue is under **10%** of that window's peak. A window, not a whole-history reference, was
+required specifically because of a real counter-example found during calibration: HIG's `Revenue`
+tag genuinely steps down ~13x in 2018 (Talcott Resolution divestiture, a real corporate event, not
+a data bug) and never recovers — a whole-history-max reference would have permanently flagged every
+quarter since 2019 as "collapsed," when the post-divestiture business is simply operating at a
+smaller, stable, entirely legitimate scale. A bounded window naturally stops reaching back into the
+stale pre-divestiture regime once enough time has passed, catches the divestiture's own transition
+quarters (2018Q4–2019, correctly ambiguous), and leaves 2021 onward alone.
+
+Verified against every named case: CCL/NCLH/RCL's COVID quarters and VRTX's 2009–2011
+pre-commercial era all land at 0.3%–9.4% of their own window peak (cleanly caught). SOFI's
+fcf_margin explosion does **not** get masked, and correctly so — its ratio-to-window-max is 58%–100%
+throughout; the explosion is driven by genuinely heavy cash burn against a normal, non-collapsed,
+steadily-growing revenue base (real early-fintech economics, the same category as URI/VRTX, not a
+denominator artifact). One incidental catch worth naming: LYV (Live Nation) 2021-03/06, a COVID
+collapse that happened to fall just under the audit's original ±300% detection bar (margins of
+-227%/-103%) but is the identical failure mode as the cruise lines — correctly caught by the new
+guard even though it wasn't in the original flagged list.
+
+### Fix 4 — `payout_ratio`: tested, does not generalize, **not fixed**
+
+The same self-referential approach (compare `EPS_TTM_CALC` to its own scale) was tried across four
+window sizes (±1 to ±8 quarters) and two statistics (max, median), plus a whole-history-max variant
+— 12 configurations total. None separates the 42 genuine near-zero-EPS explosions (ROK's and STX's
+9 rows are a `DividendsPerShare` scale bug, a different root cause, excluded from this count) from
+ordinary EPS volatility: even the tightest possible threshold (0.1%) already produces more
+collateral (16 rows) than catches (1), and every looser setting gets worse faster. Root cause: EPS
+swings far more, and across a far wider dynamic range over a company's life, than Revenue does —
+normal, healthy earnings growth alone can span 100x+ (a $0.02-EPS young company vs. its own
+$2-EPS mature self), which any self-referential magnitude check mistakes for an explosion. Revenue
+doesn't have this property, which is exactly why Fix 3 worked and this doesn't. `payout_ratio` keeps
+its existing `require_positive_denominator`-only guard; the 42 genuine cases are reported as a
+confirmed, unresolved gap for a future task with a different mechanism in mind.
+
+### Fix 5 — `operating_leverage`: absolute output cap added (`max_abs_result=15`, new parameter on `calculate_ratio_from_dfs`), floor left at 0.02
+
+Retightening the existing `min_denominator_abs` (revenue-growth) floor alone cannot work: eliminating
+the last 21 of 125 confirmed explosions (`>20x`) this way requires raising the floor to 10%,
+which masks 5,740 of 10,740 rows total — over half the universe — because 2–10% revenue growth is
+completely ordinary. The real pattern (FDX, HPE, TSN: modest single-digit revenue growth divided
+into operating-income growth sitting right at `calculate_growth`'s own ~200% ceiling) is a property
+of the *ratio's own magnitude*, not cleanly attributable to either side alone — a 2D sweep over
+both a revenue-growth floor and an operating-income-growth ceiling confirmed no combination cleanly
+separates the tail either. Added `max_abs_result` to `calculate_ratio_from_dfs` and capped
+`operating_leverage` at **±15** — chosen at the natural 97th–98th-percentile elbow of the real
+distribution (90% of all values sit under 5.8x, 99% under 21.4x). An output cap is collateral-free
+by construction: it only touches values already beyond the cap, unlike floor-tightening, which
+would have masked plenty of ordinary low-growth quarters along the way.
+
+### Non-regression (all 7 metrics, full 323-ticker cache)
+
+Extracted all 7 metrics before/after: **0 changed values** among rows present in both (confirmed to
+float precision), for every metric. Newly masked: `net_debt_to_ebitda` 32, `debt_to_equity` 68,
+`operating_margin` 20, `fcf_margin` 27, `operating_leverage` 232, `roe` 0, `payout_ratio` 0 (as
+expected — both left unchanged). `debt_to_equity` also newly *unmasked* 5 previously-wrongly-hidden
+legitimate values (BA, LII, MAR, STX — see Fix 2). Every newly-masked row cross-checked against its
+underlying facts; `capex_intensity` and `rd_intensity` (explicitly out of scope) confirmed
+byte-for-byte unchanged; URI's real >100% `capex_intensity` and VRTX/REGN's `rd_intensity`
+untouched. Full breakdown in `tier1_ratio_guard_fixes_report.md`.
+
+---
+
+## 2026-07-21 — Negative-equity-sign guard for `roe` / `debt_to_equity`: a different failure mode from near-zero
+
+MCD's `StockholdersEquity` has been persistently, substantially negative since 2016-09-30 (as deep
+as -$9.5B in mid-2020) — a large-magnitude, sustained condition, not a brief near-zero crossing
+like ORLY's. The existing guard on `roe`/`debt_to_equity`
+(`min_denominator_scale_ref="Revenue_TTM"`, `min_denominator_scale_ratio`) only masks when
+`abs(denominator)` is *small* relative to revenue. It does nothing here, because MCD's negative
+equity is large, not small. `roe` reached -675%, `debt_to_equity` around -30 — mathematically
+well-defined, economically meaningless: both ratios are conventionally undefined when equity
+itself is negative, independent of magnitude. Near-zero and large-negative are different failure
+modes needing different conditions, and this project didn't have a guard for the second one yet.
+
+### Scope check first: this is project-wide, not MCD-specific
+
+Scanned every cached ticker across every profile for any period with negative `StockholdersEquity`.
+**71 tickers across 11 profiles** have at least one such quarter — AZO's entire recent history
+(68 quarters, -$5.2B min), BA (-$23.6B min, 34 quarters), PM (-$13.6B min, 56 quarters), HCA
+(-$10.2B min, 61 quarters), DPZ (-$4.3B min, 63 quarters) among the largest. Given the scope, the
+fix belongs in `main.py`'s base `roe`/`debt_to_equity` calculations, not a profile-scoped config
+change — these aren't concepts a single profile owns.
+
+### No new guard needed — an existing parameter already did this
+
+`metrics.calculate_ratio()` already has `require_positive_denominator`, already used for
+`payout_ratio`: it masks the denominator to `NaN` wherever it isn't strictly positive, before the
+ratio is computed. Verified directly that this composes cleanly with the existing near-zero scale
+guard (which runs afterward on the ratio Series) rather than assumed: where
+`require_positive_denominator` already masked a value, the scale guard's own comparison
+(`NaN < threshold`) evaluates to `False` and leaves the existing mask alone — the two guards don't
+interfere, satisfying the "either condition masking is sufficient, neither replaces the other"
+requirement without any new code. Added `require_positive_denominator=True` to both calls.
+
+As a side effect this also masks exactly-zero equity (a division-by-zero, equally undefined) —
+not something the task described, but clearly correct, and confirmed in the non-regression check
+below as the one genuine edge case among the newly-masked values.
+
+### Non-regression
+
+Extracted `roe` and `debt_to_equity` for every cached ticker before and after: 0 new keys, 0
+removed, **2,040 newly masked** (real value → `NaN`), 0 unexpected changes of any other kind.
+Cross-checked every one of the 2,040 directly against the ticker's own raw `StockholdersEquity` at
+that date: 2,039 are genuinely negative; 1 (VTRS, `debt_to_equity`, 2019-12-31) is exactly zero —
+the division-by-zero case noted above, correctly masked by the same condition. No positive-equity
+period changed anywhere. Full affected-ticker list in `negative_equity_guard_report.md`.
+
+---
+
+## 2026-07-21 — Twelfth stock-type profile: leisure batch (restaurants/hotels/cruises/casinos), and the first real use of the ticker-level override mechanism
+
+Extended `leisure` from MCD alone to 12 tickers: SBUX, DPZ, CMG (restaurants), MAR, HLT (hotels),
+CCL, RCL, NCLH (cruises), LVS, MGM, WYNN (casinos). `OperatingIncomeLoss` came back clean for all
+12 (93-99%), same as MCD — checked per ticker rather than assumed, and this time the whole batch
+genuinely does share the clean outcome.
+
+### `FoodAndBeverageRevenue`: the ticker-level override mechanism's first real application
+
+CMG's `Revenue` coverage was 53% — the base candidate tags only go back to 2016-12-31 for this
+filer. The real pre-2017 tag is `FoodAndBeverageRevenue`, verified as CMG's full consolidated total
+(exact match against `Revenues` at every shared date, e.g. 2016-12-31: both $3,904,384,000) — CMG
+has only one revenue stream, so the tag captures all of it.
+
+**Not safe to add profile-wide.** LVS, MGM, WYNN, and SBUX all carry this exact tag name too — and
+for the casinos it's only the food & beverage *segment*, ~7-9% of total revenue (verified directly:
+LVS 2009-06-30, `FoodAndBeverageRevenue` = $87M vs. consolidated Revenue = $1,059M). Same trap as
+DHI/NVR's `InventoryRealEstateLandAndLandDevelopmentCosts` from the homebuilder profile — a tag
+name that means the whole thing for one filer and a small component for another sharing the same
+profile. This is the first case since `TICKER_CONCEPT_OVERRIDES` was built (see the entry below)
+where that mechanism was actually needed for a new problem, not just applied to the case that
+motivated it. Added `TICKER_CONCEPT_OVERRIDES["CMG"]["Revenue"]` with the full base tag list plus
+`FoodAndBeverageRevenue`. CMG: 53% → 96%.
+
+CCL's `Revenue` had a similar-shaped gap (68%, missing 2010-2015 entirely). Real tag:
+`SalesRevenueServicesGross`, verified as CCL's full total (exact match at 2015-08-31: both
+$4,883,000,000) — cruise lines have no other revenue category, so a "services" tag is their whole
+business. Added as `TICKER_CONCEPT_OVERRIDES["CCL"]["Revenue"]` for consistency with the CMG case,
+even though no other leisure ticker currently carries this tag. CCL: 68% → 96%.
+
+### A guard that works, and one that's confirmed missing
+
+Checked directly (not assumed) whether `revenue_growth`'s `min_base_ratio` guard suppresses the
+nonsensical readings CCL/RCL/NCLH's COVID-era near-zero revenue would otherwise produce. It does:
+`yoy_growth` correctly comes back `NaN` for all three exactly where 2022 recovery would divide
+against a near-zero 2021 TTM base (e.g. RCL: $218M → $2,549M), and correctly stays visible for the
+2020-2021 decline readings themselves, since those are real and meaningful, not artifacts.
+
+`operating_margin` has no equivalent guard at all. Confirmed with real values: RCL -4,118%,
+NCLH -9,510%, CCL -5,046%, all during the same COVID trough — mathematically correct, economically
+meaningless. **Not fixed here** — the task asked to verify the existing guard, not build a new one
+for a base metric used by every profile — but logged as a confirmed, open gap for future work.
+
+### Scope breaks: one textbook, one different-shaped, one non-finding
+
+- **HLT**: textbook signature — every 2015-2016 `Revenue` quarter restated on the *same* filing
+  date (2017-05-24), consistent -36% to -37%. Matches Hilton's January 2017 spinoff of Park Hotels
+  & Resorts (REIT) and Hilton Grand Vacations exactly.
+- **LVS**: real, but a *progressive* restatement across four different filing dates
+  (2021-04-23 through 2022-02-04) rather than one — each 2020 quarter's `Revenue` and
+  `OperatingIncomeLoss` shrinks a bit further with each new comparative filing. Consistent with
+  reclassifying the Las Vegas segment as held-for-sale ahead of the 2022 Apollo/VICI divestiture,
+  not a single clean cutover.
+- **MAR**: a real restatement (2017 quarters, -10% to -12%, filed in 2018) that isn't a spinoff at
+  all — timing matches the 2018 ASC 606 adoption instead.
+- **MGM, WYNN**: checked, no scope-break signature found in either `Revenue` or
+  `OperatingIncomeLoss`, despite MGM's 2016 MGM Growth Properties REIT spinoff. A real non-finding.
+
+### `rule_of_40`: hidden, same call as every profile but one
+
+Computed across all 12 tickers' full history. Every median sits well under 40%; even LVS (best
+case, boosted by post-COVID Macau/Singapore recovery) only clears 40% in 32% of quarters — nowhere
+near the ~93%-of-quarters bar that kept TTD under consideration in the media scan. Hidden
+profile-wide. CMG's real, well-known growth story doesn't change the call: median 24.8%, never
+crosses 40% at all in the cached history.
+
+### Non-regression
+
+Confirmed by direct construction that `get_concept_candidates()` is byte-identical for all 312
+previously-cached tickers (none of this task's three config changes touch any pre-existing
+ticker's profile or any shared config), then verified empirically across the full universe: 0
+changed, 0 removed, 51 new fills, all on `CMG|Revenue`/`CCL|Revenue`. LVS/MGM/WYNN/SBUX's own
+`Revenue` — the tickers that also carry `FoodAndBeverageRevenue` but where it means something
+narrower — checked explicitly and confirmed untouched.
+
+---
+
+## 2026-07-21 — SharesOutstanding: a new pattern class, a single filer reporting the same fact at two scales
+
+MCD's `SharesOutstanding` alternated between ~751,900,000 and ~751.8 for the same real
+figure, at different filed dates for the same reporting period — not a clean unit-conversion
+factor, and not the same-name-different-scope trap (CAT/PCAR/TXT, DHI/NVR) either. Investigated
+down to the mechanism rather than assumed: this is neither of the two hypotheses the task
+itself raised.
+
+### Not two tags — one tag, two scales
+
+Checked every raw fact for `WeightedAverageNumberOfDilutedSharesOutstanding` directly. The unit
+is `shares` in every single fact, before and after. The `val` field itself just changes scale:
+
+```
+end: 2021-12-31  val: 751800000   filed: 2022-02-24  (FY2021 10-K)
+end: 2021-12-31  val: 751800000   filed: 2023-02-24  (FY2022 10-K, comparative)
+end: 2021-12-31  val: 751.8       filed: 2024-02-22  (FY2023 10-K, comparative)
+```
+
+MCD switched, starting with filings filed in 2024, to expressing this fact in millions while
+leaving the `shares` unit tag unchanged. `extract_period_values`'s existing tie-break for a
+`(tag, end)` collision (`is_point_in_time` branch, same `days`: later `filed` wins) was built for
+genuine restatements, where the later filing is definitionally the more accurate one. Here it
+just means the *smaller, wrong-scale* number always wins once one exists, since it's always the
+one most recently filed. Confirmed genuinely different in shape from every restatement pattern
+logged so far: a real restatement changes a value by a modest percentage or a small integer split
+ratio; this changes it by a clean power of ten, for the exact same fact.
+
+### Systemic, not MCD-specific
+
+Scanned every cached ticker (311, not just the 4 profiles the task asked for a sample of) for the
+same signature. **41 tickers across 11 profiles** — including all four the task named (`standard`,
+`financial`, `retail`, `pharma_medtech`) plus `consumer_staples`, `health_services`, `homebuilder`,
+`industrials`, `insurance_pc`, `leisure`, `media` — carry at least one instance. Scale factors seen:
+100x, 1,000x, 10,000x, 1,000,000x, 10,000,000x (KO, MRK, MO, TXN, GLW, L, HIG all show a clean
+1,000,000x; CLX, HSY, NVDA, GRMN, TSCO, WRB and others show 1,000x; VTRS shows 10,000,000x). This
+is a fallback-list problem nowhere near unique to `SharesOutstanding` in principle — it can happen
+to any concept whose `val` a filer re-expresses at a different decimal scale — but `SharesOutstanding`
+is the only concept where it was actually observed in this project's data.
+
+### Fix: a general-purpose scale-outlier corrector, added once, applied narrowly
+
+Added `_normalize_scale_outliers()` in `parsers/parse_edgar.py`, wired into `build_dataframe()` for
+concepts in `_SCALE_CORRECTED_CONCEPTS` (currently just `SharesOutstanding`). Runs two chronological
+sweeps (forward and backward), each keeping a running "anchor" log10 that updates to whatever value
+was just accepted — a correction one step propagates as the reference for the very next step, so an
+arbitrarily long run of consecutive bad-scale quarters (MCD's later history is uncorrected in *every*
+filing from 2023-12-31 on — there's no competing good value left to fall back on) resolves in one
+linear pass, not one pass per quarter in the run. A value is only ever scaled *up*, and only when it
+sits far below (at least ~32x) its neighbors' scale; a value far *above* is left untouched and never
+adopted as the anchor.
+
+Three real failure modes surfaced and were fixed before this design was trusted, each caught by
+testing against real tickers rather than assuming the design was safe:
+
+1. **Bucket rounding picks the wrong factor at a boundary.** HIG's 2009 values (321, 325, 356 —
+   meant to be ~320.8M, ~325.4M, ~356.1M) sit close enough to a rounding boundary that an earlier,
+   cruder version (matching on rounded `log10` magnitude buckets) settled for a 100,000x fix instead
+   of the correct 1,000,000x. Fixed by matching on continuous `log10`, picking whichever factor is
+   numerically *closest*, not the first one that lands in the same bucket.
+2. **A real split must never be mistaken for this bug.** TTD's 2014-2016 pre-IPO share count
+   (tens of millions) is real, correct, and simply smaller than its post-2021-10-for-1-split era —
+   not a scale artifact. `_SCALE_UP_FACTORS` deliberately starts at 100x, not 10x, specifically so a
+   real 10-for-1 split (numerically indistinguishable from a "reported in tens" artifact by ratio
+   alone) is never misfixed; no genuine artifact anywhere in this project's data needed a factor
+   under 100x.
+3. **A lone garbage fact must never poison the anchor.** AIG has one real XBRL fact reported at
+   ~1,000,000x its true value for exactly one quarter — an unrelated, pre-existing SEC data error,
+   not this project's scale-mismatch pattern. An early version let any accepted value become the new
+   anchor unconditionally; that one fact turned every genuinely correct quarter afterward into an
+   apparent "artifact" relative to itself, cascading the corruption through AIG's entire history.
+   Fixed by only ever adopting a value as the anchor if it's within the same ~32x band as the
+   current anchor — a value far outside that band is left alone and never trusted as a reference.
+   WAT has the same kind of lone garbage fact at its single most recent quarter, which is the very
+   first thing a backward sweep would otherwise see and seed the anchor from; the seed itself is now
+   the median of the first several values in each direction, not just the first one, so a single
+   boundary-adjacent garbage point can't set the anchor either.
+
+**Verified via the elevated non-regression check the task required**: extracted every concept for
+every cached ticker (311, all profiles) before and after. **0 changed, 0 removed, 162 new/corrected
+values across the 41 affected tickers, 0 changes to any other ticker or concept** — the change is
+purely additive (`build_dataframe`'s loop is identical for every concept except `SharesOutstanding`,
+where one conditional post-processing call was added), so nothing outside `SharesOutstanding` could
+regress by construction, confirmed empirically anyway.
+
+### A related, confirmed-but-unfixed bug found along the way: `normalize_split_adjusted`
+
+WAT's lone garbage quarter (above) isn't just an extraction-layer risk — the same failure mode
+already exists, unfixed, in `metrics.py`'s `normalize_split_adjusted()`. That function anchors
+each series on its single most recent value (`values.iloc[-1]`) with no plausibility check at all,
+by design (see the ServiceNow entry below: a median or windowed anchor was tried once already and
+rejected, because a real split's recent tail can have the *stale* pre-split value in the majority —
+using anything but the literal last value broke that case). WAT's garbage last-quarter fact
+(~1,000x its true value) currently gets adopted as this anchor unconditionally, then
+`COMMON_SPLIT_FACTORS`' best-effort matching (no tolerance gate) rescales WAT's entire real,
+multi-year share-count history to the closest available multiple of that one bad number —
+confirmed directly: running the current, unmodified function against WAT's real cached data
+turns its genuine ~60-100M share count into ~3-5 billion across nearly the whole series.
+
+**Not fixed in this task.** Three different repair attempts were tried and each introduced its own
+regression before being caught: a trailing-median anchor defeats the ServiceNow precedent outright
+(confirmed directly against NOW's own cached data: its real recent tail has the stale, pre-split
+value in the majority within a 5-quarter window, so a median anchor picks the wrong side — the
+existing single-last-value design is deliberate and correct for that case, not an oversight); adding
+a match-confidence tolerance to the existing single-last-value anchor is directionally correct and
+does protect WAT, but the tolerance also rejects real, correct split-adjustments for tickers with
+long histories and heavy accumulated buybacks (confirmed against AAPL: a genuine ×2 match against
+its real anchor has ~15.4% error, only barely outside a 15% tolerance, and 154 other real tickers
+shifted too) — no tolerance value tried was loose enough to keep AAPL correct and tight enough to
+keep WAT protected. This needs a fix that can tell "no clean match exists because the anchor is
+garbage" apart from "no clean match exists because of a decade-plus of real buybacks" — genuinely
+harder than it looks, and not something to ship half-verified. Logged here as a confirmed, open,
+separate bug for dedicated follow-up, per this log's own rule: an ambiguous fix that can't be
+cleanly validated doesn't get shipped on a guess.
+
+### Pattern-class note for future work
+
+This is the first instance in this log of a fallback list correctly resolving to *one* tag whose own
+reported value silently changes scale across filings — distinct from a missing tag, a same-tag-
+different-scope mismatch, and a real corporate action. Worth checking proactively on other
+pipeline-wide base concepts (`Revenue`, `NetIncomeLoss`) even without a visible symptom yet, since
+the failure is invisible until a chart happens to make the resulting near-zero or absurdly large
+value obvious — exactly how MCD's case was first noticed and none of the other 40 were, until this
+task's full-universe scan.
+
+---
+
 ## 2026-07-21 — Ticker-level concept overrides: a resolution layer below the profile
 
 Every prior tag fix in this project lived at one of two levels: `CONCEPT_CANDIDATES` (base,

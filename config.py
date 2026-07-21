@@ -1,4 +1,4 @@
-TICKERS = ["MSFT"]
+TICKERS = ["MCD"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
@@ -312,7 +312,7 @@ TICKER_PROFILES = {
     "VEEV": "pharma_medtech",
     "VTRS": "pharma_medtech",
     "VRTX": "pharma_medtech",
-    "WAT": "pharma_medtech",
+   # "WAT": "pharma_medtech", TICKER BORKEN FOR SHARES OTSTANDING AS OF 21.07
     "WST": "pharma_medtech",
     "ZBH": "pharma_medtech",
     "ZTS": "pharma_medtech",
@@ -409,8 +409,14 @@ TICKER_PROFILES = {
 
     "DHI": "homebuilder",
     "LEN": "homebuilder",
-    "PHM": "homebuilder",
-    "NVR": "homebuilder",
+   # "PHM": "homebuilder", WORKS NOT WELL
+   # "NVR": "homebuilder", SAME AS ABOVE
+
+    "MCD": "leisure",
+    "SBUX": "leisure", "DPZ": "leisure", "CMG": "leisure",
+    "MAR": "leisure", "HLT": "leisure",
+    "CCL": "leisure", "RCL": "leisure", "NCLH": "leisure",
+    "LVS": "leisure", "MGM": "leisure", "WYNN": "leisure",
 }
 
 PROFILE_HIDDEN = {
@@ -554,6 +560,16 @@ PROFILE_HIDDEN = {
         "rd_intensity",
         "capex_intensity", "operating_leverage", "operating_income_yoy_growth", "rule_of_40",
         "operating_margin", "net_debt_to_ebitda", "ev_ebitda",
+    },
+        "leisure": {
+        "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
+        "equity_to_assets", "provision_ratio", "p_ppnr", "combined_ratio",
+        "loss_ratio", "expense_ratio", "net_investment_yield",
+        "reserve_growth", "p_core_earnings",
+        "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
+        "rd_intensity",
+        "capex_intensity", "operating_leverage", "operating_income_yoy_growth",
+        "rule_of_40",
     },
 
 }
@@ -1010,6 +1026,34 @@ TICKER_CONCEPT_OVERRIDES = {
         "Inventory": {
             "tags": ["InventoryRealEstateLandAndLandDevelopmentCosts"],
             "point_in_time": True,
+            "mode": "fallback",
+        },
+    },
+    "CMG": {
+        "Revenue": {
+            "tags": [
+                "RevenueFromContractWithCustomerExcludingAssessedTax",
+                "Revenues",
+                "SalesRevenueNet",
+                "SalesRevenueGoodsNet",
+                "RevenueFromContractWithCustomerIncludingAssessedTax",
+                "FoodAndBeverageRevenue",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+    },
+    "CCL": {
+        "Revenue": {
+            "tags": [
+                "RevenueFromContractWithCustomerExcludingAssessedTax",
+                "Revenues",
+                "SalesRevenueNet",
+                "SalesRevenueGoodsNet",
+                "RevenueFromContractWithCustomerIncludingAssessedTax",
+                "SalesRevenueServicesGross",
+            ],
+            "point_in_time": False,
             "mode": "fallback",
         },
     },
