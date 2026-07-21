@@ -1,4 +1,4 @@
-TICKERS = ["HON"]
+TICKERS = ["MSFT"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
@@ -391,6 +391,26 @@ TICKER_PROFILES = {
     "WM": "industrials",
     "GWW": "industrials",
     "XYL": "industrials",
+
+    "DIS": "media",
+    "NFLX": "media",
+    "WBD": "media",
+    "EA": "media",
+    "TTWO": "media",
+    "LYV": "media",
+    "OMC": "media",
+    "TTD": "media",
+    "PSKY": "media",
+    "TKO": "media",
+    "FOXA": "media",
+    "FOX": "media",
+    "NWSA": "media",
+    "NWS": "media",
+
+    "DHI": "homebuilder",
+    "LEN": "homebuilder",
+    "PHM": "homebuilder",
+    "NVR": "homebuilder",
 }
 
 PROFILE_HIDDEN = {
@@ -407,6 +427,7 @@ PROFILE_HIDDEN = {
         "expense_ratio",
         "net_investment_yield",
         "reserve_growth",
+        "rd_intensity",
         "p_core_earnings",
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
         "capex_intensity","operating_leverage","operating_income_yoy_growth"
@@ -422,6 +443,7 @@ PROFILE_HIDDEN = {
         "net_investment_yield",
         "reserve_growth",
         "p_core_earnings",
+        "rd_intensity",
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
         "capex_intensity","operating_leverage","operating_income_yoy_growth"
     },
@@ -442,6 +464,7 @@ PROFILE_HIDDEN = {
         "equity_to_assets",
         "provision_ratio",
         "p_ppnr",
+        "rd_intensity",
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
         "capex_intensity","operating_leverage","operating_income_yoy_growth"
     },
@@ -462,6 +485,7 @@ PROFILE_HIDDEN = {
         "equity_to_assets",
         "provision_ratio",
         "p_ppnr",
+        "rd_intensity",
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
         "capex_intensity","operating_leverage","operating_income_yoy_growth"
     },
@@ -476,7 +500,7 @@ PROFILE_HIDDEN = {
         "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
         "equity_to_assets", "provision_ratio", "p_ppnr", "combined_ratio",
         "loss_ratio", "expense_ratio", "net_investment_yield",
-        "reserve_growth", "p_core_earnings",
+        "reserve_growth", "p_core_earnings", "rd_intensity",
         "rule_of_40", "capex_intensity","operating_leverage","operating_income_yoy_growth"
      },
 
@@ -488,7 +512,7 @@ PROFILE_HIDDEN = {
         "rule_of_40",
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
         "operating_margin",
-        "net_debt_to_ebitda",
+        "net_debt_to_ebitda", "rd_intensity",
         "ev_ebitda", "capex_intensity","operating_leverage","operating_income_yoy_growth"
 
     },
@@ -498,7 +522,7 @@ PROFILE_HIDDEN = {
         "equity_to_assets", "provision_ratio", "p_ppnr", "combined_ratio",
         "loss_ratio", "expense_ratio", "net_investment_yield",
         "reserve_growth", "p_core_earnings",
-        "rule_of_40",
+        "rule_of_40","rd_intensity",
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
         "rd_intensity", "capex_intensity","operating_leverage","operating_income_yoy_growth"
     },
@@ -511,6 +535,27 @@ PROFILE_HIDDEN = {
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
         "rd_intensity",
     },
+    "media": {
+        "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
+        "equity_to_assets", "provision_ratio", "p_ppnr", "combined_ratio",
+        "loss_ratio", "expense_ratio", "net_investment_yield",
+        "reserve_growth", "p_core_earnings",
+        "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
+        "rd_intensity",
+        "capex_intensity", "operating_leverage", "operating_income_yoy_growth",
+        "rule_of_40",
+    },
+
+    "homebuilder": {
+        "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
+        "equity_to_assets", "provision_ratio", "p_ppnr", "combined_ratio",
+        "loss_ratio", "expense_ratio", "net_investment_yield",
+        "reserve_growth", "p_core_earnings",
+        "rd_intensity",
+        "capex_intensity", "operating_leverage", "operating_income_yoy_growth", "rule_of_40",
+        "operating_margin", "net_debt_to_ebitda", "ev_ebitda",
+    },
+
 }
 
 
@@ -845,6 +890,69 @@ PROFILE_CONCEPT_OVERRIDES = {
             "mode": "fallback",
         },
     },
+    "media": {
+        "Capex": {
+            "tags": [
+                "PaymentsToAcquirePropertyPlantAndEquipment",
+                "PaymentsToAcquireProductiveAssets",
+                "PaymentsToAcquireOtherPropertyPlantAndEquipment",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+        "CashAndEquivalents": {
+            "tags": [
+                "CashAndCashEquivalentsAtCarryingValue",
+                "CashAndCashEquivalentsAtCarryingValueIncludingDiscontinuedOperations",
+                "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+            ],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+    },
+     "homebuilder": {
+        "Inventory": {
+            "tags": [
+                "InventoryRealEstate",
+                "InventoryOperativeBuilders",
+            ],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+        "CostOfRevenue": {
+            "tags": [
+                "CostOfRevenue",
+                "CostOfRealEstateRevenue",
+                "CostOfGoodsAndServicesSold",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+        "AccountsReceivable": {
+            "tags": [
+                "AccountsAndNotesReceivableNet",
+            ],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+        "AccountsPayable": {
+            "tags": [
+                "AccountsPayableCurrentAndNoncurrent",
+            ],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+        "LongTermDebt": {
+            "sources": [
+                {"type": "tag", "tag": "LongTermDebt"},
+                {"type": "tag", "tag": "NotesPayable"},
+                {"type": "tag", "tag": "SeniorNotes"},
+            ],
+            "point_in_time": True,
+            "mode": "priority_merge",
+        },
+    },
+
 }
 
 
@@ -888,24 +996,24 @@ PROFILE_EXCLUDED_CONCEPTS = {
         "DepreciationAndAmortization",
     },
     "health_services": {
-        # ResearchAndDevelopment: confirmed no visible metric depends on it once
-        # rd_intensity is hidden (grep of main.py/metrics.py/figures.py: rd_intensity is
-        # its only consumer, anywhere). Same reasoning as pharma_medtech's OperatingIncomeLoss
-        # exclusion, applied to a different concept for this profile.
-        #
-        # OperatingIncomeLoss and DepreciationAndAmortization are DELIBERATELY NOT excluded
-        # here, unlike pharma_medtech: operating_margin / net_debt_to_ebitda / ev_ebitda stay
-        # visible for this profile (see PROFILE_HIDDEN above), so both concepts still feed a
-        # visible metric for 5 of 6 tickers. Excluding them would silence the coverage-scan
-        # flag for HCA's genuine OperatingIncomeLoss gap — which should stay visible as a
-        # known, open data gap, not be suppressed the way pharma_medtech's profile-wide gap
-        # was.
         "ResearchAndDevelopment",
+    },
+    "homebuilder": {
+        "OperatingIncomeLoss",
     },
 
 }
 
 
+TICKER_CONCEPT_OVERRIDES = {
+    "NVR": {
+        "Inventory": {
+            "tags": ["InventoryRealEstateLandAndLandDevelopmentCosts"],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+    },
+}
 
 
 def get_expected_concepts(ticker: str) -> list[str]:
@@ -931,8 +1039,9 @@ def filter_hidden_rows(df, ticker_col="ticker", concept_col="concept"):
 def get_concept_candidates(ticker: str) -> dict:
     profile = TICKER_PROFILES.get(ticker, DEFAULT_PROFILE)
     overrides = PROFILE_CONCEPT_OVERRIDES.get(profile, {})
-    resolved = dict(CONCEPT_CANDIDATES)      
-    resolved.update(overrides)               
+    resolved = dict(CONCEPT_CANDIDATES)
+    resolved.update(overrides)
+    resolved.update(TICKER_CONCEPT_OVERRIDES.get(ticker, {}))
     return resolved
 
 CACHE_DIR = "cache"

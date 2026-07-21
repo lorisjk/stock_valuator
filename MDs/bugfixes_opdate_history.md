@@ -6,6 +6,339 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-07-21 — Ticker-level concept overrides: a resolution layer below the profile
+
+Every prior tag fix in this project lived at one of two levels: `CONCEPT_CANDIDATES` (base,
+every ticker) or `PROFILE_CONCEPT_OVERRIDES` (one profile, every ticker sharing it). The
+homebuilder scan surfaced a case neither level could handle: NVR's `Inventory` genuinely exists
+under `InventoryRealEstateLandAndLandDevelopmentCosts`, but that exact tag name is a
+**land-only component**, not the consolidated total, for DHI — which shares NVR's
+`homebuilder` profile. Adding it profile-wide would have silently understated DHI's inventory
+by ~50% in every gap quarter it filled (confirmed at FY2017-Q3: $4.5B vs. DHI's real $9.2B).
+There was no way to give NVR this tag without exposing DHI to that risk, because the codebase
+had no concept of an override that sits *below* the profile level and is invisible to every
+other ticker. This is the third confirmed instance of the same pattern class — a tag name that
+means one thing for one filer and a narrower thing for another — after the Kroger FIFO/LIFO
+substitution (rejected outright, no fix existed) and the CAT/PCAR/TXT captive-finance overlap
+check. The first two were caught-and-rejected; this one motivated building a mechanism instead,
+because the safe tag genuinely exists — it just needed a narrower place to live.
+
+### The mechanism
+
+Added `TICKER_CONCEPT_OVERRIDES` to `config.py`, resolved in `get_concept_candidates()` after
+`PROFILE_CONCEPT_OVERRIDES`:
+
+```python
+def get_concept_candidates(ticker: str) -> dict:
+    profile = TICKER_PROFILES.get(ticker, DEFAULT_PROFILE)
+    overrides = PROFILE_CONCEPT_OVERRIDES.get(profile, {})
+    resolved = dict(CONCEPT_CANDIDATES)
+    resolved.update(overrides)
+    resolved.update(TICKER_CONCEPT_OVERRIDES.get(ticker, {}))
+    return resolved
+```
+
+A ticker-level entry is a **complete replacement** for that ticker/concept, not merged with the
+profile-level entry — same full-replacement semantics `PROFILE_CONCEPT_OVERRIDES` already has
+over `CONCEPT_CANDIDATES` (the `.update()` gotcha documented in the homebuilder `LongTermDebt`
+near-miss applies identically here: a ticker override must list every tag it wants, since
+nothing from the profile level carries over underneath it). This is deliberate — the entire
+point is isolating NVR's tag from DHI's shared profile list, so a ticker-level override must
+never leak into or combine with the profile-level fallback chain for the same concept.
+
+`get_expected_concepts()` needed **no separate change**. It already derives its concept set from
+`get_concept_candidates(ticker).keys()`, and since `get_concept_candidates()` now folds in
+`TICKER_CONCEPT_OVERRIDES` before returning, any ticker-level override — whether it replaces an
+existing concept's tags (NVR's case) or, hypothetically, introduces a wholly new one — is
+automatically visible to coverage scans with no second place to keep in sync. Two update sites
+for one resolution chain is exactly the kind of drift this project avoids everywhere else; a
+single merge point was preferable to threading the same lookup through both functions.
+
+`PROFILE_EXCLUDED_CONCEPTS` was left without a ticker-level equivalent, per the task's own
+default assumption — no concrete need surfaced while implementing this one case.
+
+### Applied to NVR, and only NVR
+
+```python
+TICKER_CONCEPT_OVERRIDES = {
+    "NVR": {
+        "Inventory": {
+            "tags": ["InventoryRealEstateLandAndLandDevelopmentCosts"],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+    },
+}
+```
+
+NVR's `Inventory`: 0/69 → 57/69 quarters, 2011–2025, values $70M–$91M — matching the diagnosis
+already logged in `homebuilder_scan_report.md`.
+
+### Non-regression (elevated scope: full cached universe, every concept, every profile)
+
+Because this changes a function every ticker's tag lookup runs through, the check covered all
+311 cached tickers' full concept sets under quarterly extraction, not just `homebuilder`'s four:
+
+- **Mechanism-only change** (empty `TICKER_CONCEPT_OVERRIDES`, resolution logic added):
+  confirmed a byte-identical no-op before NVR's entry was added — `dict.update({})` is a no-op
+  by construction, verified directly rather than assumed.
+- **NVR's entry added**: 239,421 → 239,478 values. **0 changed, 0 removed, 57 new** — every one
+  of the 57 on `NVR|Inventory`, nothing else anywhere in the universe. DHI's own 42
+  `Inventory` values (and PHM's 65, LEN's 10) checked explicitly and confirmed byte-identical
+  before/after, not just inferred from the aggregate diff — this was the specific risk the
+  mechanism exists to prevent, so it was verified directly per the task's instruction rather
+  than trusted on the strength of the isolation design alone.
+
+## 2026-07-20 — Eleventh stock-type profile: homebuilder, replacing a profile built entirely from guessed tags
+
+`homebuilder` is the first profile in this project where the existing `PROFILE_CONCEPT_OVERRIDES`
+entry was already wrong going in — built from plausible-sounding tag names
+(`InventoryRealEstate`/`RealEstateHeldforDevelopment`, `HomebuildingCostOfSales`, etc.) that were
+never checked against a real filing. Running DHI against them produced near-total misses:
+`AccountsPayable`/`AccountsReceivable`/`OperatingIncomeLoss`/`LongTermDebt` all 0%, `CostOfRevenue`
+13%. Every one of this log's usual disciplines (check the real tag, verify magnitude at overlap
+points, two-step byte-identical-then-add) applied here for the first time to a full profile
+rebuild rather than a coverage gap.
+
+### DHI's real tags, found by reading the actual filing data
+
+- **`CostOfRevenue`**: the guessed `CostOfRealEstateRevenue`/`HomebuildingCostOfSales` only ever
+  covered a narrow 2016–2019 transition window (`HomebuildingCostOfSales` doesn't even exist as a
+  tag DHI has ever used). The real, dominant, modern tag is plain `CostOfRevenue` — 39 unique
+  quarters, 2016–2026, not in the candidate list at all. Verified against `HomeBuildingCosts` at
+  their one shared fiscal year (FY2016: $9,502.6M vs. $9,403.0M) — close but not identical, exactly
+  as expected since `CostOfRevenue` is the *consolidated* total (homebuilding + financial services)
+  and `HomeBuildingCosts` is the homebuilding segment alone. Confirms `CostOfRevenue` is the right
+  concept-level match, not a coincidence. 13% → 54%.
+- **`LongTermDebt`** (0% → 87%): DHI tags debt under `NotesPayable`, not `LongTermDebt` (which DHI
+  has never used at all) — 61 quarters, 2010–2026. Added as this profile's first `LongTermDebt`
+  override.
+- **`AccountsReceivable`** (0% → 50%): the guessed `AccountsReceivableNetCurrent` doesn't exist for
+  DHI. The real tag is `AccountsAndNotesReceivableNet` — and checked directly rather than assumed,
+  per the task's explicit instruction: this is **not** the near-zero case it might look like for a
+  homebuyer-mortgage-settlement business. Real values, $60M–$164M, a genuine receivable line (likely
+  the financial-services/title segment or builder-to-builder land sales) that the original guess
+  simply missed entirely. Same "checked, found real data, not near-zero" outcome as 6 of 7 "expected
+  near-zero" cases in the original retail scan.
+- **`AccountsPayable`** (0% → 50%): `AccountsPayableCurrent` doesn't exist for DHI either. Real tag:
+  `AccountsPayableCurrentAndNoncurrent` ($580–634M, FY2017–19). Two other payable-adjacent tags were
+  checked and rejected: `ConstructionPayableCurrentAndNoncurrent` is a genuinely separate, smaller
+  liability (~$25–62M same years — a subcontractor-retention line, not overlapping AP), and
+  `AccountsPayableAndAccruedLiabilitiesCurrentAndNoncurrent` is ~2.5–3x larger ($1.57–1.91B same
+  years) — AP plus accrued liabilities combined, rejected as too broad, same "don't combine
+  deliberately separate concepts" rule as always.
+- **`Inventory`**: the guessed tag (`InventoryRealEstate`) turned out to be *correct* — confirmed
+  by checking it actually resolves to real, substantial values ($3.4B–$11.6B, matching D.R. Horton's
+  real balance-sheet scale), not silently resolving to nothing, per the task's explicit "verify,
+  don't assume it's working just because it's not in the flagged list" instruction. The two
+  additional guessed tags alongside it (`RealEstateHeldforDevelopment`,
+  `InventoryRealEstateHeldforDevelopment`) don't exist for DHI at all and were dropped as dead
+  weight.
+- **`OperatingIncomeLoss`** (confirmed 0%, no fix): checked directly rather than assuming this is
+  another instance of the by-now-eleven-times-confirmed diversified-conglomerate pattern. It isn't
+  the same shape — DHI simply has no `OperatingIncomeLoss` tag under any name, likely because
+  capitalized interest costs blur the operating/non-operating line enough that homebuilders commonly
+  skip a discrete operating-income subtotal. Confirmed the mechanism is different even though the
+  outcome (0%) looks the same as JNJ/HON's.
+
+Applied with the two-step discipline the task explicitly called for, since this profile's overrides
+had never actually been through a real non-regression check: Stage B1 (dropping the three
+confirmed-dead guessed tags, no additions yet) verified byte-identical — a true no-op, since dead
+tags never matched anything to begin with. Stage B2 (the real replacements above) produced 0
+changed, 0 removed, 160 new fills, all DHI.
+
+### A tag that's the right fix for two tickers and the wrong fix for two others
+
+Extending to LEN, PHM, NVR surfaced a genuine cross-ticker naming split: DHI uses
+`InventoryRealEstate`; LEN and PHM instead use `InventoryOperativeBuilders` (65/70 quarters for
+PHM, 2009–2026 — a clean, near-complete match; only 12 gapped quarters for LEN's own filing
+history, no better alternative found). Added as a second Inventory fallback tag — safe for DHI
+(which has never used this tag name) and immediately fixed PHM's Inventory from 0% to 93%.
+
+**A near-miss caught before it shipped**: `InventoryRealEstateLandAndLandDevelopmentCosts` looked
+like NVR's answer — NVR has no `InventoryRealEstate` or `InventoryOperativeBuilders` at all, and
+this tag gives 57 clean quarters, 2011–2025, with genuinely small values ($70–91M) consistent with
+NVR's lot-option business model. But checked for overlap before adding it to the shared profile
+list — and DHI *also* has this exact tag, where it's a **land-only component** roughly half of
+`InventoryRealEstate`'s total ($4.5B vs. $9.2B at FY2017-Q3). Adding it as a profile-wide fallback
+would have silently substituted a ~50%-too-low value into every one of DHI's 28 gap quarters,
+looking like real data. **Not added.** This is the same shape as the CAT/PCAR/TXT captive-finance
+finding and the FIFO/LIFO trap before it: a tag name that means one thing for one filer and a
+narrower thing for another, caught by checking magnitude at every overlap rather than trusting a
+tag name that worked once. NVR's `Inventory` stays at 0% — confirmed real, structurally different
+data exists, but can't be safely wired into a profile shared with DHI/PHM without a per-ticker
+override mechanism this codebase doesn't have.
+
+### NVR: genuinely different, not broken — confirmed rather than assumed either way
+
+The task flagged NVR as a known structural outlier (lot-option contracts instead of owned land, an
+unusually asset-light balance sheet) and asked to distinguish a real business-model difference from
+a missing-tag problem rather than assume either. Checked every flagged concept individually:
+
+- **`LongTermDebt`** (3%, 2 points): `LongTermDebt` ($600M, 2013) and `SeniorNotes` ($599M, 2012)
+  each appear exactly once, then never again. Consistent with NVR's real reputation as one of the
+  most conservatively-financed homebuilders — essentially debt-free since the early 2010s. Confirmed
+  genuine, not a gap.
+- **`Inventory`** (0%, real tag exists but unshareable — see above): genuinely ~100x smaller than
+  DHI/LEN/PHM's inventory scale, consistent with not owning land directly.
+- **`CostOfRevenue`, `AccountsReceivable`, `AccountsPayable`, `DividendsPerShare`** (all 0%): searched
+  exhaustively, no tag of any kind exists for any of the four. NVR has never paid a dividend (real,
+  confirmed policy — buybacks only), and its cost-of-revenue/AR/AP presentation apparently doesn't
+  use any of the standard tag names checked across this entire project so far.
+
+### operating_margin / net_debt_to_ebitda / ev_ebitda: the health_services precedent, inverted
+
+Checked `OperatingIncomeLoss` per ticker rather than assuming all four share DHI's outcome, per the
+task's instruction — and the split is real: LEN tags it cleanly (144 raw points, not flagged at
+all); DHI, PHM, and NVR all have zero. Same evidence-gathering method as the health_services
+decision, opposite conclusion: there, 5 of 6 tickers were clean, so the metrics stayed visible; here
+only 1 of 4 is, so **`operating_margin`/`net_debt_to_ebitda`/`ev_ebitda` are hidden profile-wide**.
+`OperatingIncomeLoss` excluded from `get_expected_concepts` for the same reason `pharma_medtech`
+excluded it — nothing visible depends on it for any of the four tickers once the dependent metrics
+are hidden, including LEN, whose own coverage was already fine.
+
+### A real business event correctly *not* flagged as a scope break
+
+LEN's `InventoryOperativeBuilders` shows $20.3B (FY2024) dropping to $11.8B (FY2025), a 42% swing —
+checked against the same same-filing-date-restatement detector used for HON/MMM/NWSA. It doesn't
+match that signature: both values were filed for the first time in the same (most recent) 10-K, not
+a later revision of a previously-different-reported figure. Consistent with a real, one-time event
+— Lennar's February 2025 Millrose Properties land-banking spinoff — reflected as a normal sequential
+value change, not a retroactive restatement. Correctly not flagged as a scope break; noted as
+real-business-event context instead.
+
+### Non-regression
+
+Full before/after diff across the entire cached universe (308 → 311 tickers as DHI/LEN/PHM/NVR were
+added): 0 changed, 0 removed, 2,169 new fills, all four homebuilder tickers. DHI's own facts
+verified byte-identical between the Stage B2 checkpoint and the final config (confirming the later
+`LongTermDebt`/`Inventory` tag additions — made for LEN/PHM/NVR's benefit — are true no-ops for DHI,
+since it has never used either of the newly-added tag names).
+
+## 2026-07-20 — Tenth stock-type profile: media, a dividend that exists but can't be extracted, and rule_of_40's one real exception
+
+14 tickers (DIS reference + 13 new). `media` is the first new profile in this project where the
+anchor ticker showed **no** `OperatingIncomeLoss` fragility at all — `operating_margin`,
+`net_debt_to_ebitda`, `ev_ebitda` all came back clean for DIS, and no `PROFILE_CONCEPT_OVERRIDES`
+entry was needed going in. One real problem surfaced instead: a genuine, currently-paying dividend
+that the pipeline could not see.
+
+### DIS's dividend: the data exists, the tag is right, and it's still unextractable
+
+Disney suspended its dividend in May 2020 and resumed it in January 2024 ($0.30/share, raised
+twice since to $0.75). `dividend_yield` showed zero coverage across the entire 2022–2026 window
+despite this being public, confirmable, ongoing history — not an "expected suspension gap."
+
+Checked the raw facts directly rather than guessing at a missing tag. DIS's resumed dividend *is*
+tagged, under the *same* two candidate tags already in the base config
+(`CommonStockDividendsPerShareDeclared`, `CommonStockDividendsPerShareCashPaid`) — the exact values
+($0.30, $0.45, $0.50, $0.75) are sitting right there in the company-facts JSON. The problem is
+structural: **every single one of the 19 post-2024 facts has no `start` date** — Disney switched to
+tagging the dividend as a declaration-event fact (semi-annual, ~6 months apart: 2024-01-10,
+2024-07-25, 2025-01-16, 2025-07-23, 2026-01-15) rather than a fiscal-period duration fact.
+`extract_period_values` requires a `start` for any `point_in_time: False` concept (`if "start" in
+item: ... else: continue` for duration concepts) — every one of these facts gets silently dropped
+before extraction even begins.
+
+This is the same root shape as the COO trap logged in the consumer_staples entry above (a
+"declared" tag reported without duration attributes), but with an added wrinkle that rules out even
+a workaround: DIS's declaration dates (Jan 10, Jul 25, ...) don't fall on fiscal quarter-ends, so
+even flipping the concept to `point_in_time: True` for this profile (which *would* let the
+no-start facts through, since `is_point_in_time=True` treats a missing `start` as automatically
+valid) wouldn't fix the user-visible problem — the resulting `end` dates wouldn't align with the
+quarter-end grid every other concept uses, so `calculate_ratio`'s inner-join merge for
+`dividend_yield`/`payout_ratio` would still never find a match. **No tag or mode-level fix exists
+for this without a broader "snap to nearest fiscal quarter" reconciliation step, which is out of
+scope for a tag-coverage task.** Reported as a confirmed, well-understood, currently-unresolved gap
+— a real dividend the pipeline structurally cannot see, not a missing tag.
+
+### Two more confirmed instances of already-validated tags
+
+- **Capex (EA, 4%→92%)**: `PaymentsToAcquireOtherPropertyPlantAndEquipment` — the same tag that
+  fixed LLY (pharma_medtech) and ADP (industrials) — now a *third* confirmed instance, across a
+  third sector. Exact match at the one overlap point (2010-06-30, $11M both tags).
+- **CashAndEquivalents (FOX/FOXA, 16%→97%)**: `CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents`
+  — now a *fourth* confirmed instance (after TGT, GEV, CAT). Exact match at all 4 overlap dates.
+
+Both added as a new `media`-scoped `PROFILE_CONCEPT_OVERRIDES` entry — the profile's first, per the
+task's framing. Two-step discipline: Stage B1 (base-tag copies) verified byte-identical; Stage B2
+produced 0 changed, 0 removed, 152 new fills across 6 tickers (EA, FOX, FOXA — targeted — plus OMC,
+TKO, DIS as bonus beneficiaries of the cash tag).
+
+### Dual-class tickers: verified identical, not assumed
+
+FOXA/FOX and NWSA/NWS each share a single CIK (`0001754301`, `0001564708`) — confirmed the cached
+`company_info.json` files are byte-identical between each pair before treating them as
+interchangeable anywhere in this scan, rather than assuming from the shared-CIK fact alone.
+
+### A scope break found where expected, and — just as informative — one that wasn't (yet)
+
+**NWSA/NWS**: three consecutive fiscal years (FY2022, FY2023, FY2024) all restated on the same
+filing date (2025-05-13) by consistent ~$1.83–1.95B deltas — News Corp's 2024 sale of Foxtel
+(Australian pay-TV). Same signature discipline as the industrials entry (dollar deltas, not
+percentages, to avoid false positives from routine presentation differences).
+
+**TKO**: an unusual *positive* restatement — FY2022/2023 revenue jumped by +$1.53B/+$1.55B, filed
+2025-03-19. Not a divestiture; the opposite shape, consistent with retroactive combined-entity
+accounting following the September 2023 WWE/UFC merger (predecessor financials restated to reflect
+the full combined entity). Named as a distinct pattern from the usual divestiture-shrink case, not
+forced into the same bucket.
+
+**WBD**: checked specifically, per the task's expectation that its 2025-announced two-company split
+would show the same signature — it doesn't, not yet. `OperatingIncomeLoss` and `Revenue` are both
+completely unrestated across every filing through 2026-02-27. The split was announced in 2025 but
+hasn't closed; SEC filings only retroactively restate for discontinued operations after a
+transaction actually completes (the same timing HON's Solstice restatement followed). A confirmed
+non-finding, reported as "not yet" rather than silently assumed clean.
+
+### rule_of_40: checked across the whole batch, not decided from DIS alone
+
+Computed `rule_of_40` for all 13 new tickers plus DIS. Only **TTD** sits structurally near or above
+the 40% line — 93% of its quarters ≥40%, minimum 37.5%, confirming the task's own hypothesis that a
+higher-growth, asset-light platform would be the most plausible candidate. Every other ticker is
+either consistently well below (DIS: 0% of quarters ≥40%, mean 13.9%; OMC, FOXA/FOX, NWSA/NWS all
+similarly low) or swings too wildly to be structurally meaningful rather than noisy (NFLX 14%
+≥40%; WBD 24% but ranging 3%–187%; TTWO 35% but ranging -62%–158%; LYV ranging -321%–175%).
+**Hidden profile-wide** — same call as every other profile built so far. TTD's signal is real but
+doesn't outweigh 12 other tickers' worth of noise, and `PROFILE_HIDDEN` has no per-ticker override
+mechanism; documented as the one confirmed exception in `media_scan_report.md` in case a future
+profile split ever separates high-growth ad-tech/platform media names from traditional media.
+
+### Everything else: already-established patterns, not new ones
+
+- **FOXA/FOX, NWSA/NWS — `OperatingIncomeLoss`, 0% each.** Neither tags the concept at all —
+  confirmed via direct key lookup, not inferred from the coverage number. Same diversified-media
+  "never tagged" shape as JNJ/ADM/EMR/etc., now confirmed a tenth-plus time.
+- **FOXA/FOX — real dividend payer, never tagged per-share.** `PaymentsOfDividends` shows real,
+  nonzero quarterly payments ($35–65M); no per-share tag exists anywhere. Same shape as HSY/TSN/DHR.
+- **NFLX, TTD — no `Goodwill`; TTD — no `LongTermDebt` either.** Both are asset-light, minimal-M&A
+  companies with no tag at all for either concept (not a `$0`-valued tag — a total absence).
+  Consistent with real company history (Netflix's near-entirely-organic growth, The Trade Desk's
+  minimal acquisitions and negligible debt) — same "confirmed absence, not a bug" pattern as
+  GRMN/REGN.
+- **EA — `LongTermDebt`, 31%.** Real debt history 2011–2017 (convertible notes), genuinely absent
+  since — checked every debt-family tag EA has ever used, nothing post-2017. Not a gap, a real
+  capital-structure change.
+- **TKO — no `Capex` tag at all.** Consistent with its short combined history (formed September
+  2023) — searched broadly (`PaymentsFor*`, `CapitalExpenditures*`), nothing found.
+- **PSKY — everything thin (15–46%).** Paramount Skydance merger completed August 2025; only 13
+  quarters of any kind of history exist. Same "young combined entity" shape as TKO, GEV, VLTO,
+  SOLV in prior entries — not investigated ticker-by-ticker beyond confirming the short-history
+  explanation covers the whole cluster.
+- **TTWO — confirmed non-payer, contradicting the task's own premise.** The task's brief listed
+  TTWO among "established payers" (OMC, EA, TTWO); checked directly and found no dividend tag of
+  any kind for Take-Two. Reported as found, not silently corrected to match the brief's
+  expectation — same discipline as the AZO/AccountsReceivable case in the retail scan.
+- **TKO's one dividend data point ($3.86, FY2023)** is a predecessor-financials artifact from the
+  WWE/UFC merger accounting, not an ongoing program — confirmed by checking for any subsequent
+  quarter (none exist).
+- **Content-asset amortization (NFLX, WBD, PSKY)**: noted but not investigated further per the
+  task's own scoping — these companies capitalize large produced/licensed content libraries, which
+  can make `DepreciationAndAmortization`-derived metrics (`ebitda`, `net_debt_to_ebitda`) behave
+  differently than for an industrial-style company. No coverage problem found for any of the three,
+  so no fix was needed; flagged as context for a future session if their EBITDA-based metrics ever
+  look off.
+
 ## 2026-07-20 — An absolute-floor guard for operating_leverage, and CAT/PCAR/TXT deferred to a future captive-finance profile
 
 Two independent fixes out of the industrials scan above, kept in separate non-regression scopes:
