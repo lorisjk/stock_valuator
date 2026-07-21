@@ -1,4 +1,4 @@
-TICKERS = ["JNJ"]
+TICKERS = ["HON"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
@@ -323,6 +323,74 @@ TICKER_PROFILES = {
     "DVA": "health_services",
     "UHS": "health_services",
     "CVS": "health_services",
+
+    "HON": "industrials",
+    "MMM": "industrials",
+    "AOS": "industrials",
+    "ALLE": "industrials",
+    "AME": "industrials",
+    "ADP": "industrials",
+    "AXON": "industrials",
+    "BA": "industrials",
+    "BR": "industrials",
+    "BLDR": "industrials",
+    "CHRW": "industrials",
+    "CARR": "industrials",
+    "CTAS": "industrials",
+    "CPRT": "industrials",
+    "CMI": "industrials",
+    "DE": "industrials",
+    "DOV": "industrials",
+    "EME": "industrials",
+    "EMR": "industrials",
+    "EFX": "industrials",
+    "ETN": "industrials",
+    "EXPD": "industrials",
+    "FAST": "industrials",
+    "FDX": "industrials",
+    "FTV": "industrials",
+    "FIX": "industrials",
+    "GE": "industrials",
+    "GEV": "industrials",
+    "GNRC": "industrials",
+    "GD": "industrials",
+    "HWM": "industrials",
+    "HUBB": "industrials",
+    "HII": "industrials",
+    "IEX": "industrials",
+    "ITW": "industrials",
+    "IR": "industrials",
+    "J": "industrials",
+    "JBHT": "industrials",
+    "JCI": "industrials",
+    "LHX": "industrials",
+    "LDOS": "industrials",
+    "LII": "industrials",
+    "LMT": "industrials",
+    "MAS": "industrials",
+    "NDSN": "industrials",
+    "NOC": "industrials",
+    "ODFL": "industrials",
+    "OTIS": "industrials",
+    "PH": "industrials",
+    "PAYX": "industrials",
+    "PNR": "industrials",
+    "PWR": "industrials",
+    "RSG": "industrials",
+    "ROK": "industrials",
+    "ROL": "industrials",
+    "RTX": "industrials",
+    "SWK": "industrials",
+    "TT": "industrials",
+    "TDG": "industrials",
+    "UPS": "industrials",
+    "URI": "industrials",
+    "VLTO": "industrials",
+    "VRSK": "industrials",
+    "WAB": "industrials",
+    "WM": "industrials",
+    "GWW": "industrials",
+    "XYL": "industrials",
 }
 
 PROFILE_HIDDEN = {
@@ -341,6 +409,7 @@ PROFILE_HIDDEN = {
         "reserve_growth",
         "p_core_earnings",
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
+        "capex_intensity","operating_leverage","operating_income_yoy_growth"
     },
     "financial": {
         "pfcf_ttm", "ev_ebitda", "ev_sales",
@@ -354,6 +423,7 @@ PROFILE_HIDDEN = {
         "reserve_growth",
         "p_core_earnings",
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
+        "capex_intensity","operating_leverage","operating_income_yoy_growth"
     },
     "insurance_pc":{
         "pfcf_ttm", 
@@ -366,7 +436,6 @@ PROFILE_HIDDEN = {
         "operating_margin", 
         "rule_of_40",
         "pb_ratio",
-
         "net_interest_margin",
         "efficiency_ratio",
         "roa",
@@ -374,6 +443,7 @@ PROFILE_HIDDEN = {
         "provision_ratio",
         "p_ppnr",
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
+        "capex_intensity","operating_leverage","operating_income_yoy_growth"
     },
     "insurance_life":{
         "pfcf_ttm", 
@@ -386,7 +456,6 @@ PROFILE_HIDDEN = {
         "operating_margin", 
         "rule_of_40",
         "pb_ratio",
-
         "net_interest_margin",
         "efficiency_ratio",
         "roa",
@@ -394,20 +463,21 @@ PROFILE_HIDDEN = {
         "provision_ratio",
         "p_ppnr",
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
+        "capex_intensity","operating_leverage","operating_income_yoy_growth"
     },
     "retail": {
         "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
         "equity_to_assets", "provision_ratio", "p_ppnr", "combined_ratio",
         "loss_ratio", "expense_ratio", "net_investment_yield",
         "reserve_growth", "p_core_earnings", "rule_of_40","operating_margin",  
-        "net_debt_to_ebitda", "payout_ratio",
+        "net_debt_to_ebitda", "payout_ratio", "capex_intensity","operating_leverage","operating_income_yoy_growth"
     },
      "consumer_staples": {
         "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
         "equity_to_assets", "provision_ratio", "p_ppnr", "combined_ratio",
         "loss_ratio", "expense_ratio", "net_investment_yield",
         "reserve_growth", "p_core_earnings",
-        "rule_of_40",
+        "rule_of_40", "capex_intensity","operating_leverage","operating_income_yoy_growth"
      },
 
     "pharma_medtech": {
@@ -419,30 +489,27 @@ PROFILE_HIDDEN = {
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
         "operating_margin",
         "net_debt_to_ebitda",
-        "ev_ebitda",
+        "ev_ebitda", "capex_intensity","operating_leverage","operating_income_yoy_growth"
 
     },
 
     "health_services": {
-        # Same bank/insurance/retail/rule_of_40 hides as pharma_medtech — those reasons
-        # (irrelevant metric categories) apply here too, not in question.
         "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
         "equity_to_assets", "provision_ratio", "p_ppnr", "combined_ratio",
         "loss_ratio", "expense_ratio", "net_investment_yield",
         "reserve_growth", "p_core_earnings",
         "rule_of_40",
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
-        # rd_intensity: confirmed ~0% R&D for all 6 tickers (DGX, LH, HCA, DVA, UHS, CVS) —
-        # a real business characteristic, not missing data. See report.
+        "rd_intensity", "capex_intensity","operating_leverage","operating_income_yoy_growth"
+    },
+     "industrials": {
+        "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
+        "equity_to_assets", "provision_ratio", "p_ppnr", "combined_ratio",
+        "loss_ratio", "expense_ratio", "net_investment_yield",
+        "reserve_growth", "p_core_earnings",
+        "rule_of_40",
+        "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
         "rd_intensity",
-        # operating_margin / net_debt_to_ebitda / ev_ebitda are DELIBERATELY NOT hidden here,
-        # unlike pharma_medtech. Checked OperatingIncomeLoss coverage per ticker rather than
-        # copying pharma_medtech's blanket hide: DGX, LH, DVA, UHS, CVS all have clean,
-        # complete OperatingIncomeLoss coverage (100%+); only HCA is at 0%. Hiding these three
-        # metrics for the whole profile to protect against HCA's one gap would throw away real,
-        # correct data for 5 of 6 tickers. HCA itself will simply show no data for these three
-        # metrics (empty merge, not a wrong number) — an acceptable, self-explaining trade-off.
-        # See health_services_split_report.md for the full per-ticker evidence.
     },
 }
 
@@ -732,6 +799,47 @@ PROFILE_CONCEPT_OVERRIDES = {
                 "PaymentsToAcquirePropertyPlantAndEquipment",
                 "PaymentsToAcquireProductiveAssets",
                 "PaymentsToAcquireOtherPropertyPlantAndEquipment",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+    },
+    "industrials": {
+        "NetIncomeLoss": {
+            "tags": [
+                "NetIncomeLoss",
+                "NetIncomeLossAvailableToCommonStockholdersBasic",
+                "ProfitLoss",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+        "Capex": {
+            "tags": [
+                "PaymentsToAcquirePropertyPlantAndEquipment",
+                "PaymentsToAcquireProductiveAssets",
+                "PaymentsToAcquireOtherPropertyPlantAndEquipment",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+        "CashAndEquivalents": {
+            "tags": [
+                "CashAndCashEquivalentsAtCarryingValue",
+                "CashAndCashEquivalentsAtCarryingValueIncludingDiscontinuedOperations",
+                "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+            ],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+        "Revenue": {
+            "tags": [
+                "RevenueFromContractWithCustomerExcludingAssessedTax",
+                "Revenues",
+                "SalesRevenueNet",
+                "SalesRevenueGoodsNet",
+                "RevenueFromContractWithCustomerIncludingAssessedTax",
+                "SalesRevenueServicesNet",
             ],
             "point_in_time": False,
             "mode": "fallback",

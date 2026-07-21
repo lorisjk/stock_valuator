@@ -6,6 +6,212 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-07-20 — An absolute-floor guard for operating_leverage, and CAT/PCAR/TXT deferred to a future captive-finance profile
+
+Two independent fixes out of the industrials scan above, kept in separate non-regression scopes:
+a guard on `operating_leverage`'s own near-zero-growth-rate explosion, and the removal of three
+industrials tickers whose captive-finance subsidiaries make their consolidated figures unreliable.
+
+### Part A — operating_leverage needed a different kind of guard than roe/debt_to_equity did
+
+`operating_leverage = operating_income_yoy_growth / revenue_growth`. The 2026-07-15
+`min_base_ratio` guard and the 2026-07-20 `MIN_DENOMINATOR_SCALE_RATIO` equity guard both compare
+a *dollar* denominator against a dollar-denominated scale reference. `revenue_growth` is already a
+*percentage* — there's no dollar figure to scale it against, so this needed a genuinely different
+mechanism: an absolute floor on the denominator itself, not a relative-to-another-concept
+comparison.
+
+**Calibration, not guessing.** Pulled `revenue_growth` at every quarter across all 70 tickers then
+still in `industrials` where `|operating_leverage| > 20` (an exploratory filter, not the final
+threshold) — 165 rows. Median `|revenue_growth|` at those points was 0.53%; the worst cases (SWK's
+literal `inf`/`-inf` at exactly 0.000%, MMM at 1400, RSG at -812) all sit under 1%. Extending the
+filter to *every* row (not just the >20 ones) confirmed there's no clean bimodal gap the way IBM's
+growth-rate case had for `min_base_ratio` — the distribution is continuous, same shape already
+found for the equity guard's threshold search. Picked the threshold from the marginal-return curve
+instead of a gap:
+
+```
+threshold   masked rows   catches |leverage|>20   catches |leverage|>50
+1.0%        223 (7.0%)    103                     56
+1.5%        332 (10.4%)   121                     60
+2.0%        449 (14.0%)   135                     62
+2.5%        554 (17.3%)   144                     64
+3.0%        680 (21.2%)   149                     64
+```
+
+Beyond 2%, each additional 0.5pp of threshold buys almost no new extreme-value catches (2 more
+`>50` cases, ever) while the masked-row count keeps climbing linearly — pure collateral damage.
+**Chose 2% (`MIN_OPERATING_LEVERAGE_REVENUE_GROWTH = 0.02`)**: catches 91% of all `|leverage|>20`
+cases and 97% of the truly extreme `|leverage|>50` cases, for 14% of rows masked rather than 21%.
+
+**Implementation**: `calculate_ratio_from_dfs` gained an optional `min_denominator_abs` parameter
+(off by default — same additive shape as every guard in this project) that masks the result
+(`NaN`, not a dropped row) when `abs(denominator) < min_denominator_abs`. Passed only at
+`operating_leverage`'s call site. Checked its two other callers before leaving them alone, per the
+task's explicit instruction not to assume: `fcf_margin` divides by `Revenue_TTM` (a dollar figure
+that essentially never hits zero for an operating company) and `net_debt_to_ebitda` divides by
+`EBITDA_TTM` — also dollars, and where it *does* explode (Boeing, 11 quarters during the 737 MAX/
+COVID era, `|net_debt_to_ebitda|` up to 94) the cause is a real earnings collapse, not a
+percentage-denominator artifact. Neither shares the identical failure mode; neither was touched.
+
+**Verified rather than assumed** the guard doesn't over-mask: HII (2014-06-30, 3.36% revenue
+growth, leverage 20.0), IEX (2014-03-31, 5.84%, leverage 34.2), IR (2019-03-31, 7.05%, leverage
+23.7), and GEV (2025-12-31, 8.97%, leverage 21.6) all survive untouched — real, large operating
+leverage on real, measurable revenue growth stays visible, exactly the case the task's Step 3
+warned against suppressing. Diffed old vs. new across the full set: 0 previously-populated values
+changed, only masking occurred, 449 `(ticker, end)` pairs newly `NaN`, max `|revenue_growth|`
+among them 1.99% (confirms the boundary is exact).
+
+Of the task's own two motivating examples, both CMI quarters got masked; of CAT's two, only the
+-1.39%-growth one did (the +2.47% one sits just above the 2% line and stays visible) — moot in
+practice, since CAT leaves the `industrials` profile entirely in Part B below.
+
+**Caveat, same as every threshold in this log**: empirically tuned against the current 70-ticker
+`industrials` universe, not derived from a closed-form rule — may need revisiting as more tickers
+are added, the same caveat carried by `min_base_ratio` and `MIN_DENOMINATOR_SCALE_RATIO`.
+
+### Part B — CAT, PCAR, TXT removed from industrials, deferred to a future Group 5 profile
+
+The industrials scan above flagged CAT's and PCAR's captive-finance subsidiaries (Cat Financial,
+PACCAR Financial) as a likely source of consolidated-debt distortion, the same concern that kept
+Ford and GM out of every profile built so far — their captive-finance arms (Ford Credit, GM
+Financial) make consolidated debt/equity figures unrepresentative of the manufacturing business's
+real leverage, so F/GM were earmarked for a future "Group 5: captive-finance archetype" profile
+instead of being force-fit into `standard` or anywhere else. TXT (Textron Financial Corp) fits the
+same shape and was flagged incidentally during the same scan.
+
+Removed `"CAT"`, `"PCAR"`, `"TXT"` from `TICKER_PROFILES` entirely — not reassigned anywhere.
+`TICKERS` in `config.py` was already just `["HON"]` (the scan's own reference ticker, not a live
+production list) and never contained any of the three, so there was nothing to remove there; noted
+rather than forced, since the task's premise assumed a fuller list that isn't this project's
+current state. Verified via a full-universe facts diff (293 cached tickers, every profile): 0
+changed, 0 removed, 0 new fills for every ticker other than the three removed — confirmed clean
+end-to-end pipeline run across the remaining 67 `industrials` tickers, no crash, no orphaned
+references anywhere in the codebase (grepped for `"CAT"`/`"PCAR"`/`"TXT"` outside scratch scripts).
+
+**Group 5 backlog — captive-finance archetype tickers, no profile yet:**
+
+| Ticker | Captive-finance subsidiary | Why it's deferred, not force-fit |
+|---|---|---|
+| F | Ford Credit | Consolidated debt/equity dominated by auto-lending book, not representative of the manufacturing business's real leverage |
+| GM | GM Financial | Same shape as F |
+| CAT | Cat Financial | Only long-term-debt tag (`LongTermDebtNoncurrent`) is annual-only for its entire 2008–2025 history and is almost certainly the full consolidated figure (~$22–38B) — industrial debt and captive-finance debt bundled with no non-dimensional way to separate them |
+| PCAR | PACCAR Financial | No consolidated `LongTermDebt`-family tag exists at all, despite a large financing-receivables book (`PaymentsToAcquireFinanceReceivables`, 153 points) clearly present |
+| TXT | Textron Financial Corp | No usable `Goodwill` or `LongTermDebt` tag either — same structural shape as CAT/PCAR, found incidentally during the industrials scan |
+
+## 2026-07-20 — Ninth stock-type profile: industrials, a dead metric wired back in, and a confirmed cross-sector scope-break pattern
+
+70 tickers (HON reference + 69 new). `industrials` reuses `standard`'s metric set and adds two new
+metrics — `capex_intensity` and `operating_leverage` — built entirely from concepts already in
+base `CONCEPT_CANDIDATES`; both were already implemented correctly going in (confirmed the prior
+session's fix — `calculate_growth`'s missing `periods` argument and `calculate_ratio_from_dfs`'s
+wrong column reference — was actually in place before touching anything).
+
+### A metric that was computed every run and never once reached a chart
+
+The task asked for a judgment call on whether `operating_income_yoy_growth` (the intermediate
+growth rate feeding `operating_leverage`) adds standalone value once plotted. Tried to plot it —
+and found it couldn't be: `calculate_all_metrics` computes `m["operating_income_growth"]` every
+run, but `build_metrics_long`'s `spec` list never included it, and `figures.py`'s
+`plot_fundamentals` never listed it either. The metric has been computed and silently discarded
+every single run since it was added — the exact "fails silently, several layers from the cause"
+pattern this whole log is about, just inside the metrics layer instead of the tag layer. Wired it
+into both (`main.py`'s `spec` list, `figures.py`'s `concepts_to_plot`) so the judgment call could
+actually be evaluated against real data, not guessed at.
+
+### Once visible: it's the sane half of a routinely insane ratio
+
+Plotted `operating_income_yoy_growth` against `operating_leverage` for six tickers. The pattern was
+immediate and consistent: whenever `revenue_growth` (the ratio's denominator) sits near zero for a
+quarter, `operating_leverage` explodes — CMI hit **+1039.88** one quarter and **-332.73** the next,
+both attached to an `operating_income_yoy_growth` of a perfectly ordinary +113%/+139%; CAT and PH
+swing similarly (CAT: +11.97 → -11.09 → +9.30 across three consecutive quarters). In every one of
+these cases, `operating_income_yoy_growth` itself stayed a sane, readable percentage — it's
+`operating_leverage`, not the growth rate, that's the unstable half of the pair. **Decision: keep
+`operating_income_yoy_growth` visible for `industrials`** — hiding it would remove the only
+context that lets a reader tell "real operating leverage story" from "ratio artifact from a
+near-zero revenue-growth quarter" apart. Same near-zero-denominator failure class as the
+`min_base_ratio` and `MIN_DENOMINATOR_SCALE_RATIO` guards already in this codebase — not fixed
+here (out of scope for a tag-coverage task), but flagged as a real candidate for a future guard on
+`operating_leverage` itself. Since the fix that wired the metric into `main.py`/`figures.py` is
+global (not profile-scoped), `operating_income_yoy_growth` would otherwise have started appearing,
+unfiltered, on every other profile's charts too — added it to all eight other profiles'
+`PROFILE_HIDDEN` sets (alongside `capex_intensity`/`operating_leverage`, already handled there) so
+only `industrials` shows it.
+
+### Four tag fixes, three of them useful far beyond their original ticker
+
+- **NetIncomeLoss (ITW, 0%→96%)**: ITW tags neither `NetIncomeLoss` nor
+  `NetIncomeLossAvailableToCommonStockholdersBasic` — anywhere, ever. It uses `ProfitLoss` instead
+  (net income including noncontrolling interest), confirmed by matching real reported figures
+  ($2.1B–$3.5B, 2020–2025) rather than assumed from the tag name.
+- **Capex (ADP, 0%→96%)**: same `PaymentsToAcquireOtherPropertyPlantAndEquipment` tag that fixed
+  LLY's capex in the pharma_medtech entry below — confirmed useful for a second, unrelated company
+  in a different sector.
+- **CashAndEquivalents (GEV 0%→100%, CAT 38%→63%)**: same
+  `CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents` tag that fixed TGT in the
+  consumer_staples entry, now a *third* confirmed instance. Verified CAT's restricted-cash
+  component is negligible (differences of a few million against multi-billion balances, <0.15%) at
+  every overlap point before trusting it.
+- **Revenue (PWR, 49%→95%)**: PWR's revenue was tagged as `SalesRevenueServicesNet` before its 2018
+  ASC 606 transition, then switched to `RevenueFromContractWithCustomerExcludingAssessedTax` —
+  exact match at all six overlap dates. Extends PWR's revenue history back to 2008.
+
+All four applied as an `industrials`-scoped override (byte-identical Stage B1 first, 0 diffs; Stage
+B2 additions produced 0 changed, 0 removed, 550 new fills across **30** tickers — far more than the
+4 originally targeted, confirming these tags generalize across the sector rather than being
+single-company quirks).
+
+### The segment-divestiture recast trap, now confirmed a third and fourth time — and found in 9 more tickers
+
+The prior entries logged this exact failure mode for JNJ (Kenvue) and KO (bottler refranchising).
+HON's own history showed it clearly: FY2023 and FY2024 `OperatingIncomeLoss` and `Revenue` both
+restated by near-identical dollar amounts (~$1.03B / ~$3.7B) in filings on the **same date**
+(2026-02-17) — Honeywell's October 2025 Solstice Advanced Materials spinoff. FY2022 was never
+refiled, so it sits on the pre-spinoff scope right next to two years on the post-spinoff scope — a
+real discontinuity, not a bug.
+
+Built a detector for the same signature (≥2 fiscal-year-ends restated on the same filed date, by
+similar-magnitude dollar deltas — not percentage, since percentage alone conflates this with
+routine gross/net presentation differences like CHRW's and CPRT's, which restate by 80%+ every
+year for a decade and are a completely different, unrelated pattern) and ran it across all 69
+tickers, filtered to restatements filed 2023 or later (what would actually sit in a chart someone
+is looking at today). Found the pattern, beyond HON, in **MMM** (Solventum spinoff, Apr 2024),
+**CARR** (Fire & Security divestitures), **DOV**, **EMR** (Climate Technologies majority stake
+sale), **FTV** (Ralliant spinoff), **GE** (the three-way Aerospace/Vernova/HealthCare split — by
+far the largest, ~49% of revenue), **J** (Amentum divestiture), **JCI**, and **LHX**. Two of the
+task's eight named "check closely" tickers — **ITW and OTIS** — were checked directly and show
+**no** scope break in their current-era `OperatingIncomeLoss` history; reported as checked-and-
+clean rather than assumed clean from being merely "less complex" than GE.
+
+### CAT and PCAR: captive-finance distortion risk, reported not fixed
+
+Same concern as the Ford/GM captive-finance exclusion precedent. CAT's only long-term-debt tag
+(`LongTermDebtNoncurrent`) is annual-only for its *entire* cached history (2008–2025, no quarterly
+breakdown ever) and, at ~$22–38B, is almost certainly the full consolidated figure — Cat Financial's
+receivables-backed borrowings included alongside the industrial business's own debt, with no
+non-dimensional tag available to separate the two (the segment-level split CAT discloses is
+dimensional, and — same limitation already logged for STZ's dual-class shares — this pipeline's use
+of the plain `companyfacts` endpoint can't see dimensional facts at all). PCAR is worse: no
+consolidated `LongTermDebt`-family tag exists at all despite PACCAR Financial's large financing-
+receivables book being clearly present in the data. Neither ticker was reassigned — findings only,
+per the task's standing rule for this category of question. Noted TXT as a related, unnamed case:
+no usable `Goodwill` or `LongTermDebt` tag either, and Textron also runs a captive-finance arm
+(Textron Financial Corp).
+
+### Everything else: the OperatingIncomeLoss-fragility pattern, now confirmed for the ninth time
+
+ADP, EMR, ETN, GE, HON, JCI, LHX, PCAR, ROK, ROL, and TXT all show `OperatingIncomeLoss` well below
+50% coverage — traced individually rather than batch-assumed structural. Three distinct shapes, all
+already-logged patterns rather than new ones: **never tagged at all** (ADP, EMR, PCAR — the
+NKE/ADM/BG/CASY/CLX shape); **abandoned after a specific year** (GE stops in 2014, JCI stops in
+2016, ETN in 2013, TXT in 2011 — the SYY/PFE D&A shape, applied here to operating income instead of
+depreciation); **started only recently** (HON and ROL both begin in 2021, ROK only has 4 quarters,
+all 2024–2026). None chased with a successor tag, per the task's explicit instruction for this
+now-thoroughly-confirmed pattern. LMT's `DepreciationAndAmortization` (47%) is a clean instance of
+the same annual-only-for-a-stretch shape as SYY and PFE — an 8-year gap (2017–2024) bounded by
+otherwise-clean quarterly tagging on both sides.
+
 ## 2026-07-20 — Eighth stock-type profile: health_services split out of pharma_medtech, hidden set decided from evidence rather than copied
 
 Executed the split the pharma_medtech scan (immediately below) recommended: DGX, LH, HCA, DVA,

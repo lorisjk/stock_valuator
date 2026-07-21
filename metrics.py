@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 COMMON_SPLIT_FACTORS = [1, 2, 3, 4, 5, 6, 7, 8, 10, 15, 20, 25, 30, 40, 50]
 MIN_DENOMINATOR_SCALE_RATIO = 0.01
+MIN_OPERATING_LEVERAGE_REVENUE_GROWTH = 0.02
 
 
 def apply_denominator_scale_guard(
@@ -108,10 +109,15 @@ def calculate_ratio_from_dfs(
     numerator_column: str,
     denominator_column: str,
     result_name: str,
+    min_denominator_abs: float = None,
 ) -> pd.DataFrame:
 
     merged = pd.merge(numerator_df, denominator_df, on=["ticker", "end"])
     merged[result_name] = merged[numerator_column] / merged[denominator_column]
+
+    if min_denominator_abs is not None:
+        too_small = merged[denominator_column].abs() < min_denominator_abs
+        merged[result_name] = merged[result_name].where(~too_small)
 
     return merged[["ticker", "end", result_name]]
 

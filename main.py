@@ -36,6 +36,7 @@ from metrics import (
     normalize_split_adjusted,
     apply_denominator_scale_guard,
     MIN_DENOMINATOR_SCALE_RATIO,
+    MIN_OPERATING_LEVERAGE_REVENUE_GROWTH,
 )
 from figures import plot_fundamentals, plot_valuation
 from quality import print_data_quality
@@ -214,6 +215,17 @@ def calculate_all_metrics(facts: pd.DataFrame) -> dict:
     m["rd_intensity"] = calculate_ratio(
     facts, "ResearchAndDevelopment_TTM", "Revenue_TTM", "rd_intensity"
     )
+    m["operating_income_growth"] = calculate_growth(
+        facts, "OperatingIncomeLoss_TTM", 4, "operating_income_yoy_growth"
+    )
+    m["operating_leverage"] = calculate_ratio_from_dfs(
+        m["operating_income_growth"], m["revenue_growth"],
+        "operating_income_yoy_growth", "yoy_growth", "operating_leverage",
+        min_denominator_abs=MIN_OPERATING_LEVERAGE_REVENUE_GROWTH,
+    )
+    m["capex_intensity"] = calculate_ratio(
+    facts, "Capex_TTM", "Revenue_TTM", "capex_intensity"
+    )
     return m
 
 
@@ -243,7 +255,10 @@ def build_metrics_long(metrics: dict) -> pd.DataFrame:
         (metrics["dso"], "dso", "dso"),
         (metrics["dpo"], "dpo", "dpo"),
         (metrics["cash_conversion_cycle"], "cash_conversion_cycle", "cash_conversion_cycle"),
-        (metrics["rd_intensity"], "rd_intensity", "rd_intensity")
+        (metrics["rd_intensity"], "rd_intensity", "rd_intensity"),
+        (metrics["capex_intensity"], "capex_intensity", "capex_intensity"),
+        (metrics["operating_leverage"], "operating_leverage", "operating_leverage"),
+        (metrics["operating_income_growth"], "operating_income_yoy_growth", "operating_income_yoy_growth"),
     ]
 
     rows = [to_long_format(df, value_col, name) for df, value_col, name in spec]
@@ -399,6 +414,9 @@ def build_snapshot(
     dpo = get_latest_row(metrics["dpo"])
     ccc = get_latest_row(metrics["cash_conversion_cycle"])
     rd_intensity = get_latest_row(metrics["rd_intensity"])
+    capex_intensity = get_latest_row(metrics["capex_intensity"])
+    operating_leverage = get_latest_row(metrics["operating_leverage"])
+
 
     for df, cols in [
         (eps, ["ticker", "eps_ttm"]),
@@ -429,7 +447,9 @@ def build_snapshot(
         (dso, ["ticker", "dso"]),
         (dpo, ["ticker", "dpo"]),
         (ccc, ["ticker", "cash_conversion_cycle"]),
-        (rd_intensity, ["ticker", "rd_intensity"])
+        (rd_intensity, ["ticker", "rd_intensity"]),
+        (capex_intensity, ["ticker", "capex_intensity"]),
+        (operating_leverage, ["ticker", "operating_leverage"])
     ]:
         snap = pd.merge(snap, df[cols], on="ticker", how="left")
 
