@@ -68,7 +68,7 @@ def plot_fundamentals(ticker: str, metrics_long: pd.DataFrame, output_path: str)
         ("operating_margin", "Operative Marge", None, True, False),
         ("roe", "Eigenkapitalrendite", None, True, False),
         ("debt_to_equity", "Verschuldungsgrad", None, False, False),
-        ("payout_ratio", "Ausschüttungsquote", None, True, True),
+        ("payout_ratio", "Ausschüttungsquote", None, True, False),
         ("fcf_margin", "Free Cash Flow Marge", None, True, False),
         ("net_debt_to_ebitda", "Net Debt / EBITDA", 0, False, False),
         ("rule_of_40", "Rule of 40", 0.4, True, False),

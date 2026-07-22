@@ -6,6 +6,204 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-07-22 — Decumulation scope-mismatch bug, third concept: OperatingCashFlow (SATS `fcf_margin` regression)
+
+Fixing SATS's `Revenue`/`Capex` scope-mismatch bug (previous entry) had a direct side effect:
+`fcf_margin` used to come out masked for SATS 2021-2022 as an *accidental* consequence of the
+broken `Revenue` feeding `apply_self_relative_scale_guard`. Checking directly (not assuming)
+confirmed the guard no longer fires, and `fcf_margin` was showing real-looking but wrong values
+(212%, 68%, 40%, 29%) — because it also divides by `OperatingCashFlow_TTM`, which carries the
+**identical, still-unfixed** bug: SATS's raw FY2021 `OperatingCashFlow` fact is $632,226,000 as
+originally filed (2022-02-24/2023-02-23) and $4,655,373,000 as restated (2024-02-29) — same
+common-control-combination event, same filing date, same mechanism already fixed for `Revenue`
+and `Capex`. Silently-wrong data is worse than visibly-absent data, so this was worth chasing
+down rather than declaring "unaffected" as the task brief initially assumed.
+
+### Step 1/2 — full-universe scan, both directions: 37 candidates, 5 tickers confirmed
+
+Ran the same one-sided (backward/forward, ≥10x), sign-agnostic magnitude-gap check against
+`OperatingCashFlow` project-wide (appropriate since OCF, unlike `Revenue`/`Capex`, can
+legitimately be very negative in real distress — a blanket non-negativity rule would wrongly
+mask genuine losses like WYNN's real COVID-19 cash burn or PG&E's real $13.5B wildfire-trust
+funding outflow). Found 37 hits across 30 tickers; verifying each against the actual
+restatement signature (multiple, differently-valued annual-length facts for the same date, not
+magnitude alone) confirmed only 5 tickers, 6 rows share this bug:
+
+- **SATS**: FY2021 ($632M→$4.66B) and FY2022 ($530M→$3.62B), the exact same DISH-combination
+  event and filing date already fixed for `Revenue`/`Capex` — recovered via `_KNOWN_BAD_FACTS`,
+  reconciling cleanly to $204M and $186M respectively, in range with the ticker's other quarters.
+- **ADM, FLEX, JBL** (2016/2017 dates): each swings from a normal positive figure to several
+  billion dollars *negative* at a single later filing (2019) — a different, less certain root
+  cause than SATS (most plausibly a cash-flow-statement reclassification, e.g.
+  supply-chain/reverse-factoring arrangements moved from operating to financing activities, an
+  industry-wide practice shift for exactly this kind of manufacturer around 2018-2019; FLEX and
+  JBL are both electronics manufacturing services companies, reinforcing this reading).
+- **TMUS** (2011-12-31): coincides with its 2013 MetroPCS reverse-merger restructuring, the same
+  2011-2013 window already flagged as a merger-integration artifact for `rule_of_40` in the
+  telecom scan report.
+
+ADM/FLEX/JBL/TMUS were masked only, not recovered — unlike SATS, none has an independent,
+external cross-check confirming which annual figure is "more correct" (for the three
+manufacturers, the *restated* value may well be the more compliant one, the opposite direction
+of confidence from SATS's case), so no value was guessed. Added a new, sign-agnostic masking
+mechanism, `_KNOWN_SCOPE_MISMATCH_OUTLIERS` in `parsers/parse_edgar.py`, alongside (not
+replacing) `_KNOWN_POSITIVE_OUTLIERS` — needed because OCF's mismatches can go either direction,
+unlike the purely-positive ED Capex case the existing mechanism was built for.
+
+### Step 3 — re-verified `fcf_margin`/`rule_of_40` directly, not assumed
+
+`fcf_margin` for SATS is now plausible across its entire cached history (2021-12-31: 212%→9.8%;
+2022 Q1-Q4: 68%/40%/29%/(new)→3.9%/2.0%/1.5%/1.1%), a sensible gradual-decline story consistent
+with margin compression as DISH's pay-TV base shrinks. `rule_of_40` correctly comes out masked
+for all of 2022 (a genuine TTM-window transition artifact spanning the scope-change boundary,
+the same mechanism already documented for TMUS/CMCSA/CHTR's own merger integrations) and shows
+one expected one-year-later echo (2023-03-31: 189%, decaying naturally over the next three
+quarters) — not a new problem, an inherent property of TTM/YoY math around any real scope change.
+
+### Step 4 — full non-regression
+
+Quarterly: 4 masked (ADM/FLEX/JBL/TMUS), 2 recovered (SATS), zero elsewhere. Annual: 0 masked, 2
+recovered (same SATS rows). Every previously-shipped fix (EXC/FE/PPL, SATS's own Revenue/Capex,
+ED's Capex) spot-checked byte-identical. **General lesson, worth remembering going forward:**
+after any scope-mismatch fix, briefly check whether any metric depending on the fixed concept
+*together with* a still-unfixed one might have been "accidentally correct" before — masking that
+happens to look right can be coincidental, not diagnostic, and fixing one input can silently
+reveal (or hide) a problem in another. Full detail in
+`operating_cash_flow_scope_mismatch_report.md`.
+
+---
+
+## 2026-07-22 — Decumulation scope-mismatch bug, positive direction: SATS/EchoStar and Con Edison
+
+The telecom/cable scan (below) found the decumulation scope-mismatch bug (previous entry) has a
+mirror-image manifestation the non-negativity guard can't catch: instead of
+`Q4 = smaller_restated_annual − larger_original_Q1-Q3` going negative, a scope-*increase*
+produces `Q4 = larger_restated_annual − smaller_original_Q1-Q3` going implausibly large but still
+positive. SATS (EchoStar)'s FY2021 Revenue got retroactively restated to the combined
+DISH+EchoStar scale (~$19.82B) via GAAP's common-control-combination rules once the DISH merger
+closed (Dec 31, 2023), while Q1-Q3 2021 stayed on file at EchoStar's original ~$500M/quarter
+scale — `decumulate_period_values` computed Q4 2021 as ~$18.33B, wrong by ~37x, but not sign-
+impossible, so it sailed past the existing guard.
+
+### Step 1 — full-universe scan, positive direction: 56 candidates, only 2 tickers confirmed
+
+Extended the scan to flag decumulated quarterly values ≥10x above their own backward-only *or*
+forward-only neighboring-quarter median (a **one-sided** window is essential — a combined
+window missed SATS entirely, since 2022's quarters are also elevated by the same restatement and
+drag a combined median up enough to hide the gap). Checked `Revenue`, `Capex`, `CostOfRevenue`,
+`Inventory`, `AccountsReceivable`, `AccountsPayable` project-wide: 56 hits (34 Capex, 20 Revenue,
+2 AccountsReceivable), across 24 tickers. Point-in-time concepts again showed zero hits from this
+mechanism (structurally can't, since they're never decumulated) — the 2 AccountsReceivable hits
+(Lowe's) are real, single, never-restated reported values, not this bug.
+
+Individually checked all 56 for the actual diagnostic signature (multiple, differently-valued,
+raw annual-length facts for the same end date, i.e. an actual restatement) rather than trusting
+the magnitude heuristic alone — a magnitude spike is not, by itself, proof of a bug the way a
+negative value was: 49 of the 56 are genuine, single, never-restated real figures (COVID-era
+cruise-line revenue swings for CCL/NCLH/RCL, GE's multi-stage Capital-exit restructuring,
+MetLife's Brighthouse-spinoff-era item, assorted one-time lumpy capex) or a likely unrelated raw-
+data error (GLW's $100B Capex, flagged but not fixed, no restatement present). None of these were
+masked — doing so on magnitude alone would repeat the exact mistake the scale-outlier-
+generalization task already proved dangerous.
+
+### Step 2/3 — two confirmed cases, two different outcomes
+
+**SATS**: same DISH-combination event already documented for Revenue also restated Capex for
+FY2021 and FY2022 (both at the same 2024-02-29 FY2023-10-K filing date). Recovered all three
+(Revenue + 2× Capex) via `_KNOWN_BAD_FACTS` — the same drop-the-restated-fact,
+let-the-existing-tie-break-resolve mechanism as EXC/FE/PPL — landing cleanly back in range with
+the ticker's other 2021/2022 quarters.
+
+**ED (Consolidated Edison)**: Capex for FY2016-2019 shows the same mechanical symptom (annual
+restated to a different scope than never-updated quarters) but *not* SATS's clean story — no
+known ConEd M&A explains it, and the *larger* post-2018 figures ($3.6-5.2B/year) look more
+consistent with ConEd's real capital-spending scale than the original ($400-850M/year) ones,
+the opposite direction of confidence from SATS. Added a new, narrower mechanism,
+`_KNOWN_POSITIVE_OUTLIERS` in `parsers/parse_edgar.py` — masks the derived quarterly value
+directly (there's no reliable original to fall back to here), restricted to the quarterly path
+only (ConEd's raw annual facts are left alone; whether they're themselves right isn't
+established). Masked FY2016-2019 Capex for ED only.
+
+### Step 4 — full non-regression, and an honest (not glossed-over) side effect
+
+Quarterly: 4 rows masked (ED), 3 recovered (SATS), zero elsewhere. Annual: 0 masked, 3 recovered
+(same SATS rows). All prior `_KNOWN_BAD_FACTS` entries and the non-negativity guard verified
+byte-identical. One finding reported rather than assumed away: SATS's `fcf_margin`/`rule_of_40`
+were previously masked by `apply_self_relative_scale_guard` as a **side effect** of the
+now-fixed Revenue bug (the artificial $18.33B peak made real quarters look implausibly small by
+comparison) — fixing Revenue removes that peak, so the guard stops firing, which uncovers a
+**separate, still-open** instance of the identical scope-mismatch bug in `OperatingCashFlow`
+(SATS's FY2021 OCF: $632M original → $4.66B restated, same 2024-02-29 filing) that is outside
+both this task's and the prior task's checked-concept list. Not fixed — `OperatingCashFlow` was
+never in scope here — flagged for a dedicated follow-up instead of silently patched or silently
+ignored. Full detail in `decumulation_positive_outlier_report.md`.
+
+---
+
+## 2026-07-22 — Decumulation scope-mismatch bug: a defensive guard plus 12 targeted recoveries
+
+The utilities scan (two entries below) found `decumulate_period_values` can produce
+mathematically impossible negative values — `Q4 = smaller_restated_annual − larger_original_Q1-Q3`
+— when a divestiture or spinoff restates a fiscal year's annual total to a smaller
+post-divestiture scope while the standalone quarterly facts already on file for that year still
+reflect the original, larger, pre-divestiture scope. Both sides of the subtraction are
+individually accurate for their own scope; the bug is purely in mixing scopes across the
+subtraction. This is a third, distinct failure class from the two scale bugs above: unlike
+`SharesOutstanding`, there's no single wrong raw value to rescale; unlike BAC/ROK/STX, dropping
+the bad fact doesn't always leave a clean value behind.
+
+### Step 1 — full-universe scan: 276 instances, not just the 4 known
+
+Scanned every cached ticker for negative decumulated-quarterly values in concepts that can never
+legitimately be negative: `Revenue`, `Capex`, `CostOfRevenue`, `DepreciationAndAmortization`,
+`DividendsPerShare`, `ResearchAndDevelopment`, `EarnedPremiums` (point-in-time concepts like
+`Inventory`/`AccountsReceivable`/`AccountsPayable` were also checked — zero hits, since they never
+pass through decumulation at all). Found **276** across 106 tickers: 105 `DepreciationAndAmortization`,
+83 `Capex`, 58 `DividendsPerShare`, 22 `Revenue`, 6 `ResearchAndDevelopment`, 2 `CostOfRevenue` — far
+beyond the 4 originally confirmed (EXC, PPL ×2, FE), confirming the fix needed to be broad.
+`OperatingIncomeLoss`/`NetIncomeLoss`/`OperatingCashFlow`/similar concepts that can legitimately be
+negative (real losses, reserve releases) were counted but never flagged.
+
+### Step 2 — defensive guard
+
+`_NON_NEGATIVE_FLOW_CONCEPTS` + `_mask_negative_flow_values()` in `parsers/parse_edgar.py`: masks
+any negative value in the 7 flagged concepts to "no data" (row dropped), but **only for the
+quarterly (decumulated) path** — never for raw annual facts. That restriction turned out to matter:
+AIG's raw FY2008 `Revenues` fact is genuinely −$6.84B (its aggregate revenue tag bundles net
+investment gains/losses, and 2008 was AIG's near-collapse year), which would have been wrongly
+suppressed by a period-unaware guard. Verified project-wide: 0 negatives remain in the 7 concepts,
+0 raw annual facts touched, legitimate-negative concepts' counts identical before/after
+(NetIncomeLoss 1,836, OperatingCashFlow 1,831, OperatingIncomeLoss 1,136, etc.), and CCL/RCL/NCLH's
+real COVID-era losses spot-checked byte-identical before/after.
+
+### Step 3 — targeted recovery: 12 cases, 16 rows, extending `_KNOWN_BAD_FACTS`
+
+For each negative instance, checked whether an earlier-filed, scope-consistent raw fact exists that
+reconciles cleanly with the already-used quarters — same mechanism as BAC/ROK/STX, just more
+entries. Recovered 12 `(ticker, concept, end)` cases (16 rows counting DLTR's CostOfRevenue/Capex
+riding the same event as its Revenue fix), each corroborated by a real, named corporate event: EXC
+(Constellation spinoff), FE (FirstEnergy Solutions bankruptcy), PPL ×2 (Talen Energy spinoff; WPD UK
+sale), Agilent (Keysight spinoff), HPQ ×2 and HPE (HP/HPE split, then HPE's DXC spinoff), Fortive
+(Ralliant spinoff), Jacobs (Amentum divestiture), Western Digital (SanDisk spinoff), Dollar Tree
+(Family Dollar sale). Declined recovery for 10 more Revenue cases and all 246 remaining
+Capex/D&A/DividendsPerShare/R&D cases where no clean single candidate existed — ADM and AIG each had
+multiple non-agreeing restated values (no single "correct" one to pick), GEN's cases likely share
+its already-known fiscal-stub-period artifact rather than a divestiture, FIX's ~80% two-month
+restatement had no known event to corroborate it, and D&A specifically showed pervasive multi-tag
+disagreement (`Depreciation` vs `AmortizationOfIntangibleAssets` vs `DepreciationDepletionAndAmortization`
+reconciling to different signs) even for tickers where Revenue recovered cleanly — recovering those
+would be guessing, not evidence-based recovery, so they stay masked by Step 2's guard.
+
+### Step 4 — non-regression
+
+Quarterly: 271,080 → 270,820 rows (260 masked, 0 newly appeared, 16 recovered) — 260+16=276,
+matching Step 1 exactly. Annual: 75,134 → 75,134 rows (0 masked, 16 recovered) — confirms the
+period-restricted guard touches no raw annual fact. `decumulate_period_values`,
+`normalize_split_adjusted`, `_normalize_scale_outliers`, and the Tier-1 ratio guards were not
+touched. Full detail in `decumulation_scope_mismatch_report.md`.
+
+---
+
 ## 2026-07-21 — Targeted fix for BAC/Assets and ROK+STX/DividendsPerShare: a third mechanism, pinned to exact facts
 
 The generalization attempt (previous entry) proved a generic rescale mechanism can't safely cover

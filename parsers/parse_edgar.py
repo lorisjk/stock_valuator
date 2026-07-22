@@ -198,15 +198,6 @@ def extract_with_mode(us_gaap_data: dict, cfg: dict, period: str) -> list[dict]:
 
     return values
 
-
-# Hardcoded, individually-verified bad raw XBRL facts: a single filer restated an
-# already-correctly-reported historical period at the wrong scale in a later filing, and
-# extract_period_values's "later filed wins" tie-break trusts the wrong one. Each entry is
-# pinned to the exact (ticker, tag, end, filed, val) tuple of the bad fact confirmed against
-# the raw cached JSON — never a broad rule (e.g. "drop any zero Assets") that could catch a
-# legitimate value elsewhere. Dropping the fact lets the correct remaining filing win the
-# existing tie-break unchanged; nothing about the tie-break logic itself is touched.
-# See targeted_scale_fix_report.md for how each entry was identified and verified.
 _KNOWN_BAD_FACTS = {
     ("BAC", "Assets"): [
         {"end": "2008-12-31", "filed": "2011-02-25", "val": 0},
@@ -227,6 +218,79 @@ _KNOWN_BAD_FACTS = {
         {"end": "2022-07-01", "filed": "2024-08-02", "val": 2770000},
         {"end": "2023-06-30", "filed": "2024-08-02", "val": 2800000},
         {"end": "2024-06-28", "filed": "2024-08-02", "val": 2800000},
+    ],
+    ("EXC", "Revenues"): [
+        {"end": "2020-12-31", "filed": "2022-06-30", "val": 16663000000},
+        {"end": "2020-12-31", "filed": "2023-02-14", "val": 16663000000},
+    ],
+    ("FE", "Revenues"): [
+        {"end": "2016-12-31", "filed": "2019-02-19", "val": 10700000000},
+    ],
+    ("PPL", "Revenues"): [
+        {"end": "2013-12-31", "filed": "2016-02-19", "val": 7263000000},
+    ],
+    ("PPL", "RevenueFromContractWithCustomerExcludingAssessedTax"): [
+        {"end": "2019-12-31", "filed": "2022-02-18", "val": 5541000000},
+    ],
+    ("A", "Revenues"): [
+        {"end": "2013-10-31", "filed": "2015-12-21", "val": 3894000000},
+    ],
+    ("A", "SalesRevenueNet"): [
+        {"end": "2013-10-31", "filed": "2015-12-21", "val": 3894000000},
+    ],
+    ("HPQ", "Revenues"): [
+        {"end": "2013-10-31", "filed": "2016-04-27", "val": 55273000000},
+        {"end": "2014-10-31", "filed": "2016-04-27", "val": 56651000000},
+        {"end": "2014-10-31", "filed": "2016-12-15", "val": 56651000000},
+    ],
+    ("HPE", "Revenues"): [
+        {"end": "2015-10-31", "filed": "2017-12-15", "val": 31077000000},
+    ],
+    ("FTV", "RevenueFromContractWithCustomerExcludingAssessedTax"): [
+        {"end": "2023-12-31", "filed": "2026-02-25", "val": 3913900000},
+    ],
+    ("J", "RevenueFromContractWithCustomerIncludingAssessedTax"): [
+        {"end": "2022-09-30", "filed": "2024-11-25", "val": 9783074000},
+    ],
+    ("WDC", "RevenueFromContractWithCustomerExcludingAssessedTax"): [
+        {"end": "2023-06-30", "filed": "2025-08-14", "val": 6255000000},
+    ],
+    ("DLTR", "RevenueFromContractWithCustomerExcludingAssessedTax"): [
+        {"end": "2023-01-28", "filed": "2025-03-26", "val": 15405700000},
+    ],
+    ("DLTR", "CostOfGoodsAndServicesSold"): [
+        {"end": "2023-01-28", "filed": "2025-03-26", "val": 9630200000},
+        {"end": "2024-02-03", "filed": "2025-03-26", "val": 10761400000},
+        {"end": "2024-02-03", "filed": "2026-03-16", "val": 10761400000},
+    ],
+    ("DLTR", "PaymentsToAcquireProductiveAssets"): [
+        {"end": "2023-01-28", "filed": "2025-03-26", "val": 639000000},
+        {"end": "2024-02-03", "filed": "2025-03-26", "val": 1193800000},
+        {"end": "2024-02-03", "filed": "2026-03-16", "val": 1193800000},
+    ],
+    ("SATS", "RevenueFromContractWithCustomerExcludingAssessedTax"): [
+        # EchoStar's common-control combination with DISH Network (merger completed Dec 31,
+        # 2023) required GAAP-retrospective restatement of FY2021 to the combined scope,
+        # starting with the FY2023 10-K (filed 2024-02-29), while Q1-Q3 2021 remained on file
+        # at EchoStar's original standalone scale (never restated). See
+        # decumulation_positive_outlier_report.md.
+        {"end": "2021-12-31", "filed": "2024-02-29", "val": 19818678000},
+    ],
+    ("SATS", "PaymentsToAcquirePropertyPlantAndEquipment"): [
+        # Same common-control combination restatement, applied to Capex for both FY2021 and
+        # FY2022 (the two years the FY2023 10-K presents as comparatives).
+        {"end": "2021-12-31", "filed": "2024-02-29", "val": 1619312000},
+        {"end": "2022-12-31", "filed": "2024-02-29", "val": 3050472000},
+        {"end": "2022-12-31", "filed": "2025-02-27", "val": 3050472000},
+    ],
+    ("SATS", "NetCashProvidedByUsedInOperatingActivities"): [
+        # Same common-control combination restatement, applied to OperatingCashFlow for both
+        # FY2021 and FY2022 -- the third concept (after Revenue and Capex) found to carry this
+        # exact bug for the same corporate event. See
+        # operating_cash_flow_scope_mismatch_report.md.
+        {"end": "2021-12-31", "filed": "2024-02-29", "val": 4655373000},
+        {"end": "2022-12-31", "filed": "2024-02-29", "val": 3621190000},
+        {"end": "2022-12-31", "filed": "2025-02-27", "val": 3621190000},
     ],
 }
 
@@ -262,6 +326,86 @@ def _drop_known_bad_facts(ticker: str, us_gaap_data: dict) -> dict:
     return result
 
 
+_NON_NEGATIVE_FLOW_CONCEPTS = {
+    "Revenue",
+    "Capex",
+    "CostOfRevenue",
+    "DepreciationAndAmortization",
+    "DividendsPerShare",
+    "ResearchAndDevelopment",
+    "EarnedPremiums",
+}
+
+
+def _mask_negative_flow_values(key: str, values: list[dict], period: str) -> list[dict]:
+    if period != "quarterly" or key not in _NON_NEGATIVE_FLOW_CONCEPTS:
+        return values
+    return [v for v in values if v["value"] is None or v["value"] >= 0]
+
+
+# Positive-direction counterpart to _KNOWN_BAD_FACTS: individually-confirmed
+# (ticker, concept, end) decumulated quarterly values that are implausibly large relative to
+# their own neighboring quarters (the same annual/quarterly scope-mismatch root cause as the
+# negative-direction guard, just manifesting as an inflated positive instead of an impossible
+# negative -- so the non-negativity guard above doesn't catch it). Unlike _KNOWN_BAD_FACTS,
+# these are masked directly rather than fixed by dropping a raw fact, because -- unlike the
+# SATS case, which had a clean, externally-corroborated original value to fall back to via
+# _KNOWN_BAD_FACTS (see the entries above) -- no reliably "more correct" annual value could be
+# established here: masking is the honest, non-guessing choice. See
+# decumulation_positive_outlier_report.md for the full reasoning on each entry.
+_KNOWN_POSITIVE_OUTLIERS = {
+    ("ED", "Capex"): {"2016-12-31", "2017-12-31", "2018-12-31", "2019-12-31"},
+}
+
+
+def _mask_known_positive_outliers(ticker: str, key: str, values: list[dict], period: str) -> list[dict]:
+    # Restricted to the quarterly (decumulated) path for the same reason as
+    # _mask_negative_flow_values: the annual figure here is a single, directly-reported raw
+    # fact, not a subtraction -- only the derived quarterly delta is confirmed to mix two
+    # incompatible scopes. Whether the annual figure itself is "more" or "less" correct is not
+    # established (unlike SATS's cross-checked case), so it is left untouched rather than
+    # masked on an unproven assumption.
+    if period != "quarterly":
+        return values
+    bad_ends = _KNOWN_POSITIVE_OUTLIERS.get((ticker, key))
+    if not bad_ends:
+        return values
+    return [v for v in values if v["end"] not in bad_ends]
+
+
+# Sign-agnostic counterpart to _KNOWN_POSITIVE_OUTLIERS, for concepts where the mismatch can
+# manifest as either an inflated positive OR an implausible negative (OperatingCashFlow can
+# legitimately be negative in real distress, so it isn't in _NON_NEGATIVE_FLOW_CONCEPTS and a
+# blanket sign rule would wrongly mask genuine losses -- only individually-confirmed restatement
+# cases belong here, never a magnitude-alone heuristic). ADM, FLEX, and JBL all show the same
+# signature at the same underlying mechanism (a single later 10-K restates OperatingCashFlow by
+# several billion dollars -- in ADM/FLEX/JBL's case from positive to deeply negative, unlike
+# SATS's positive-to-larger-positive combination), most plausibly a cash-flow-statement
+# reclassification (e.g. supply-chain/reverse-factoring arrangements moved from operating to
+# financing activities, a known industry-wide practice change around 2018-2019 for exactly this
+# kind of manufacturer), while TMUS's 2011 figure coincides with its 2013 MetroPCS reverse-merger
+# restructuring. None of the four has SATS's externally-corroborated original to recover to, so
+# -- like ED's Capex -- these are masked only. See operating_cash_flow_scope_mismatch_report.md.
+_KNOWN_SCOPE_MISMATCH_OUTLIERS = {
+    ("ADM", "OperatingCashFlow"): {"2016-12-31"},
+    ("FLEX", "OperatingCashFlow"): {"2017-03-31"},
+    ("JBL", "OperatingCashFlow"): {"2017-08-31"},
+    ("TMUS", "OperatingCashFlow"): {"2011-12-31"},
+}
+
+
+def _mask_known_scope_mismatch_outliers(ticker: str, key: str, values: list[dict], period: str) -> list[dict]:
+    # Same period restriction as _mask_known_positive_outliers, and for the same reason: only
+    # the derived quarterly delta is confirmed to mix two incompatible scopes; the raw annual
+    # facts themselves are left alone since which one is "correct" isn't established.
+    if period != "quarterly":
+        return values
+    bad_ends = _KNOWN_SCOPE_MISMATCH_OUTLIERS.get((ticker, key))
+    if not bad_ends:
+        return values
+    return [v for v in values if v["end"] not in bad_ends]
+
+
 def build_dataframe(
     ticker: str,
     company_info: dict,
@@ -281,6 +425,10 @@ def build_dataframe(
 
         if key in _SCALE_CORRECTED_CONCEPTS:
             values = _normalize_scale_outliers(values)
+
+        values = _mask_negative_flow_values(key, values, period)
+        values = _mask_known_positive_outliers(ticker, key, values, period)
+        values = _mask_known_scope_mismatch_outliers(ticker, key, values, period)
 
         for v in values:
             rows.append(

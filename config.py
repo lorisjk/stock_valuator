@@ -1,4 +1,4 @@
-TICKERS = ["MCD"]
+TICKERS = ["UNP"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
@@ -312,7 +312,7 @@ TICKER_PROFILES = {
     "VEEV": "pharma_medtech",
     "VTRS": "pharma_medtech",
     "VRTX": "pharma_medtech",
-   # "WAT": "pharma_medtech", TICKER BORKEN FOR SHARES OTSTANDING AS OF 21.07
+    "WAT": "pharma_medtech",
     "WST": "pharma_medtech",
     "ZBH": "pharma_medtech",
     "ZTS": "pharma_medtech",
@@ -417,6 +417,24 @@ TICKER_PROFILES = {
     "MAR": "leisure", "HLT": "leisure",
     "CCL": "leisure", "RCL": "leisure", "NCLH": "leisure",
     "LVS": "leisure", "MGM": "leisure", "WYNN": "leisure",
+
+    "SO": "utilities",
+    "AES": "utilities", "LNT": "utilities", "AEE": "utilities", "AEP": "utilities",
+    "AWK": "utilities", "ATO": "utilities", "CNP": "utilities", "CMS": "utilities",
+    "ED": "utilities", "CEG": "utilities", "D": "utilities", "DTE": "utilities",
+    "DUK": "utilities", "EIX": "utilities", "ETR": "utilities", "EVRG": "utilities",
+    "ES": "utilities", "EXC": "utilities", "FE": "utilities", "NEE": "utilities",
+    "NI": "utilities", "NRG": "utilities", "PCG": "utilities", "PEG": "utilities",
+    "PNW": "utilities", "PPL": "utilities", "SRE": "utilities", "VST": "utilities",
+    "WEC": "utilities", "XEL": "utilities",
+
+    "T": "telecom_cable",
+    "VZ": "telecom_cable", "TMUS": "telecom_cable",
+    "CMCSA": "telecom_cable", "CHTR": "telecom_cable", "SATS": "telecom_cable",
+
+    "UNP": "railroads",
+    "CSX": "railroads",
+    "NSC": "railroads",
 }
 
 PROFILE_HIDDEN = {
@@ -570,6 +588,35 @@ PROFILE_HIDDEN = {
         "rd_intensity",
         "capex_intensity", "operating_leverage", "operating_income_yoy_growth",
         "rule_of_40",
+    },
+        "utilities": {
+        "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
+        "equity_to_assets", "provision_ratio", "p_ppnr", "combined_ratio",
+        "loss_ratio", "expense_ratio", "net_investment_yield",
+        "reserve_growth", "p_core_earnings",
+        "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
+        "rd_intensity",
+        "operating_leverage", "operating_income_yoy_growth",
+        "rule_of_40", "pfcf_ratio",
+    },
+        "telecom_cable": {
+        "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
+        "equity_to_assets", "provision_ratio", "p_ppnr", "combined_ratio",
+        "loss_ratio", "expense_ratio", "net_investment_yield",
+        "reserve_growth", "p_core_earnings",
+        "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
+        "rd_intensity",
+        "operating_leverage", "operating_income_yoy_growth",
+        "rule_of_40",
+    },
+        "railroads": {
+        "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
+        "equity_to_assets", "provision_ratio", "p_ppnr", "combined_ratio",
+        "loss_ratio", "expense_ratio", "net_investment_yield",
+        "reserve_growth", "p_core_earnings",
+        "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
+        "rd_intensity",
+        "operating_leverage", "operating_income_yoy_growth", "rule_of_40"
     },
 
 }
@@ -969,6 +1016,54 @@ PROFILE_CONCEPT_OVERRIDES = {
         },
     },
 
+    "utilities": {
+        "CashAndEquivalents": {
+            "tags": [
+                "CashAndCashEquivalentsAtCarryingValue",
+                "CashAndCashEquivalentsAtCarryingValueIncludingDiscontinuedOperations",
+                "Cash",
+            ],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+        "Revenue": {
+            "tags": [
+                "RevenueFromContractWithCustomerExcludingAssessedTax",
+                "Revenues",
+                "SalesRevenueNet",
+                "SalesRevenueGoodsNet",
+                "RevenueFromContractWithCustomerIncludingAssessedTax",
+                "RegulatedAndUnregulatedOperatingRevenue",
+                "UtilityRevenue",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+        "Capex": {
+            "tags": [
+                "PaymentsToAcquireProductiveAssets",
+                "PaymentsToAcquirePropertyPlantAndEquipment",
+                "PaymentsToAcquireOtherProductiveAssets",
+                "PaymentsToAcquireOtherPropertyPlantAndEquipment",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+        "DepreciationAndAmortization": {
+            "sources": [
+                {"type": "tag", "tag": "DepreciationDepletionAndAmortization"},
+                {"type": "tag", "tag": "DepreciationAndAmortization"},
+                {"type": "tag", "tag": "DepreciationAmortizationAndAccretionNet"},
+                {"type": "sum", "tags": ["Depreciation", "AmortizationOfIntangibleAssets"]},
+                {"type": "tag", "tag": "AdjustmentForAmortization"},
+                {"type": "tag", "tag": "FiniteLivedIntangibleAssetsAmortizationExpense"},
+                {"type": "tag", "tag": "UtilitiesOperatingExpenseDepreciationAndAmortization"},
+            ],
+            "point_in_time": False,
+            "mode": "priority_merge",
+        },
+    },
+
 }
 
 
@@ -1017,6 +1112,9 @@ PROFILE_EXCLUDED_CONCEPTS = {
     "homebuilder": {
         "OperatingIncomeLoss",
     },
+    "railroads": {
+        "Goodwill"
+    }, 
 
 }
 
