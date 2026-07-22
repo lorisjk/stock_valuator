@@ -269,25 +269,14 @@ _KNOWN_BAD_FACTS = {
         {"end": "2024-02-03", "filed": "2026-03-16", "val": 1193800000},
     ],
     ("SATS", "RevenueFromContractWithCustomerExcludingAssessedTax"): [
-        # EchoStar's common-control combination with DISH Network (merger completed Dec 31,
-        # 2023) required GAAP-retrospective restatement of FY2021 to the combined scope,
-        # starting with the FY2023 10-K (filed 2024-02-29), while Q1-Q3 2021 remained on file
-        # at EchoStar's original standalone scale (never restated). See
-        # decumulation_positive_outlier_report.md.
         {"end": "2021-12-31", "filed": "2024-02-29", "val": 19818678000},
     ],
     ("SATS", "PaymentsToAcquirePropertyPlantAndEquipment"): [
-        # Same common-control combination restatement, applied to Capex for both FY2021 and
-        # FY2022 (the two years the FY2023 10-K presents as comparatives).
         {"end": "2021-12-31", "filed": "2024-02-29", "val": 1619312000},
         {"end": "2022-12-31", "filed": "2024-02-29", "val": 3050472000},
         {"end": "2022-12-31", "filed": "2025-02-27", "val": 3050472000},
     ],
     ("SATS", "NetCashProvidedByUsedInOperatingActivities"): [
-        # Same common-control combination restatement, applied to OperatingCashFlow for both
-        # FY2021 and FY2022 -- the third concept (after Revenue and Capex) found to carry this
-        # exact bug for the same corporate event. See
-        # operating_cash_flow_scope_mismatch_report.md.
         {"end": "2021-12-31", "filed": "2024-02-29", "val": 4655373000},
         {"end": "2022-12-31", "filed": "2024-02-29", "val": 3621190000},
         {"end": "2022-12-31", "filed": "2025-02-27", "val": 3621190000},
@@ -342,29 +331,12 @@ def _mask_negative_flow_values(key: str, values: list[dict], period: str) -> lis
         return values
     return [v for v in values if v["value"] is None or v["value"] >= 0]
 
-
-# Positive-direction counterpart to _KNOWN_BAD_FACTS: individually-confirmed
-# (ticker, concept, end) decumulated quarterly values that are implausibly large relative to
-# their own neighboring quarters (the same annual/quarterly scope-mismatch root cause as the
-# negative-direction guard, just manifesting as an inflated positive instead of an impossible
-# negative -- so the non-negativity guard above doesn't catch it). Unlike _KNOWN_BAD_FACTS,
-# these are masked directly rather than fixed by dropping a raw fact, because -- unlike the
-# SATS case, which had a clean, externally-corroborated original value to fall back to via
-# _KNOWN_BAD_FACTS (see the entries above) -- no reliably "more correct" annual value could be
-# established here: masking is the honest, non-guessing choice. See
-# decumulation_positive_outlier_report.md for the full reasoning on each entry.
 _KNOWN_POSITIVE_OUTLIERS = {
     ("ED", "Capex"): {"2016-12-31", "2017-12-31", "2018-12-31", "2019-12-31"},
 }
 
 
 def _mask_known_positive_outliers(ticker: str, key: str, values: list[dict], period: str) -> list[dict]:
-    # Restricted to the quarterly (decumulated) path for the same reason as
-    # _mask_negative_flow_values: the annual figure here is a single, directly-reported raw
-    # fact, not a subtraction -- only the derived quarterly delta is confirmed to mix two
-    # incompatible scopes. Whether the annual figure itself is "more" or "less" correct is not
-    # established (unlike SATS's cross-checked case), so it is left untouched rather than
-    # masked on an unproven assumption.
     if period != "quarterly":
         return values
     bad_ends = _KNOWN_POSITIVE_OUTLIERS.get((ticker, key))
@@ -372,20 +344,6 @@ def _mask_known_positive_outliers(ticker: str, key: str, values: list[dict], per
         return values
     return [v for v in values if v["end"] not in bad_ends]
 
-
-# Sign-agnostic counterpart to _KNOWN_POSITIVE_OUTLIERS, for concepts where the mismatch can
-# manifest as either an inflated positive OR an implausible negative (OperatingCashFlow can
-# legitimately be negative in real distress, so it isn't in _NON_NEGATIVE_FLOW_CONCEPTS and a
-# blanket sign rule would wrongly mask genuine losses -- only individually-confirmed restatement
-# cases belong here, never a magnitude-alone heuristic). ADM, FLEX, and JBL all show the same
-# signature at the same underlying mechanism (a single later 10-K restates OperatingCashFlow by
-# several billion dollars -- in ADM/FLEX/JBL's case from positive to deeply negative, unlike
-# SATS's positive-to-larger-positive combination), most plausibly a cash-flow-statement
-# reclassification (e.g. supply-chain/reverse-factoring arrangements moved from operating to
-# financing activities, a known industry-wide practice change around 2018-2019 for exactly this
-# kind of manufacturer), while TMUS's 2011 figure coincides with its 2013 MetroPCS reverse-merger
-# restructuring. None of the four has SATS's externally-corroborated original to recover to, so
-# -- like ED's Capex -- these are masked only. See operating_cash_flow_scope_mismatch_report.md.
 _KNOWN_SCOPE_MISMATCH_OUTLIERS = {
     ("ADM", "OperatingCashFlow"): {"2016-12-31"},
     ("FLEX", "OperatingCashFlow"): {"2017-03-31"},
@@ -395,9 +353,6 @@ _KNOWN_SCOPE_MISMATCH_OUTLIERS = {
 
 
 def _mask_known_scope_mismatch_outliers(ticker: str, key: str, values: list[dict], period: str) -> list[dict]:
-    # Same period restriction as _mask_known_positive_outliers, and for the same reason: only
-    # the derived quarterly delta is confirmed to mix two incompatible scopes; the raw annual
-    # facts themselves are left alone since which one is "correct" isn't established.
     if period != "quarterly":
         return values
     bad_ends = _KNOWN_SCOPE_MISMATCH_OUTLIERS.get((ticker, key))
