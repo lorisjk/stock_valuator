@@ -40,6 +40,7 @@ from metrics import (
     MIN_OPERATING_LEVERAGE_REVENUE_GROWTH,
     MAX_OPERATING_LEVERAGE_ABS,
     MIN_NET_DEBT_TO_EBITDA_ABS,
+    MAX_NET_DEBT_TO_EBITDA_ABS,
     MIN_DEBT_TO_EQUITY_SCALE_RATIO,
     REVENUE_SELF_SCALE_WINDOW,
     MIN_REVENUE_SELF_SCALE_RATIO,
@@ -184,6 +185,7 @@ def calculate_all_metrics(facts: pd.DataFrame) -> dict:
     m["net_debt_to_ebitda"] = calculate_ratio_from_dfs(
         m["net_debt"], m["ebitda"], "net_debt", "ebitda", "net_debt_to_ebitda",
         min_denominator_abs=MIN_NET_DEBT_TO_EBITDA_ABS,
+        max_abs_result=MAX_NET_DEBT_TO_EBITDA_ABS,
     )
     m["rule_of_40"] = calculate_sum_from_dfs(
         m["revenue_growth"], m["fcf_margin"], "yoy_growth", "fcf_margin", "rule_of_40"

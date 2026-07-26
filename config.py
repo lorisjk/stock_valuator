@@ -1,4 +1,4 @@
-TICKERS = ["UNP"]
+TICKERS = ["XOM"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
@@ -435,6 +435,16 @@ TICKER_PROFILES = {
     "UNP": "railroads",
     "CSX": "railroads",
     "NSC": "railroads",
+
+    "XOM": "energy_integrated",
+    "CVX": "energy_integrated",
+    "EOG": "energy", "COP": "energy_integrated", "OXY": "energy_integrated", "DVN": "energy_integrated",
+    "FANG": "energy", ""
+    #"APA": "energy", HAS NO REVENUE
+    "EQT": "energy", "EXE": "energy",
+    "WMB": "energy", "OKE": "energy", "KMI": "energy", "TRGP": "energy",
+    "MPC": "energy", "PSX": "energy_integrated", "VLO": "energy",
+    "SLB": "energy_integrated", "HAL": "energy", "BKR": "energy_integrated",
 }
 
 PROFILE_HIDDEN = {
@@ -618,7 +628,27 @@ PROFILE_HIDDEN = {
         "rd_intensity",
         "operating_leverage", "operating_income_yoy_growth", "rule_of_40"
     },
-
+        "energy": {
+        "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
+        "equity_to_assets", "provision_ratio", "p_ppnr", "combined_ratio",
+        "loss_ratio", "expense_ratio", "net_investment_yield",
+        "reserve_growth", "p_core_earnings",
+        "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
+        "rd_intensity",
+        "operating_leverage", "operating_income_yoy_growth",
+        "rule_of_40",
+    },
+        "energy_integrated": {
+        "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
+        "equity_to_assets", "provision_ratio", "p_ppnr", "combined_ratio",
+        "loss_ratio", "expense_ratio", "net_investment_yield",
+        "reserve_growth", "p_core_earnings",
+        "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
+        "rd_intensity",
+        "operating_leverage", "operating_income_yoy_growth",
+        "operating_margin", "net_debt_to_ebitda", "ev_ebitda",
+        "rule_of_40",
+    },
 }
 
 
@@ -1064,6 +1094,53 @@ PROFILE_CONCEPT_OVERRIDES = {
         },
     },
 
+    "energy": {
+        "Capex": {
+            "tags": [
+                "PaymentsToAcquirePropertyPlantAndEquipment",
+                "PaymentsToAcquireProductiveAssets",
+                "PaymentsToAcquireOilAndGasPropertyAndEquipment",
+                "PaymentsToExploreAndDevelopOilAndGasProperties",
+                "PaymentsToAcquireOilAndGasProperty",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+        "CashAndEquivalents": {
+            "tags": [
+                "CashAndCashEquivalentsAtCarryingValue",
+                "CashAndCashEquivalentsAtCarryingValueIncludingDiscontinuedOperations",
+                "Cash",
+                "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+            ],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+    },
+    "energy_integrated": {
+        "Capex": {
+            "tags": [
+                "PaymentsToAcquirePropertyPlantAndEquipment",
+                "PaymentsToAcquireProductiveAssets",
+                "PaymentsToAcquireOilAndGasPropertyAndEquipment",
+                "PaymentsToExploreAndDevelopOilAndGasProperties",
+                "PaymentsToAcquireOilAndGasProperty",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+        "CashAndEquivalents": {
+            "tags": [
+                "CashAndCashEquivalentsAtCarryingValue",
+                "CashAndCashEquivalentsAtCarryingValueIncludingDiscontinuedOperations",
+                "Cash",
+                "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+            ],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+    },
+
 }
 
 
@@ -1115,6 +1192,12 @@ PROFILE_EXCLUDED_CONCEPTS = {
     "railroads": {
         "Goodwill"
     }, 
+    "energy": {
+        "Goodwill"
+    },
+    "energy_integrated": {
+        "Goodwill", "OperatingIncomeLoss"
+    },
 
 }
 

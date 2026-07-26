@@ -6,6 +6,156 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-07-26 — Backlog cleanup: net_debt_to_ebitda relative guard, GLW $100B capex typo, FIX period-tagging error
+
+Three independent, previously-logged items, each with a different root cause.
+
+### Part A — `net_debt_to_ebitda`: the 33 explosions the absolute floor couldn't reach
+
+The Tier-1 guard task caught 20 of 53 confirmed `net_debt_to_ebitda` explosions with an absolute
+EBITDA floor (`min_denominator_abs=$10M`); 33 remained. Re-derived them (|ratio|>60 reproduces the
+prior task's 53-case set exactly, of which 19 are now floor-masked and 33 are unguarded). Confirmed
+they are genuinely "small-EBITDA-relative-to-scale," not near-zero: median |EBITDA| is $111M (well
+above the $10M floor, which is why it misses them) but tiny against multi-billion net debt. These are
+EBITDA-*collapse* quarters (WDC memory downturn, BA 737-MAX crisis, INTC's 2024-25 trough, the
+COVID cruise/casino names, WBD's merger-year D&A) — not permanently-thin-margin businesses.
+
+Evaluated both scale references the task named. **Revenue_TTM fails**: real thin-margin, high-revenue
+businesses (VLO refining at ~0.8% EBITDA/rev with a perfectly sane 3.8x ratio, HAL, HPQ) have the same
+low EBITDA/revenue as the explosions, so any Revenue-relative threshold that catches all 33 also masks
+~260 legitimate readings. **net_debt is the data-supported reference** — but since net_debt is the
+ratio's own numerator, "mask when |EBITDA| < k·|net_debt|" is algebraically "mask when |ratio| > 1/k",
+i.e. a magnitude cap. Rather than add a redundant parameter that disguises that, implemented it
+honestly via the existing `max_abs_result` on the `net_debt_to_ebitda` call
+(`MAX_NET_DEBT_TO_EBITDA_ABS = 60`). This is the only choice that cannot over-mask a genuinely
+low-leverage thin-margin business (its ratio is small, so it is never touched).
+
+Calibration: the 52 explosions all sit at |ratio| ≥ 61.06 (EBITDA/net_debt ≤ 0.0164); the next-highest
+reading is 56.16 — a clean gap with nothing in between. A cap of 60 lands in that gap, catches exactly
+the confirmed explosions, and leaves the grey zone (|ratio| 20-56, mostly the *same* pathology at lower
+magnitude) untouched, honoring the task's "only the confirmed-explosion cases newly mask" rule. Full
+before/after across the universe: **33 newly masked, 0 values changed, 0 newly unmasked**; VLO/HAL/HPQ
+and levered utilities D/KMI/WMB (5-8x) all survive with real values. The grey zone (20-56) shows the
+same thin-EBITDA artifact and is a candidate for a future, separately-scoped tightening — deliberately
+left alone here.
+
+### Part B — GLW Q1-2011 capex reported as exactly $100,000,000,000
+
+Corning's `PaymentsToAcquireProductiveAssets` for 2011-Q1 is a single fact of exactly $100B — ~200x
+GLW's entire annual capex (~$1-2B) and larger than its 2011 total revenue (~$7.9B). A directly-filed
+data-entry error in the original 10-Q with **no correcting filing anywhere** — a different evidentiary
+situation from every prior `_KNOWN_BAD_FACTS` case, which all had a competing correct value to fall
+back to. The true scale cannot be inferred with confidence (÷1000→$100M, ÷100→$1B, neither matching
+GLW's real ~$450M Q1 scale, and the next fact in the tag is 2019 so there is no in-window neighbor to
+reconcile against). Per the "prefer masking over guessing" rule, added it to `_KNOWN_BAD_FACTS`; since
+it is the only fact for that period, the drop leaves no replacement — the $100B point simply
+disappears, GLW's other capex points untouched.
+
+### Part C — FIX (Comfort Systems USA): a period-tagging error, not a corporate event
+
+The ~80% two-month restatement flagged (and masked, unexplained) in the decumulation scan is FIX's
+FY2025 revenue: $9,101,641,000 in the 10-K (filed 2026-02-19) vs $1,831,286,000 refiled 2.1 months
+later (2026-04-23). Not a divestiture — a period-tagging error: the Q1-2026 10-Q stamped its prior-year
+Q1-2025 comparatives with `end=2025-12-31` instead of `end=2025-03-31`. The mislabeled value is exactly
+FIX's real Q1-2025 revenue, and the identical error hit every income-statement line filed that day
+(Revenues, OperatingIncomeLoss, GrossProfit, CostOfRevenue, SG&A, Depreciation…). Because "later filed
+wins," the mislabeled FY figures beat the correct 10-K values, collapsing FY2025 Revenue to $1.83B and
+FY2025 OperatingIncomeLoss to $209M (real: $1.31B), pushing Q4-2025 revenue negative (masked) and
+Q4-2025 operating income to a *visible* wrong −$679M. Dropped the two mislabeled facts via
+`_KNOWN_BAD_FACTS` (`(FIX,"Revenues")`, `(FIX,"OperatingIncomeLoss")` at end=2025-12-31, filed
+2026-04-23); the correct 10-K values win again — FY2025 Revenue $9.1B, OpInc $1.31B, Q4 revenue
+$2.646B, Q4 OpInc $426.7M, all clean. Separately noted (not fixed — different root cause, out of
+scope): FIX's quarterly D&A carries a pre-existing tag-definition inconsistency (quarterly YTD D&A
+facts sum to more than the annual D&A), which masks Q4 D&A independently of this tagging error.
+
+### Combined non-regression
+
+One full-universe before/after across all 381 cached tickers, both periods. Raw-fact level: only GLW
+(1 removed) and FIX (1 added, 3 changed) touched — exactly the Part B/C facts, nothing else.
+Metric level: `net_debt_to_ebitda` shows exactly 33 newly masked (19 tickers) with 0 other value
+changes. No cross-contamination between the three parts. Full detail in `backlog_cleanup_report.md`.
+
+## 2026-07-26 — `energy` split into `energy` / `energy_integrated` by `OperatingIncomeLoss` coverage
+
+The energy scan's finding that `OperatingIncomeLoss` absence is a supermajor/diversified-conglomerate
+pattern (XOM, CVX, COP, OXY, PSX at 0%), not sector-wide, meant `operating_margin`, `net_debt_to_ebitda`,
+and `ev_ebitda` were being hidden profile-wide for all 19 energy tickers to accommodate 5 — the same
+kind of all-or-nothing tradeoff resolved twice before by the same per-ticker evidence-gathering method
+(`health_services`: 5 of 6 clean → stayed visible; `homebuilder`: 1 of 4 clean → hidden profile-wide).
+Energy is the first case where the split isn't lopsided enough to resolve either way profile-wide, so
+it's the first time this project actually forks a profile in two over this decision, rather than just
+picking hide-all or show-all.
+
+Re-checked coverage per ticker rather than assuming the remaining 14 (post-APA-removal) share one
+outcome. Two clearly separate groups emerged, but not the ones originally assumed:
+
+- **Structurally absent (supermajor/diversified-conglomerate reason), unchanged from the scan report:**
+  XOM, CVX, COP, OXY, PSX — 0% coverage, no `OperatingIncomeLoss` tag at all.
+- **Present overall but currently dead — a distinct reason, same practical outcome:** DVN (19/74 =
+  26%, tag stops entirely after 2017-09-30 — 8.5 years stale), SLB (37/74 = 50% overall, but missing
+  for all of the last 8 quarters — 2 years stale as of 2026-03-31), BKR (33/41 = 80% overall, but
+  missing for 5 of the last 8 quarters — stale since 2024-12-31). All three would show
+  `operating_margin`/`net_debt_to_ebitda`/`ev_ebitda` populated for old history and then blank for
+  every recent quarter — worse than never showing it, since it reads as a broken chart rather than an
+  absent one. The raw coverage ratio alone (BKR's 80%) would have hidden this; only checking recency
+  of the gap (last-8-quarters check) surfaced it.
+- **Genuinely clean, current, and un-hidden:** EOG, FANG, EQT, EXE, WMB, OKE, KMI, TRGP, MPC, VLO, HAL
+  — 93-100% coverage, zero gaps among the last 8 quarters each. Spot-checked real computed values
+  (EOG ~30% operating margin, WMB ~27-29% consistent with a pipeline business, MPC ~4-7% consistent
+  with thin refining margins, FANG's real Q4 2025 dip traced to a genuine one-time -$2.78B operating
+  charge, not a guard artifact) — all real, meaningful, non-degenerate numbers.
+
+Split `energy` into two profiles: `energy_integrated` (XOM, CVX, COP, OXY, PSX, DVN, SLB, BKR — 8
+tickers, keeps `OperatingIncomeLoss` excluded and the 3 ratios hidden, byte-identical to every one of
+these 8 tickers' pre-split behavior, verified directly) and `energy` (the remaining 11, now with
+`OperatingIncomeLoss` no longer excluded and the 3 ratios un-hidden). `PROFILE_CONCEPT_OVERRIDES`
+copied as-is for `energy_integrated` (same `Capex`/`CashAndEquivalents` fallback tags) since nothing
+about those overrides is tied to which of the two hidden-metric buckets a ticker falls into.
+
+Non-regression: full before/after diff across all 381 cached tickers, 370,852 rows both times, 0
+removed / 0 added / 0 changed — confirming the split is purely a profile-label and hidden-set change
+with zero effect on any extracted value, for the 8 `energy_integrated` tickers or any of the other 373.
+
+## 2026-07-26 — Decumulation scope-mismatch bug, third symptom: implausibly-small positive (OXY/OxyChem)
+
+The energy tag coverage scan, checking OXY's 2024 CrownRock acquisition for a scope-break
+signature, found a *different*, unnamed 2025 event instead: Occidental sold its OxyChem
+chemicals business to Berkshire Hathaway in 2025. FY2023 and FY2024 Revenue got restated down
+(FY2023: $28,325M → $23,230M; FY2024: $27,413M → $22,710M, both restated in the FY2025 10-K
+filed 2026-02-18) while Q1-Q3 of both years — sourced from already-filed, never-updated 10-Qs —
+stayed at the original, OxyChem-included scale. `decumulate_period_values` then computed Q4 as
+`smaller_restated_annual − larger_original_Q1-Q3` for both years, landing on an implausibly
+*small* (not negative, not oversized) Q4: $2.243B and $2.157B for FY2023/2024, respectively,
+against Q1-Q3 ranges of $6.6-7.3B.
+
+This is a **third manifestation** of the same root cause already fixed twice before (negative,
+for divestitures large enough to flip sign; oversized-positive, for SATS's DISH combination) —
+not yet cataloged, since the OxyChem exclusion (~20-25% of total revenue) wasn't large enough to
+push Q4 negative, just small enough to look wrong relative to neighbors. Caught by chance during
+a targeted investigation, not by either of the two existing automated scans (a >=10x-gap
+heuristic wouldn't have flagged a ~3x shrink) — worth remembering that the existing scan
+toolkit still has this gap; a targeted, evidence-based check (same-tag restatement + Q1-Q3
+reconciliation) caught it where magnitude-based scanning alone would not have.
+
+Recovered FY2023 and FY2024 via the existing `_KNOWN_BAD_FACTS` mechanism (drop the restated
+fact, let the original win) — Q4 2023 recovers to $7,338M, Q4 2024 to $6,860M, both cleanly
+in range with the surrounding quarters. FY2025 has no earlier comparator (first-ever filing of
+that year), so its equally-small Q4 ($1,658M) was masked only, via a new
+`("OXY", "Revenue")` entry in `_KNOWN_SCOPE_MISMATCH_OUTLIERS` (the sign-agnostic mechanism
+built for SATS's `OperatingCashFlow` fix, reused here for its "any implausible magnitude"
+generality rather than its original negative-direction use case).
+
+Also investigated, during the same scan, several other real energy-sector corporate
+restructurings for the same signature — ConocoPhillips/Phillips 66 (2012 spinoff), Williams/WPX
+Energy (2012 spinoff), Devon Energy's multi-year 2016-2019 divestiture program, and Chesapeake's
+2019 distress-era restatement — all confirmed as genuine same-tag restatements via direct
+inspection, but none crossed the established ~10x actionable-artifact threshold in the derived
+quarterly series (max found: 4.3x for Devon). Left unmasked, consistent with the standing
+"don't force a fix past its evidence standard" discipline. Full detail in
+`energy_scan_report.md`.
+
+---
+
 ## 2026-07-22 — Decumulation scope-mismatch bug, third concept: OperatingCashFlow (SATS `fcf_margin` regression)
 
 Fixing SATS's `Revenue`/`Capex` scope-mismatch bug (previous entry) had a direct side effect:

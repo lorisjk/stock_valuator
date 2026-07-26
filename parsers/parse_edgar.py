@@ -281,6 +281,34 @@ _KNOWN_BAD_FACTS = {
         {"end": "2022-12-31", "filed": "2024-02-29", "val": 3621190000},
         {"end": "2022-12-31", "filed": "2025-02-27", "val": 3621190000},
     ],
+    ("OXY", "RevenueFromContractWithCustomerExcludingAssessedTax"): [
+        {"end": "2023-12-31", "filed": "2026-02-18", "val": 23230000000},
+        {"end": "2024-12-31", "filed": "2026-02-18", "val": 22710000000},
+    ],
+    # GLW Q1-2011 capex reported as exactly $100,000,000,000 in the original 10-Q
+    # (filed 2011-04-29) — ~200x GLW's entire annual capex and larger than its 2011
+    # total revenue. A single, never-restated, directly-filed data-entry error with NO
+    # correcting filing anywhere. Unlike every other entry here, dropping it leaves no
+    # replacement (it is the only fact for 2011-03-31): masked, not corrected, because
+    # the true scale cannot be inferred with confidence.
+    ("GLW", "PaymentsToAcquireProductiveAssets"): [
+        {"end": "2011-03-31", "filed": "2011-04-29", "val": 100000000000},
+    ],
+    # FIX (Comfort Systems USA) Q1-2026 10-Q (filed 2026-04-23) tagged its prior-year
+    # Q1-2025 comparatives with end=2025-12-31 instead of end=2025-03-31 — a period-tagging
+    # error, not a corporate event. The mislabeled values are exactly FIX's real Q1-2025
+    # figures (Revenues 1,831,286,000 == the 2025-03-31 quarterly Revenue), and the identical
+    # error hits every income-statement line filed that day. Because "later filed wins", the
+    # mislabeled FY value beat the correct 10-K value (filed 2026-02-19), collapsing FY2025
+    # Revenue to $1.83B (real: $9.1B) and FY2025 OperatingIncomeLoss to $209M (real: $1.31B),
+    # and pushing Q4-2025 negative (masked). Dropping the mislabeled facts lets the correct
+    # 10-K values win again.
+    ("FIX", "Revenues"): [
+        {"end": "2025-12-31", "filed": "2026-04-23", "val": 1831286000},
+    ],
+    ("FIX", "OperatingIncomeLoss"): [
+        {"end": "2025-12-31", "filed": "2026-04-23", "val": 209098000},
+    ],
 }
 
 
@@ -349,6 +377,7 @@ _KNOWN_SCOPE_MISMATCH_OUTLIERS = {
     ("FLEX", "OperatingCashFlow"): {"2017-03-31"},
     ("JBL", "OperatingCashFlow"): {"2017-08-31"},
     ("TMUS", "OperatingCashFlow"): {"2011-12-31"},
+    ("OXY", "Revenue"): {"2025-12-31"},
 }
 
 
