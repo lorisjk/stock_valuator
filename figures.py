@@ -91,6 +91,7 @@ def plot_fundamentals(ticker: str, metrics_long: pd.DataFrame, output_path: str)
         ("capex_intensity", "CapEx-Intensität (% Umsatz)", None, True, False),
         ("operating_leverage", "Operating Leverage", 1.0, False, False),
         ("operating_income_yoy_growth", "Operatives Ergebniswachstum", 0, True, False),
+        ("ffo_margin", "FFO-Marge (% Umsatz)", None, True, False),
     ]
     concepts_to_plot = [c for c in concepts_to_plot if not is_hidden(ticker, c[0])]
 
@@ -123,8 +124,8 @@ def plot_valuation(ticker: str, valuation_history: pd.DataFrame, output_path: st
         ("dividend_yield", "Dividendenrendite", None, True),
         ("p_tbv", "P/TBV", None, False),
         ("p_ppnr", "P/PPNR", None, False),
-      
         ("p_core_earnings", "P/Core Earnings", None, False),
+        ("p_ffo", "P/FFO (TTM)", None, False),
         
     ]
 

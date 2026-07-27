@@ -309,6 +309,54 @@ _KNOWN_BAD_FACTS = {
     ("FIX", "OperatingIncomeLoss"): [
         {"end": "2025-12-31", "filed": "2026-04-23", "val": 209098000},
     ],
+    # MOS (Mosaic) filer-side scale error: Q3-2025 and Q1-2026 10-Qs tagged
+    # CommonStockDividendsPerShareCashPaid at ~1,000,000x the real per-share value
+    # (220000 instead of $0.22). Confirmed by the surrounding quarters (Q1/Q2-2025
+    # both correctly tagged $0.22) and the FY2025 10-K annual total ($0.88 = 4 x
+    # $0.22). No competing correctly-scaled filed value exists for these exact
+    # periods, so per the "prefer masking over guessing" rule, dropped rather than
+    # corrected to the inferred $0.22 — masks Q3-2025 and Q1-2026, and removes the
+    # corrupted YTD fact that was silently breaking the Q4-2025 decumulation (it
+    # produced a large negative, already caught by the existing non-negative-flow
+    # guard, but for the wrong underlying reason).
+    ("MOS", "CommonStockDividendsPerShareCashPaid"): [
+        {"end": "2025-09-30", "filed": "2025-11-05", "val": 220000},
+        {"end": "2025-09-30", "filed": "2025-11-05", "val": 440000},
+        {"end": "2026-03-31", "filed": "2026-05-11", "val": 220000},
+    ],
+    # DD (DuPont de Nemours) FY2020 annual Revenue was restated from $14,338M (filed
+    # 2022-02-11, reflecting the 2021 Nutrition & Biosciences/IFF divestiture only) down
+    # to $11,128M (filed 2023-02-15, additionally reflecting the Nov-2022 Mobility &
+    # Materials/Celanese divestiture). Q1-Q3 2020 quarterly facts were locked into 10-Qs
+    # filed in 2021 — before the M&M deal was even announced (Feb 2022) — so they remain
+    # at the pre-M&M scope ($3,670M+$3,289M+$3,629M = $10,588M). Decumulating Q4 against
+    # the smaller, M&M-excluded annual produced an implausibly tiny $540M (vs ~$3.2-3.7B/
+    # qtr neighbors) — the same "implausibly small positive" bug class as OXY/OxyChem.
+    # Dropping the mismatched-scope annual fact recovers Q4-2020 to $3,750M, which
+    # independently matches DD's own directly-filed Q4-2020 value under the N&B-excluded-
+    # only scope (Revenues tag, 8-K filed 2021-06-03: $3,750M) exactly.
+    ("DD", "RevenueFromContractWithCustomerExcludingAssessedTax"): [
+        {"end": "2020-12-31", "filed": "2023-02-15", "val": 11128000000},
+    ],
+    # IP (International Paper) two separate scope-decrease events, same "implausibly small
+    # positive" Q4 bug:
+    # (1) FY2019/FY2020 Revenue retroactively restated smaller starting with the FY2021
+    #     10-K (filed 2022-02-18), reflecting the Oct-2021 Sylvamo (printing papers) spinoff
+    #     presented as discontinued operations. Q1-Q3 of both years were locked into 10-Qs
+    #     filed in 2019/2020 — before the spinoff existed — so they remain at the
+    #     Sylvamo-included scope, producing implausibly tiny decumulated Q4s ($1,439M vs
+    #     ~$5.6B/qtr neighbors for 2019; $2,224M vs ~$5.0-5.4B/qtr for 2020).
+    # (2) FY2023 Revenue retroactively restated smaller starting with the FY2025 10-K (filed
+    #     2026-02-27), reflecting the Global Cellulose Fibers business sale (announced
+    #     2025-08-21, completed 2026-01-23 to American Industrial Partners) presented as
+    #     discontinued operations. Same mechanism, same symptom ($1,718M vs ~$4.6-5.0B/qtr
+    #     neighbors).
+    ("IP", "RevenueFromContractWithCustomerExcludingAssessedTax"): [
+        {"end": "2019-12-31", "filed": "2022-02-18", "val": 18317000000},
+        {"end": "2020-12-31", "filed": "2022-02-18", "val": 17565000000},
+        {"end": "2020-12-31", "filed": "2023-02-17", "val": 17565000000},
+        {"end": "2023-12-31", "filed": "2026-02-27", "val": 16033000000},
+    ],
 }
 
 

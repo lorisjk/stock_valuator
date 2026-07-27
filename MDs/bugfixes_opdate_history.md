@@ -6,6 +6,175 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-07-27 — New bug class: positional vs. date-based period alignment in `calculate_growth` (project-wide)
+
+A structurally different bug from everything logged above — not a bad tag, not a scope mismatch, not
+a scale error. `calculate_growth` computed its "prior period" comparison **positionally**
+(`groupby("ticker")["value"].shift(periods)` on a date-sorted series), silently assuming every ticker's
+concept series has exactly one row per quarter with no gaps. Any missing quarter — for any reason —
+shifts every subsequent comparison by one slot, comparing against whatever row happens to land 4
+positions back, however distant in time that actually is. No existing guard catches this:
+`min_base_ratio` only protects against a small-but-present base value, and the wrong-period base here
+is neither small nor implausible in isolation — it's simply the wrong date.
+
+**Root cause confirmed and reproduced by hand**: O's `Revenue_TTM` has a genuine 5-year reporting gap
+(2012-03-31 → 2017-03-31, `Revenues` untagged 2013-2016). At 2017-12-31, `.shift(4)` reaches back to
+2012-03-31 (the 4th *row*, not the 4th *quarter*): $1,215,768,000 / $433,743,000 − 1 = **180.3%**,
+matching the flagged figure exactly. The bug's actual footprint is wider than a single point, though:
+**all four quarters immediately following any gap** are corrupted at progressively decreasing severity,
+because the positional shift only "catches up" to true 4-quarters-back alignment exactly `periods`
+quarters after the gap ends (confirmed on O: 2017-Q1 67.9% → 2017-Q2 108.0% → 2017-Q3 145.0% → 2017-Q4
+180.3%, then correct again from 2018-Q1 onward).
+
+**Full-universe scope scan** (all 4 `calculate_growth` callers: `revenue_growth`/`Revenue_TTM`,
+`income_growth`/`NetIncomeLoss_TTM`, `reserve_growth`/`ClaimsReserve`, `operating_income_growth`/
+`OperatingIncomeLoss_TTM`) found the true scope is **larger than an "obvious spike" heuristic would
+catch** — exactly the concern the task raised. A naive large-gap heuristic (>1.5x expected spacing)
+found only 227 hits across 49 tickers; the actual, precise before/after diff (comparing the old
+positional output against the new date-based output row by row) found **1,140 `(ticker, metric, end)`
+triples across 98 tickers** — including subtle cases (e.g. ACN 2012: 12.6% reported vs. 18.2% real) that
+don't look wrong on their own and would never have been flagged for manual review. Of the 1,140: 215
+newly masked (real gap, no valid comparison exists), 874 recomputed to a different, correct value, and
+51 newly *unmasked* — cases where the old positional bug compared against an implausible row that
+failed the `min_base_ratio`/positive-value guards, while the date-correct comparison passes cleanly
+(a genuine recovery, not a new mask). One recurring structural case worth flagging specifically: **KR
+(Kroger) is missing its fiscal Q1 every single year for its entire multi-decade history** — not a
+one-time gap. The date-based fix cures this completely rather than just masking it, since Q2/Q3/Q4 are
+each still genuinely ~365 days from their own prior-year same quarter; only the never-populated Q1
+correctly returns no value.
+
+**Fix**: implemented once, inside `calculate_growth` itself (`metrics.py`), so all four current callers
+(and any future one) get it automatically — not a per-ticker or per-concept patch, since this is a
+structural property of the function, not a tag-specific data error. Replaced the positional
+`.shift(periods)` with a date-based nearest-match lookup (`pd.merge_asof`, grouped by ticker, matching
+each row against the closest available row to `end − periods×365.25/4 days`), returning `NaN` when
+nothing exists within tolerance rather than silently accepting whatever the next available row is.
+
+**Tolerance calibrated from real project-wide data**, not assumed: the full population of
+position-4-apart date gaps across every cached ticker/concept clusters overwhelmingly (96%+) at
+360-380 days, with a clean, nearly-empty band from 380-430 days (only 8 pairs total), then a second,
+unrelated cluster at 430-470 days that turned out to be a **project-wide XBRL-mandatory-tagging
+phase-in edge effect concentrated in 2008-2010** (many tickers' first 1-2 available quarters sit oddly
+spaced before regular quarterly cadence begins) — correctly excluded, since there genuinely is no
+reliable year-ago comparison for a ticker's first few quarters. Set the tolerance at **±45 days** (for
+`periods=4`; scaled proportionally as `periods × 45/4` for generality), landing cleanly inside the
+empty band and excluding both the XBRL-edge cluster and every genuine gap.
+
+**Over-masking check**: of the task-named irregular-fiscal-calendar retailers (HD, LOW, TJX, ROST, BBY,
+WSM, ULTA), HD/ROST/WSM/ULTA showed **zero change** (their calendars are already regular enough). BBY,
+LOW, and TJX did change — each confirmed, by inspecting raw quarterly dates directly, to be a **genuine
+fix**: BBY has a real inserted stub quarter in 2011 (a ~63-day then ~28-day span breaking the normal
+~91-day cadence); LOW's `NetIncomeLoss_TTM` has a real 2012-2013 gap independent of its (fully populated)
+`Revenue_TTM`; TJX's `NetIncomeLoss_TTM` has a real ~189-day gap that Revenue_TTM doesn't share — a
+reminder that gaps must be checked per concept, not assumed to align with Revenue's own coverage.
+
+**Non-regression**: full before/after across all 406 cached tickers, all four `calculate_growth`
+callers: 72,608 total rows, exactly 1,140 changed (matching the scope scan precisely), 71,468
+unchanged. Spot-checked known gap-free tickers (AAPL, MSFT, JNJ, PG) directly: **zero changes**,
+confirming the fix is provably inert in the non-gap case. Downstream consumer `operating_leverage`
+(which divides `operating_income_growth` by `revenue_growth`) correctly propagates the fix: 301 of
+20,029 rows changed across 45 tickers — an expected consequence of correcting its two upstream inputs,
+not a new issue. Full detail in `growth_period_alignment_report.md`.
+
+## 2026-07-27 — `materials` split into `materials` / `materials_integrated` by `OperatingIncomeLoss` coverage, `rule_of_40` hidden
+
+Follow-up to the materials scan, mirroring the `energy`/`energy_integrated` precedent exactly. Split
+`TICKER_PROFILES` into `materials_integrated` (8 tickers: NEM, DOW, DD, AVY, SHW, IP, BALL, NUE — keeps
+`OperatingIncomeLoss` excluded and `operating_margin`/`net_debt_to_ebitda`/`ev_ebitda` hidden) and
+`materials` (the remaining 16: LIN, APD, ECL, FCX, LYB, PPG, ALB, CE, IFF, MLM, VMC, STLD, PKG, AMCR,
+CF, MOS — now shows all three). `PROFILE_HIDDEN["materials"]` un-hiding the 3 metrics and hiding
+`rule_of_40` had already been applied to `config.py` externally before this task started (confirmed by
+inspection, treated as ground truth per standing instruction); this task added the
+`materials_integrated` profile and the `PROFILE_EXCLUDED_CONCEPTS["materials_integrated"] =
+{"OperatingIncomeLoss"}` entry (a genuinely new exclusion — unlike `energy`, `materials` never excluded
+anything pre-split, so there was nothing to carry forward for this key).
+
+**Correction to the prior scan report's own tally, caught during this task's "verify, don't just copy
+the conclusion" step:** the scan report's Step-5 coverage table correctly listed NUE at 0%
+`OperatingIncomeLoss` coverage (identical, always-absent pattern to NEM/DOW/DD/AVY), but its summary
+prose undercounted the fragile group as "7 of 24" and omitted NUE from the always-absent list — an
+error in that report's own writing, not a data issue. This task's brief inherited the undercount (its
+Step-1 code block listed only 7 tickers to move). Re-verified NUE's coverage directly (0/75, never
+populated, no ambiguity) and moved it to `materials_integrated` as well — 8 tickers, not 7.
+
+Verified byte-identical for all 8 `materials_integrated` tickers: `PROFILE_HIDDEN` and
+`get_concept_candidates()` (which together determine every actual computed/displayed value) match
+their pre-split `materials` behavior exactly; only `PROFILE_EXCLUDED_CONCEPTS` differs, which is the
+intended, new correction (nothing computational). Coverage re-check for the 16 remaining `materials`
+tickers confirms only two already-known, confirmed-real gaps remain (CE `DividendsPerShare` — no tag
+exists at all; FCX `Goodwill` — real 2014 writeoff) — NUE's removal cleared its 0% flag from this list.
+Spot-checked real `operating_margin`/`net_debt_to_ebitda` values for all 16 — all meaningful, no
+degenerate or barely-there charts (e.g. LIN 26.5% margin/1.35x leverage, MLM 23.1%/2.37x, STLD 9.1%/
+1.57x).
+
+Non-regression: full before/after across all 405 cached tickers, both periods — 0 removed/added/
+changed (expected, since this task only touches `config.py`, not `parsers/parse_edgar.py`). Full detail
+in `materials_profile_split_report.md`.
+
+## 2026-07-27 — Materials tag coverage scan (24 tickers): MOS dividend scale bug, DD/IP decumulation fixes (4 quarters, 3 separate real events)
+
+Eleventh stock-type profile batch, LIN + 23 new. Coverage came back clean overall (only
+`OperatingIncomeLoss` at a few tickers and one dividend gap below 50%), but the scan surfaced four
+independent, real bugs — none named in the task brief, all found by checking real filings rather than
+trusting chart shape or raw coverage ratios.
+
+**LIN's 2019 scope break, confirmed properly.** The ~125% FY2019 revenue jump is real: Praxair was
+named the accounting acquirer for the Oct 31, 2018 Linde/Praxair "merger of equals" (ASC 805), so
+pre-merger quarters are Praxair-only and the step-up lands exactly at the close date (Q3 2018 $3.008B
+→ Q4 2018 $5.801B revenue, confirmed via the same-tag method, not a restatement — FY2018's competing
+filed values differ by only 0.4%, ruling out a scope-mismatch bug). Real, clean, no fix needed.
+
+**MOS: a filer-side scale error, same class as the ROK/STX DividendsPerShare fixes.** Mosaic's Q3-2025
+and Q1-2026 10-Qs tagged `CommonStockDividendsPerShareCashPaid` at ~1,000,000x the real value (220000
+instead of $0.22), corroborated by the correctly-tagged neighboring quarters ($0.22 each) and the
+FY2025 10-K's annual total ($0.88 = 4×$0.22). No competing correctly-scaled value exists for either
+period, so per the established "prefer masking over guessing" rule, dropped rather than corrected —
+this also removed a corrupted YTD fact that was silently breaking the Q4-2025 decumulation (already
+caught by the non-negative-flow guard, but for the wrong underlying reason).
+
+**DD and IP: four more instances of the decumulation scope-mismatch bug's "implausibly small positive"
+symptom** (the class first found in OXY/OxyChem), each tied to a distinct, real, verified corporate
+event:
+- **DD (DuPont) Q4-2020**: FY2020 Revenue restated from $14,338M to $11,128M starting with the FY2022
+  10-K (filed 2023-02-15), reflecting the Nov-2022 Mobility & Materials divestiture to Celanese. Q1-Q3
+  2020 quarterly facts were locked into 10-Qs filed in 2021 — before the deal was even announced (Feb
+  2022) — so decumulating them against the smaller restated annual produced an implausible $540M Q4
+  (vs ~$3.2-3.7B/qtr neighbors). Recovered to $3,750M by dropping the mismatched-scope annual fact —
+  independently corroborated by DD's own directly-filed Q4-2020 value under the immediately-prior
+  restatement layer (N&B-excluded only), which matches exactly.
+- **IP (International Paper) Q4-2019 and Q4-2020**: both restated smaller starting with the FY2021
+  10-K (filed 2022-02-18), reflecting the Oct-2021 Sylvamo (printing papers) spinoff. Same mechanism —
+  pre-spinoff quarterly facts vs. post-spinoff annual — produced $1,439M (2019) and $2,224M (2020)
+  against ~$5.0-5.9B/qtr neighbors. Recovered to $5,498M and $5,239M respectively.
+- **IP Q4-2023**: restated smaller starting with the FY2025 10-K (filed 2026-02-27), reflecting the
+  Global Cellulose Fibers business sale (announced 2025-08-21, closing 2026-01-23 to American
+  Industrial Partners) — GAAP requires reclassifying to discontinued operations as soon as a sale is
+  probable, which is why the FY2023/2024 comparatives were restated before the deal even closed.
+  Produced an implausible $1,718M vs ~$4.6-5.0B/qtr neighbors; recovered to $4,601M. (FY2024 itself
+  needed no fix — its quarterly facts were already filed after the restatement took effect and
+  reconcile cleanly on their own.)
+
+All four recoveries used the established `_KNOWN_BAD_FACTS` drop-the-mismatched-fact mechanism, each
+verified against a real, dateable corporate event before touching anything, per the same evidentiary
+standard as every prior fix in this class (EXC/FE/PPL, SATS, OXY/OxyChem).
+
+**DOW and AMCR/Berry Global checked and found clean.** DOW's own historicals (a genuinely new spinoff
+entity, not a restated-in-place registrant like DD) show no multi-value restatement signature at all —
+quarterly and annual reconcile without incident. AMCR's Q2-2025 step-up (Berry Global merger, completed
+Apr 30, 2025) is a real, clean scope increase with no decumulation artifact, plus a fiscal-year-end
+transition visible in the annual periods (noise, not a bug).
+
+**`OperatingIncomeLoss` coverage split, mirroring the energy precedent.** 7 of 24 tickers (29%) show
+the same fragility energy's supermajors did: NEM, DOW, DD, AVY are permanently at 0% coverage;
+SHW, IP, and BALL have decent historical coverage (68-84%) but have gone completely dark for the last
+1.5-2 years (last data 2024-Q3/Q1, 6-8 of the last 8 quarters missing) — the same "recency, not raw
+ratio" finding as DVN/SLB/BKR in energy. The other 17 tickers are clean and current through 2026-Q1/Q2.
+Recommended (not implemented, per this task's scope) as a candidate for a future `materials`/
+`materials_integrated`-style split.
+
+Non-regression across all 405 cached tickers (381 existing + 24 materials): only DD, IP, and MOS
+changed — exactly the confirmed fixes, nothing else. Full detail in `materials_scan_report.md`.
+
 ## 2026-07-26 — Backlog cleanup: net_debt_to_ebitda relative guard, GLW $100B capex typo, FIX period-tagging error
 
 Three independent, previously-logged items, each with a different root cause.

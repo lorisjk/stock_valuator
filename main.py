@@ -121,6 +121,16 @@ def add_derived_concepts(facts: pd.DataFrame) -> pd.DataFrame:
     core_earnings["concept"] = "CoreOperatingEarnings"
     facts = pd.concat([facts, core_earnings[["ticker", "end", "concept", "value"]]], ignore_index=True)
 
+    ni_ffo = facts[facts["concept"] == "NetIncomeLoss_TTM"][["ticker", "end", "value"]].rename(columns={"value": "ni"})
+    dep_ffo = facts[facts["concept"] == "DepreciationAndAmortization_TTM"][["ticker", "end", "value"]].rename(columns={"value": "dep"})
+    re_gains = facts[facts["concept"] == "GainLossOnSaleOfProperties_TTM"][["ticker", "end", "value"]].rename(columns={"value": "gains"})
+
+    ffo = ni_ffo.merge(dep_ffo, on=["ticker", "end"]).merge(re_gains, on=["ticker", "end"], how="left")
+    ffo["gains"] = ffo["gains"].fillna(0)
+    ffo["value"] = ffo["ni"] + ffo["dep"] - ffo["gains"]
+    ffo["concept"] = "FFO_TTM"
+    facts = pd.concat([facts, ffo[["ticker", "end", "concept", "value"]]], ignore_index=True)
+
     return facts
 
 
@@ -254,6 +264,9 @@ def calculate_all_metrics(facts: pd.DataFrame) -> dict:
     m["capex_intensity"] = calculate_ratio(
     facts, "Capex_TTM", "Revenue_TTM", "capex_intensity"
     )
+    m["ffo_margin"] = calculate_ratio(
+        facts, "FFO_TTM", "Revenue_TTM", "ffo_margin"
+    )
     return m
 
 
@@ -287,6 +300,7 @@ def build_metrics_long(metrics: dict) -> pd.DataFrame:
         (metrics["capex_intensity"], "capex_intensity", "capex_intensity"),
         (metrics["operating_leverage"], "operating_leverage", "operating_leverage"),
         (metrics["operating_income_growth"], "operating_income_yoy_growth", "operating_income_yoy_growth"),
+        (metrics["ffo_margin"], "ffo_margin", "ffo_margin"),
     ]
 
     rows = [to_long_format(df, value_col, name) for df, value_col, name in spec]
@@ -327,6 +341,7 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame) ->
         "TangibleEquity",
         "PPNR", 
         "CoreOperatingEarnings",
+        "FFO_TTM"
     ]
 
     wide = (
@@ -365,12 +380,13 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame) ->
     wide["p_tbv"] = wide["market_cap"] / wide["TangibleEquity"].where(wide["TangibleEquity"] > 0)
     wide["p_ppnr"] = wide["market_cap"] / wide["PPNR"].where(wide["PPNR"] > 0)
     wide["p_core_earnings"] = wide["market_cap"] / wide["CoreOperatingEarnings"].where(wide["CoreOperatingEarnings"] > 0)
+    wide["p_ffo"] = wide["market_cap"] / wide["FFO_TTM"].where(wide["FFO_TTM"] > 0)
 
-    value_cols = ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_ebitda", "ev_sales", "dividend_yield", "p_tbv", "p_ppnr", "p_core_earnings", "peg_ratio"]
+    value_cols = ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_ebitda", "ev_sales", "dividend_yield", "p_tbv", "p_ppnr", "p_core_earnings", "peg_ratio", "p_ffo"]
 
     MAX_MULTIPLE = 200
 
-    for col in ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_ebitda", "ev_sales", "p_tbv", "p_ppnr", "p_core_earnings"]:
+    for col in ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_ebitda", "ev_sales", "p_tbv", "p_ppnr", "p_core_earnings", "p_ffo"]:
         wide[col] = wide[col].where(wide[col] <= MAX_MULTIPLE)
 
     long = wide.melt(
@@ -549,8 +565,8 @@ def main():
 
     facts = add_as_concept(facts, metrics["fcf"], "fcf", "FCF_TTM")
     facts = add_as_concept(facts, metrics["ebitda"], "ebitda", "EBITDA_TTM")
-    
 
+    
     duplicates = facts[facts.duplicated(subset=["ticker", "concept", "end"], keep=False)]
     if not duplicates.empty:
         print("WARNUNG: Duplikate gefunden!")

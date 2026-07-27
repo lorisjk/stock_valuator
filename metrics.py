@@ -42,11 +42,32 @@ def apply_self_relative_scale_guard(
     return df[value_col].where(~too_small)
 
 
+GROWTH_PERIOD_TOLERANCE_DAYS_PER_4Q = 45
+
+
 def calculate_growth(df: pd.DataFrame, concept: str, periods: int, result_name: str, min_base_ratio: float = 0.33) -> pd.DataFrame:
     filtered_df = df[df["concept"] == concept].copy()
-    filtered_df = filtered_df.sort_values(["ticker", "end"])
+    filtered_df = filtered_df.sort_values(["ticker", "end"]).reset_index(drop=True)
+    filtered_df["end"] = filtered_df["end"].astype("datetime64[ns]")
 
-    filtered_df["prev_value"] = filtered_df.groupby("ticker")["value"].shift(periods)
+    target_offset = pd.to_timedelta(periods * 365.25 / 4, unit="D")
+    tolerance = pd.to_timedelta(periods * GROWTH_PERIOD_TOLERANCE_DAYS_PER_4Q / 4, unit="D")
+    filtered_df["target_date"] = filtered_df["end"] - target_offset
+
+    lookup = filtered_df[["ticker", "end", "value"]].rename(
+        columns={"end": "lookup_end", "value": "prev_value"}
+    )
+
+    matched = pd.merge_asof(
+        filtered_df.sort_values("target_date"),
+        lookup.sort_values("lookup_end"),
+        left_on="target_date",
+        right_on="lookup_end",
+        by="ticker",
+        direction="nearest",
+        tolerance=tolerance,
+    )
+    filtered_df = matched.sort_values(["ticker", "end"]).reset_index(drop=True)
 
     valid_base = (
         (filtered_df["prev_value"] > 0)
