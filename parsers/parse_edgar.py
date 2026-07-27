@@ -285,77 +285,62 @@ _KNOWN_BAD_FACTS = {
         {"end": "2023-12-31", "filed": "2026-02-18", "val": 23230000000},
         {"end": "2024-12-31", "filed": "2026-02-18", "val": 22710000000},
     ],
-    # GLW Q1-2011 capex reported as exactly $100,000,000,000 in the original 10-Q
-    # (filed 2011-04-29) — ~200x GLW's entire annual capex and larger than its 2011
-    # total revenue. A single, never-restated, directly-filed data-entry error with NO
-    # correcting filing anywhere. Unlike every other entry here, dropping it leaves no
-    # replacement (it is the only fact for 2011-03-31): masked, not corrected, because
-    # the true scale cannot be inferred with confidence.
     ("GLW", "PaymentsToAcquireProductiveAssets"): [
         {"end": "2011-03-31", "filed": "2011-04-29", "val": 100000000000},
     ],
-    # FIX (Comfort Systems USA) Q1-2026 10-Q (filed 2026-04-23) tagged its prior-year
-    # Q1-2025 comparatives with end=2025-12-31 instead of end=2025-03-31 — a period-tagging
-    # error, not a corporate event. The mislabeled values are exactly FIX's real Q1-2025
-    # figures (Revenues 1,831,286,000 == the 2025-03-31 quarterly Revenue), and the identical
-    # error hits every income-statement line filed that day. Because "later filed wins", the
-    # mislabeled FY value beat the correct 10-K value (filed 2026-02-19), collapsing FY2025
-    # Revenue to $1.83B (real: $9.1B) and FY2025 OperatingIncomeLoss to $209M (real: $1.31B),
-    # and pushing Q4-2025 negative (masked). Dropping the mislabeled facts lets the correct
-    # 10-K values win again.
+
     ("FIX", "Revenues"): [
         {"end": "2025-12-31", "filed": "2026-04-23", "val": 1831286000},
     ],
     ("FIX", "OperatingIncomeLoss"): [
         {"end": "2025-12-31", "filed": "2026-04-23", "val": 209098000},
     ],
-    # MOS (Mosaic) filer-side scale error: Q3-2025 and Q1-2026 10-Qs tagged
-    # CommonStockDividendsPerShareCashPaid at ~1,000,000x the real per-share value
-    # (220000 instead of $0.22). Confirmed by the surrounding quarters (Q1/Q2-2025
-    # both correctly tagged $0.22) and the FY2025 10-K annual total ($0.88 = 4 x
-    # $0.22). No competing correctly-scaled filed value exists for these exact
-    # periods, so per the "prefer masking over guessing" rule, dropped rather than
-    # corrected to the inferred $0.22 — masks Q3-2025 and Q1-2026, and removes the
-    # corrupted YTD fact that was silently breaking the Q4-2025 decumulation (it
-    # produced a large negative, already caught by the existing non-negative-flow
-    # guard, but for the wrong underlying reason).
     ("MOS", "CommonStockDividendsPerShareCashPaid"): [
         {"end": "2025-09-30", "filed": "2025-11-05", "val": 220000},
         {"end": "2025-09-30", "filed": "2025-11-05", "val": 440000},
         {"end": "2026-03-31", "filed": "2026-05-11", "val": 220000},
     ],
-    # DD (DuPont de Nemours) FY2020 annual Revenue was restated from $14,338M (filed
-    # 2022-02-11, reflecting the 2021 Nutrition & Biosciences/IFF divestiture only) down
-    # to $11,128M (filed 2023-02-15, additionally reflecting the Nov-2022 Mobility &
-    # Materials/Celanese divestiture). Q1-Q3 2020 quarterly facts were locked into 10-Qs
-    # filed in 2021 — before the M&M deal was even announced (Feb 2022) — so they remain
-    # at the pre-M&M scope ($3,670M+$3,289M+$3,629M = $10,588M). Decumulating Q4 against
-    # the smaller, M&M-excluded annual produced an implausibly tiny $540M (vs ~$3.2-3.7B/
-    # qtr neighbors) — the same "implausibly small positive" bug class as OXY/OxyChem.
-    # Dropping the mismatched-scope annual fact recovers Q4-2020 to $3,750M, which
-    # independently matches DD's own directly-filed Q4-2020 value under the N&B-excluded-
-    # only scope (Revenues tag, 8-K filed 2021-06-03: $3,750M) exactly.
     ("DD", "RevenueFromContractWithCustomerExcludingAssessedTax"): [
         {"end": "2020-12-31", "filed": "2023-02-15", "val": 11128000000},
     ],
-    # IP (International Paper) two separate scope-decrease events, same "implausibly small
-    # positive" Q4 bug:
-    # (1) FY2019/FY2020 Revenue retroactively restated smaller starting with the FY2021
-    #     10-K (filed 2022-02-18), reflecting the Oct-2021 Sylvamo (printing papers) spinoff
-    #     presented as discontinued operations. Q1-Q3 of both years were locked into 10-Qs
-    #     filed in 2019/2020 — before the spinoff existed — so they remain at the
-    #     Sylvamo-included scope, producing implausibly tiny decumulated Q4s ($1,439M vs
-    #     ~$5.6B/qtr neighbors for 2019; $2,224M vs ~$5.0-5.4B/qtr for 2020).
-    # (2) FY2023 Revenue retroactively restated smaller starting with the FY2025 10-K (filed
-    #     2026-02-27), reflecting the Global Cellulose Fibers business sale (announced
-    #     2025-08-21, completed 2026-01-23 to American Industrial Partners) presented as
-    #     discontinued operations. Same mechanism, same symptom ($1,718M vs ~$4.6-5.0B/qtr
-    #     neighbors).
     ("IP", "RevenueFromContractWithCustomerExcludingAssessedTax"): [
         {"end": "2019-12-31", "filed": "2022-02-18", "val": 18317000000},
         {"end": "2020-12-31", "filed": "2022-02-18", "val": 17565000000},
         {"end": "2020-12-31", "filed": "2023-02-17", "val": 17565000000},
         {"end": "2023-12-31", "filed": "2026-02-27", "val": 16033000000},
+    ],
+    ("EQR", "Revenues"): [
+        {"end": "2009-12-31", "filed": "2010-09-14", "val": 1921047000},
+        {"end": "2009-12-31", "filed": "2012-02-24", "val": 1640224000},
+        {"end": "2009-12-31", "filed": "2012-06-13", "val": 1620815000},
+        {"end": "2010-12-31", "filed": "2012-06-13", "val": 1754244000},
+        {"end": "2010-12-31", "filed": "2013-02-21", "val": 1674709000},
+        {"end": "2010-12-31", "filed": "2013-06-17", "val": 1456257000},
+    ],
+    ("KIM", "Revenues"): [
+        {"end": "2012-12-31", "filed": "2014-02-26", "val": 874403000},
+        {"end": "2012-12-31", "filed": "2015-02-27", "val": 793373000},
+    ],
+    ("UDR", "Revenues"): [
+        {"end": "2010-12-31", "filed": "2011-08-05", "val": 617789000},
+        {"end": "2010-12-31", "filed": "2012-02-27", "val": 586586000},
+        {"end": "2010-12-31", "filed": "2012-05-03", "val": 525052000},
+        {"end": "2010-12-31", "filed": "2013-02-27", "val": 525052000},
+    ],
+    ("WELL", "Revenues"): [
+        {"end": "2010-12-31", "filed": "2011-05-10", "val": 672638000},
+        {"end": "2010-12-31", "filed": "2011-08-09", "val": 663763000},
+        {"end": "2010-12-31", "filed": "2012-02-17", "val": 657297000},
+        {"end": "2010-12-31", "filed": "2012-05-10", "val": 635378000},
+        {"end": "2010-12-31", "filed": "2012-08-06", "val": 618821000},
+        {"end": "2010-12-31", "filed": "2012-11-07", "val": 609417000},
+        {"end": "2010-12-31", "filed": "2013-02-26", "val": 578571000},
+        {"end": "2010-12-31", "filed": "2013-05-07", "val": 578040000},
+        {"end": "2010-12-31", "filed": "2013-08-06", "val": 575700000},
+        {"end": "2010-12-31", "filed": "2013-11-05", "val": 569371000},
+    ],
+    ("AMT", "Revenues"): [
+        {"end": "2022-12-31", "filed": "2025-02-25", "val": 9645400000},
     ],
 }
 

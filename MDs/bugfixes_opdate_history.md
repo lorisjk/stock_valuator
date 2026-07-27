@@ -6,6 +6,105 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-07-27 — REIT tag coverage scan (27 tickers): Revenue lease/contract-revenue split (11 tickers), LongTermDebt tag drift (7 tickers), 5 more decumulation "implausibly-small-Q4" cases
+
+Twelfth stock-type profile batch, O + 26 new. Ticker list verified against XLRE's live holdings
+(which track the S&P 500 Real Estate sector exactly) — WPC, NNN, and CUBE confirmed as S&P
+MidCap 400, not S&P 500, and dropped. Three independent, previously-uncataloged bug classes found
+and fixed, none named in the task brief.
+
+### Revenue: lease income vs. contract-with-customer income (11 tickers)
+
+`RevenueFromContractWithCustomerExcludingAssessedTax` (first in the base `Revenue` fallback list)
+is structurally the wrong first choice for real estate: rental income is **lease** revenue under
+ASC 842, not **contract-with-customer** revenue under ASC 606. For any REIT that separately tags a
+small non-lease revenue stream under this element, the fallback silently locked onto that tiny
+sliver instead of the correct, much larger total (`Revenues`) — confirmed for **EXR, AMT, CCI,
+SBAC, AVB, ESS, INVH, UDR, DOC** (ratios of the correct-to-wrong value ranged 3.8x to 540x; AVB's
+own case: RCWC showed $7.7M vs. real $3.04B FY2025 revenue). Reordered `PROFILE_CONCEPT_OVERRIDES
+["reit"]["Revenue"]` to put `Revenues` first — a profile-wide fix since the ASC 842/606 distinction
+is a real-estate-sector-wide accounting fact, not a filer-specific quirk.
+
+**CPT (Camden Property Trust)** hit an even stealthier variant: CPT's own `Revenues` tag doesn't
+exist at all, so the RCWC-first bug wasn't visible to the RCWC-vs-Revenues comparison method used
+for the other 9 (nothing to compare against). CPT's own RCWC tag was itself retroactively restated
+from real values (FY2018: $954.5M) down to a tiny sliver (FY2018: $7.2M) once CPT adopted ASC 842
+in 2019 — its real revenue moved to a dedicated `OperatingLeaseLeaseIncome` tag entirely outside the
+standard Revenue candidate list. Added a CPT-specific override combining `OperatingLeaseLeaseIncome`
+(2017-2026) with `RealEstateRevenueNet` (2009-2018, CPT's pre-ASC-842 tag) for full correct coverage.
+
+### LongTermDebt: tag drift and abandonment across REIT sub-types (7 tickers + profile-wide)
+
+The `reit` profile's `LongTermDebt` list (`NotesPayable`, `LongTermDebtNoncurrent`) was too narrow —
+16 of 27 tickers showed below-50% coverage, several at literally 0%. Added the base `LongTermDebt`
+tag profile-wide (fixes 12 tickers directly: AMT, BXP, CCI, DOC, EQIX, ESS, INVH, PLD, SPG, UDR,
+VTR, WELL, CPT — later 3 of these needed a further ticker-specific fix, see below). Confirmed safe
+via the same scale-sanity discipline that caught O's `OtherNotesPayable` error: cross-checked every
+ticker's resolved value against every plausible alternative debt-balance tag before trusting it.
+
+Five tickers needed ticker-specific overrides, each independently verified against known company
+scale before use:
+- **DLR, BXP**: base `LongTermDebt` tag was abandoned early (DLR stops 2012, BXP stops 2021) in
+  favor of `SeniorNotes` (DLR) or a sum of `SecuredDebt` + `SeniorNotes` (BXP, since BXP tags these
+  as two separate components that must be added — neither alone is total debt).
+- **AMT, CCI**: base `LongTermDebt` tag is sparse/abandoned; `LongTermDebtAndCapitalLeaseObligations`
+  has full history at the correct scale for both.
+- **EXR**: `NotesPayable` (already first-priority) is real but abandoned after 2021 at ~$5.4B, well
+  below EXR's current ~$9.4B scale; `SeniorNotes` is the correct, currently-used tag.
+- **FRT**: `NotesPayable` is not total debt at all for this ticker — a confirmed small sub-component
+  (~$1.0-1.4B vs. real ~$4.3-5.0B) that happened to have near-complete quarterly coverage, silently
+  winning every interim quarter. FRT's correct tags (`LongTermDebt`/`DebtAndCapitalLeaseObligations`)
+  are annual-only (no quarterly facts exist at all for this ticker) — since `NotesPayable` is
+  confirmed wrong rather than merely incomplete, dropped it entirely per the "mask rather than show
+  a plausible-but-wrong value" rule; FRT's `LongTermDebt` is now correct at each fiscal year-end and
+  empty for interim quarters (a real reporting-granularity limit, not a bug).
+- DLR's remaining ~48% coverage (a genuine 2013-2018 gap where neither `SeniorNotes` nor the base
+  tag has any data) is a confirmed, unfixable historical gap, not a further tag issue.
+
+### Five more "implausibly-small-Q4" decumulation cases (EQR, KIM, UDR, WELL, AMT)
+
+Found via a systematic V-shape-dip scan across the whole batch's Revenue series (a quarter
+implausibly low relative to both neighbors) — the same "implausibly small positive" bug class as
+OXY/DD/IP, each an independent real corporate event, none previously known to this project:
+- **EQR**: FY2009 and FY2010 both restated down across multiple filings, reflecting EQR's large
+  2009-2011 apartment-portfolio disposition program. Recovered both years to their original,
+  scope-consistent annual values (Q4-2009: $141.5M → $464.4M; Q4-2010: $137.3M → $454.3M).
+- **KIM**: FY2012 restated down across two filings (Kimco's ongoing shopping-center disposition
+  program). Recovered Q4-2012 from $128.9M to $257.9M.
+- **UDR**: FY2010 restated down across three filings. Recovered Q4-2010 from $84.2M to $205.7M.
+- **WELL** (then Health Care REIT): FY2010 restated down across an unusually long chain of nine
+  sequential filings (2011-2013), reflecting WELL's active joint-venture deconsolidation program of
+  that era. Recovered Q4-2010 from $103.6M to $214.8M (independently matching a by-hand estimate of
+  ~$212.5M from the original annual figure).
+- **AMT**: FY2022 restated down in the FY2024 10-K, reflecting AMT's 2025 divestiture of its India
+  tower business. Recovered Q4-2022 from $1,639M to $2,705M.
+
+### Other findings (investigated, no fix applied)
+
+- **Towers/data-centers structural question (Step 1)**: checked whether D&A intensity or FFO margin
+  look structurally different for AMT/CCI/SBAC/EQIX/DLR vs. traditional property REITs. D&A
+  intensity is actually comparable (~22-36% both groups); FFO margins for towers/data-centers run
+  slightly *lower*, not inflated — arguing against the concern that equipment D&A overstates FFO
+  for these names. CCI's FFO briefly went negative in late 2024, confirmed as a real event (Fiber/
+  Small Cells divestiture impairment), not a data issue. Reported as a nuanced, not-clearly-conclusive
+  finding; no reassignment made.
+- **`GainLossOnSaleOfProperties`**: confirmed structurally absent for towers/data-centers (AMT, CCI,
+  EQIX, SBAC — consistent with a business model that rarely sells individual properties). Searched
+  exhaustively for HST, SPG, VTR, WY; found only sparse, abandoned one-off tag variants — confirmed
+  unfixable, not a coverage bug.
+- **MAA's 2014-Q2 through 2017-Q4 Revenue gap** (1,552 days): confirmed no standard `us-gaap` tag
+  captures this window at all; likely a company-specific XBRL extension tag from MAA's 2013 Colonial
+  Properties merger integration, outside what this pipeline can access. Confirmed unfixable.
+- **DLR, SBAC**: no per-share `DividendsPerShare` tag exists at all (same pattern as CE in materials)
+  — confirmed unfixable tag gaps, not real non-payer status.
+- **Non-pure-play REITs (WELL, VTR, HST)**: FFO margins are stable and plausible (28-31% recent
+  range for all three) post-fixes; no distortion found from mixed operating-business economics.
+
+Non-regression: full before/after across all 432 cached tickers (both periods) — changes confined
+entirely to the 25 REIT tickers touched by this task's fixes (O itself, the pre-existing reference
+ticker, shows **zero** changes, confirming no previously-shipped value was disturbed). Full detail
+in `reit_scan_report.md`.
+
 ## 2026-07-27 — New bug class: positional vs. date-based period alignment in `calculate_growth` (project-wide)
 
 A structurally different bug from everything logged above — not a bad tag, not a scope mismatch, not

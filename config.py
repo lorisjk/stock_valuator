@@ -456,7 +456,13 @@ TICKER_PROFILES = {
     "PKG": "materials", "IP": "materials_integrated", "AVY": "materials_integrated", "BALL": "materials_integrated",
     "AMCR": "materials", "CF": "materials", "MOS": "materials",
 
-    "O": "reit"
+    "O": "reit",
+    "PLD": "reit", "PSA": "reit", "EXR": "reit", "DLR": "reit", "EQIX": "reit",
+    "AMT": "reit", "CCI": "reit", "SBAC": "reit", "SPG": "reit", "REG": "reit",
+    "FRT": "reit", "KIM": "reit", "AVB": "reit", "EQR": "reit", "MAA": "reit",
+    "ESS": "reit", "INVH": "reit", "UDR": "reit", "CPT": "reit", "WELL": "reit",
+    "VTR": "reit", "DOC": "reit", "BXP": "reit", "HST": "reit", "WY": "reit",
+    "IRM": "reit",
 }
 
 PROFILE_HIDDEN = {
@@ -1191,6 +1197,17 @@ PROFILE_CONCEPT_OVERRIDES = {
         },
     },
     "reit": {
+        "Revenue": {
+            "tags": [
+                "Revenues",
+                "RevenueFromContractWithCustomerExcludingAssessedTax",
+                "SalesRevenueNet",
+                "SalesRevenueGoodsNet",
+                "RevenueFromContractWithCustomerIncludingAssessedTax",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
         "GainLossOnSaleOfProperties": {
             "tags": [
                 "GainLossOnSaleOfProperties",
@@ -1204,6 +1221,7 @@ PROFILE_CONCEPT_OVERRIDES = {
         "LongTermDebt": {
             "tags": [
                 "NotesPayable",
+                "LongTermDebt",
                 "LongTermDebtNoncurrent",
             ],
             "point_in_time": True,
@@ -1281,6 +1299,63 @@ TICKER_CONCEPT_OVERRIDES = {
     "NVR": {
         "Inventory": {
             "tags": ["InventoryRealEstateLandAndLandDevelopmentCosts"],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+    },
+    "DLR": {
+        "LongTermDebt": {
+            "tags": ["NotesPayable", "SeniorNotes", "LongTermDebt", "LongTermDebtNoncurrent"],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+    },
+    "HST": {
+        "LongTermDebt": {
+            "tags": ["NotesPayable", "DebtAndCapitalLeaseObligations", "LongTermDebtNoncurrent"],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+    },
+    "BXP": {
+        "LongTermDebt": {
+            "tags": ["SecuredDebt", "SeniorNotes"],
+            "point_in_time": True,
+            "mode": "sum",
+        },
+    },
+    "AMT": {
+        "LongTermDebt": {
+            "tags": ["NotesPayable", "LongTermDebtAndCapitalLeaseObligations", "LongTermDebtNoncurrent"],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+    },
+    "CCI": {
+        "LongTermDebt": {
+            "tags": ["NotesPayable", "LongTermDebtAndCapitalLeaseObligations", "LongTermDebtNoncurrent"],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+    },
+    "EXR": {
+        "LongTermDebt": {
+            "tags": ["SeniorNotes", "NotesPayable", "LongTermDebtNoncurrent"],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+    },
+    "CPT": {
+        "Revenue": {
+            "tags": ["OperatingLeaseLeaseIncome", "RealEstateRevenueNet", "Revenues",
+                     "RevenueFromContractWithCustomerExcludingAssessedTax"],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+    },
+    "FRT": {
+        "LongTermDebt": {
+            "tags": ["DebtAndCapitalLeaseObligations", "LongTermDebt", "LongTermDebtNoncurrent"],
             "point_in_time": True,
             "mode": "fallback",
         },
