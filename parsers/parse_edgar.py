@@ -113,11 +113,20 @@ def extract_merged_values(
     ]
 
 
+def _values_for_tag(us_gaap_data: dict, tag: str, period: str, is_point_in_time: bool) -> list[dict]:
+    concept_data = us_gaap_data.get(tag)
+    if concept_data is None:
+        return []
+    extractor = extract_annual_values if period == "annual" else extract_quarterly_values
+    return extractor(concept_data, is_point_in_time=is_point_in_time)
+
+
 def extract_priority_merge(
     us_gaap_data: dict,
     sources: list[dict],
     period: str,
     is_point_in_time: bool,
+    non_negative: bool = False,
 ) -> list[dict]:
     merged = {}
     for source in sources:
@@ -132,8 +141,17 @@ def extract_priority_merge(
             values = extract_summed_values(
                 us_gaap_data, source["tags"], is_point_in_time=is_point_in_time, period=period
             )
+            required = source.get("require")
+            if required:
+                required_ends = {
+                    v["end"]
+                    for v in _values_for_tag(us_gaap_data, required, period, is_point_in_time)
+                }
+                values = [v for v in values if v["end"] in required_ends]
         else:
             raise ValueError(f"unknown source type: {source['type']}")
+        if non_negative:
+            values = [v for v in values if v["value"] is None or v["value"] >= 0]
 
         for v in values:
             if v["end"] not in merged:
@@ -152,6 +170,7 @@ def extract_with_mode(us_gaap_data: dict, cfg: dict, period: str) -> list[dict]:
             cfg["sources"],
             period=period,
             is_point_in_time=is_point_in_time,
+            non_negative=cfg.get("non_negative", False),
         )
 
     if mode == "fallback_then_sum":
@@ -392,6 +411,23 @@ def _mask_negative_flow_values(key: str, values: list[dict], period: str) -> lis
         return values
     return [v for v in values if v["value"] is None or v["value"] >= 0]
 
+
+# Balance-sheet (point_in_time) concepts that can never legitimately be negative.
+# Deliberately NOT the same set as the flow concepts above: those are decumulated, so their
+# guard only applies to quarterly period mode. A balance-sheet value is a level, not a
+# difference, so a negative reading is invalid in either period mode.
+# Note this set must stay narrow — StockholdersEquity, for instance, IS legitimately negative
+# for real companies (confirmed for DASH/ABNB pre-IPO and SBAC), so it must never be added here.
+_NON_NEGATIVE_BALANCE_CONCEPTS = {
+    "LongTermDebt",
+}
+
+
+def _mask_negative_balance_values(key: str, values: list[dict]) -> list[dict]:
+    if key not in _NON_NEGATIVE_BALANCE_CONCEPTS:
+        return values
+    return [v for v in values if v["value"] is None or v["value"] >= 0]
+
 _KNOWN_POSITIVE_OUTLIERS = {
     ("ED", "Capex"): {"2016-12-31", "2017-12-31", "2018-12-31", "2019-12-31"},
 }
@@ -444,6 +480,7 @@ def build_dataframe(
             values = _normalize_scale_outliers(values)
 
         values = _mask_negative_flow_values(key, values, period)
+        values = _mask_negative_balance_values(key, values)
         values = _mask_known_positive_outliers(ticker, key, values, period)
         values = _mask_known_scope_mismatch_outliers(ticker, key, values, period)
 

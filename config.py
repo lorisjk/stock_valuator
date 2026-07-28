@@ -1,4 +1,4 @@
-TICKERS = ["NOW"]
+TICKERS = ["EBAY"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
@@ -84,15 +84,21 @@ CONCEPT_CANDIDATES = {
             {"type": "tag", "tag": "LongTermNotesAndLoans"},
             {"type": "tag", "tag": "ConvertibleLongTermNotesPayable"},
             {"type": "tag", "tag": "ConvertibleDebtNoncurrent"},
-            {"type": "tag", "tag": "ConvertibleDebtCurrent"},
-            {"type": "tag", "tag": "ConvertibleNotesPayableCurrent"},
-            {"type": "sum", "tags": ["LongTermDebtNoncurrent", "LongTermDebtCurrent", "NotesPayableCurrent"]},
+            {
+                "type": "sum",
+                "tags": ["LongTermDebtNoncurrent", "LongTermDebtCurrent", "NotesPayableCurrent"],
+                "require": "LongTermDebtNoncurrent",
+            },
             {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligations"},
             {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities"},
             {"type": "tag", "tag": "UnsecuredLongTermDebt"},
+            # --- current-portion-only tags: last resort, after every complete-debt source ---
+            {"type": "tag", "tag": "ConvertibleDebtCurrent"},
+            {"type": "tag", "tag": "ConvertibleNotesPayableCurrent"},
         ],
         "point_in_time": True,
         "mode": "priority_merge",
+        "non_negative": True,
     },
 
     "CashAndEquivalents": {
@@ -463,6 +469,10 @@ TICKER_PROFILES = {
     "ESS": "reit", "INVH": "reit", "UDR": "reit", "CPT": "reit", "WELL": "reit",
     "VTR": "reit", "DOC": "reit", "BXP": "reit", "HST": "reit", "WY": "reit",
     "IRM": "reit",
+
+    "EBAY": "marketplace",
+    "BKNG": "marketplace", "EXPE": "marketplace",
+    "DASH": "marketplace", "ABNB": "marketplace",
 }
 
 PROFILE_HIDDEN = {
@@ -499,7 +509,7 @@ PROFILE_HIDDEN = {
         "rd_intensity",
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
         "capex_intensity","operating_leverage","operating_income_yoy_growth",
-        "ffo_margin",
+        "ffo_margin", "p_ffo",
     },
     "insurance_pc":{
         "pfcf_ttm", 
@@ -520,7 +530,7 @@ PROFILE_HIDDEN = {
         "p_ppnr",
         "rd_intensity",
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
-        "capex_intensity","operating_leverage","operating_income_yoy_growth", "ffo_margin",
+        "capex_intensity","operating_leverage","operating_income_yoy_growth", "ffo_margin", "p_ffo",
     },
     "insurance_life":{
         "pfcf_ttm", 
@@ -541,22 +551,22 @@ PROFILE_HIDDEN = {
         "p_ppnr",
         "rd_intensity",
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
-        "capex_intensity","operating_leverage","operating_income_yoy_growth", "ffo_margin",
+        "capex_intensity","operating_leverage","operating_income_yoy_growth", "ffo_margin", "p_ffo",
     },
     "retail": {
         "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
         "equity_to_assets", "provision_ratio", "p_ppnr", "combined_ratio",
         "loss_ratio", "expense_ratio", "net_investment_yield",
         "reserve_growth", "p_core_earnings", "rule_of_40","operating_margin",  
-        "net_debt_to_ebitda", "payout_ratio", "capex_intensity","operating_leverage","operating_income_yoy_growth", 
-        "ffo_margin",
+        "net_debt_to_ebitda", "payout_ratio", "capex_intensity","operating_leverage","operating_income_yoy_growth",
+        "ffo_margin", "p_ffo",
     },
      "consumer_staples": {
         "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
         "equity_to_assets", "provision_ratio", "p_ppnr", "combined_ratio",
         "loss_ratio", "expense_ratio", "net_investment_yield",
         "reserve_growth", "p_core_earnings", "rd_intensity",
-        "rule_of_40", "capex_intensity","operating_leverage","operating_income_yoy_growth", "ffo_margin",
+        "rule_of_40", "capex_intensity","operating_leverage","operating_income_yoy_growth", "ffo_margin", "p_ffo",
      },
 
     "pharma_medtech": {
@@ -568,7 +578,7 @@ PROFILE_HIDDEN = {
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
         "operating_margin",
         "net_debt_to_ebitda", "rd_intensity",
-        "ev_ebitda", "capex_intensity","operating_leverage","operating_income_yoy_growth", "ffo_margin",
+        "ev_ebitda", "capex_intensity","operating_leverage","operating_income_yoy_growth", "ffo_margin", "p_ffo",
 
     },
 
@@ -579,7 +589,7 @@ PROFILE_HIDDEN = {
         "reserve_growth", "p_core_earnings",
         "rule_of_40","rd_intensity",
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
-        "rd_intensity", "capex_intensity","operating_leverage","operating_income_yoy_growth", "ffo_margin",
+        "rd_intensity", "capex_intensity","operating_leverage","operating_income_yoy_growth", "ffo_margin", "p_ffo",
     },
      "industrials": {
         "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
@@ -588,7 +598,7 @@ PROFILE_HIDDEN = {
         "reserve_growth", "p_core_earnings",
         "rule_of_40",
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
-        "rd_intensity", "ffo_margin",
+        "rd_intensity", "ffo_margin", "p_ffo",
     },
     "media": {
         "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
@@ -598,7 +608,7 @@ PROFILE_HIDDEN = {
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
         "rd_intensity",
         "capex_intensity", "operating_leverage", "operating_income_yoy_growth",
-        "rule_of_40", "ffo_margin",
+        "rule_of_40", "ffo_margin", "p_ffo",
     },
 
     "homebuilder": {
@@ -608,7 +618,7 @@ PROFILE_HIDDEN = {
         "reserve_growth", "p_core_earnings",
         "rd_intensity",
         "capex_intensity", "operating_leverage", "operating_income_yoy_growth", "rule_of_40",
-        "operating_margin", "net_debt_to_ebitda", "ev_ebitda", "ffo_margin",
+        "operating_margin", "net_debt_to_ebitda", "ev_ebitda", "ffo_margin", "p_ffo",
     },
         "leisure": {
         "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
@@ -618,7 +628,7 @@ PROFILE_HIDDEN = {
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
         "rd_intensity",
         "capex_intensity", "operating_leverage", "operating_income_yoy_growth",
-        "rule_of_40", "ffo_margin",
+        "rule_of_40", "ffo_margin", "p_ffo",
     },
         "utilities": {
         "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
@@ -628,7 +638,7 @@ PROFILE_HIDDEN = {
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
         "rd_intensity",
         "operating_leverage", "operating_income_yoy_growth",
-        "rule_of_40", "pfcf_ratio", "ffo_margin",
+        "rule_of_40", "pfcf_ratio", "ffo_margin", "p_ffo",
     },
         "telecom_cable": {
         "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
@@ -638,7 +648,7 @@ PROFILE_HIDDEN = {
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
         "rd_intensity",
         "operating_leverage", "operating_income_yoy_growth",
-        "rule_of_40", "ffo_margin",
+        "rule_of_40", "ffo_margin", "p_ffo",
     },
         "railroads": {
         "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
@@ -647,7 +657,7 @@ PROFILE_HIDDEN = {
         "reserve_growth", "p_core_earnings",
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
         "rd_intensity",
-        "operating_leverage", "operating_income_yoy_growth", "rule_of_40", "ffo_margin",
+        "operating_leverage", "operating_income_yoy_growth", "rule_of_40", "ffo_margin", "p_ffo",
     },
         "energy": {
         "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
@@ -657,7 +667,7 @@ PROFILE_HIDDEN = {
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
         "rd_intensity",
         "operating_leverage", "operating_income_yoy_growth",
-        "rule_of_40", "ffo_margin",
+        "rule_of_40", "ffo_margin", "p_ffo",
     },
         "energy_integrated": {
         "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
@@ -668,7 +678,7 @@ PROFILE_HIDDEN = {
         "rd_intensity",
         "operating_leverage", "operating_income_yoy_growth",
         "operating_margin", "net_debt_to_ebitda", "ev_ebitda",
-        "rule_of_40", "ffo_margin",
+        "rule_of_40", "ffo_margin", "p_ffo",
     },
         "materials": {
         "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
@@ -677,7 +687,7 @@ PROFILE_HIDDEN = {
         "reserve_growth", "p_core_earnings",
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
         "rd_intensity",
-        "operating_leverage", "operating_income_yoy_growth", "rule_of_40", "ffo_margin",
+        "operating_leverage", "operating_income_yoy_growth", "rule_of_40", "ffo_margin", "p_ffo",
     },
         "materials_integrated": {
         "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
@@ -687,7 +697,7 @@ PROFILE_HIDDEN = {
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
         "rd_intensity",
         "operating_leverage", "operating_income_yoy_growth", "rule_of_40",
-        "operating_margin", "net_debt_to_ebitda", "ev_ebitda", "ffo_margin",
+        "operating_margin", "net_debt_to_ebitda", "ev_ebitda", "ffo_margin", "p_ffo",
     },
         "reit": {
         "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
@@ -704,6 +714,17 @@ PROFILE_HIDDEN = {
         "operating_margin", "net_debt_to_ebitda", "ev_ebitda",
         "pfcf_ratio",   
         "fcf_margin",
+    },
+        "marketplace": {
+        "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
+        "equity_to_assets", "provision_ratio", "p_ppnr", "combined_ratio",
+        "loss_ratio", "expense_ratio", "net_investment_yield",
+        "reserve_growth", "p_core_earnings",
+        "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
+        "rd_intensity",
+        "operating_leverage", "operating_income_yoy_growth",
+        "ffo_margin", "p_ffo", "dividend_yield",
+        "payout_ratio",
     },
 }
 
@@ -1388,6 +1409,41 @@ TICKER_CONCEPT_OVERRIDES = {
             "mode": "fallback",
         },
     },
+    "EBAY": {
+        "LongTermDebt": {
+            "tags": [
+                "LongTermDebtAndCapitalLeaseObligations",
+                "LongTermDebtNoncurrent",
+            ],
+            "point_in_time": True,
+            "mode": "fallback"
+        }
+    },
+    "BKNG": {
+        "LongTermDebt": {
+            "sources": [
+                {"type": "tag", "tag": "LongTermDebt"},
+                {"type": "sum", "tags": ["LongTermDebtNoncurrent", "LongTermDebtCurrent"]},
+            ],
+            "point_in_time": True,
+            "mode": "priority_merge",
+        }
+    },
+    "ABNB": {
+        "DepreciationAndAmortization": {
+            "sources": [
+                {"type": "tag", "tag": "DepreciationDepletionAndAmortization"},
+                {"type": "tag", "tag": "DepreciationAndAmortization"},
+                {"type": "tag", "tag": "DepreciationAmortizationAndAccretionNet"},
+                {"type": "sum", "tags": ["Depreciation", "AmortizationOfIntangibleAssets"]},
+                {"type": "tag", "tag": "AdjustmentForAmortization"},
+                {"type": "tag", "tag": "FiniteLivedIntangibleAssetsAmortizationExpense"},
+                {"type": "tag", "tag": "OtherDepreciationAndAmortization"},
+            ],
+            "point_in_time": False,
+            "mode": "priority_merge",
+        }
+    },
 }
 
 
@@ -1422,3 +1478,4 @@ def get_concept_candidates(ticker: str) -> dict:
 CACHE_DIR = "cache"
 DATA_DIR = "data"
 FIGURE_DIR = "figures"
+

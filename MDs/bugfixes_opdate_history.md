@@ -6,6 +6,154 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-07-28 — Base `LongTermDebt` priority fix: current-portion contamination corrected across 58 tickers, negative-value guard added
+
+Implements the fix for the exposure scoped in the previous entry. **The literal plan ("move the
+three vulnerable sources to the end of the priority list") was tested against real data first and
+rejected — it caused regressions on ~30 tickers.** The three sources are not equivalent.
+
+### Why the blanket reorder was wrong
+
+Demoting all three below the combined-debt tags changed 782 values across 73 tickers, but **35 of
+those tickers had values go DOWN** — which a fix that only promotes complete-debt tags should never
+do. Root cause: the `sum(LongTermDebtNoncurrent, LongTermDebtCurrent, NotesPayableCurrent)` source
+is only broken when `LongTermDebtNoncurrent` is *absent*. When it is present the sum equals
+noncurrent + current maturities = total debt, which is **more** complete than
+`LongTermDebtAndCapitalLeaseObligations` (noncurrent-only). Demoting it therefore understated debt
+for CARR, ALB, AVGO, XOM and ~30 others. The two `Convertible*Current` tags are different — they are
+current-portion-only in every period, so demoting *those* is unambiguously right.
+
+### What shipped instead
+
+1. `ConvertibleDebtCurrent` and `ConvertibleNotesPayableCurrent` moved to the literal end of the list
+   (this is the mechanism that hit BKNG).
+2. The sum **kept its original priority** but gained a new opt-in `"require"` key naming its principal
+   component: it now only contributes for periods where `LongTermDebtNoncurrent` actually has data,
+   so degraded periods fall through to the combined-debt tags instead of being claimed by a partial
+   sum. Implemented in `extract_priority_merge`; affects no other concept.
+
+Non-zero decreases went from ~30 tickers to **zero**.
+
+**Second defect found along the way:** the old sum also **double-counted** when a filer tagged the
+same amount under two component tags — OMC 2015-06-30 had `LongTermDebtCurrent` and
+`NotesPayableCurrent` both at 1,005,100,000, summed to 2,010,200,000 (~2.8x its real debt).
+
+### Negative-value guard
+
+Traced to raw facts first: the negatives are **filer sign errors in the source XBRL**, not a
+pipeline subtraction. DD and NSC are negative on the *top-priority* tag (outside the positions the
+original scan examined), with a correctly-signed value at the same date and near-identical magnitude
+(DD: −12,635,000,000 vs +12,624,000,000). So the guard skips negative readings **per source during
+the merge** (opt-in `"non_negative": True` on the concept) rather than masking the final value —
+recovering 8 of 9 negatives from a real same-date tag instead of discarding them. FE, GNRC, DD, NSC
+all corrected; only **ETR** is masked, because every one of its sources is negative at that date and
+there is nothing valid to promote. A narrow post-resolution `_mask_negative_balance_values` net was
+added as defence-in-depth, kept separate from the flow-concept guard (balance levels are invalid
+negative in either period mode) — its concept set must stay narrow, since `StockholdersEquity` *is*
+legitimately negative for real companies.
+
+### Impact
+
+424 values corrected upward across 41 tickers; 124 contaminated values masked; **0 non-zero
+decreases, 0 values invented, 0 negatives remaining** across all 436 cached tickers. 58 tickers
+affected, 378 completely untouched. Derived metrics (`debt_to_equity`, `net_debt`,
+`net_debt_to_ebitda`) changed for zero tickers beyond those whose `LongTermDebt` changed. The
+103-ticker flagged list was regenerated from scratch and reproduced exactly; 54 changed, 49 were
+unchanged as predicted. Four tickers changed from *outside* the flagged list (BALL, NSC, INTU, RMD) —
+each investigated and confirmed a correct outcome, showing the original scan **undercounted**: its
+neighbour-ratio heuristic is blind when consecutive quarters are both contaminated (BALL) or when the
+bad value is close in scale to its neighbours (INTU, RMD).
+
+---
+
+## 2026-07-28 — p_ffo hidden project-wide (18 profiles) + LongTermDebtCurrent base-list exposure scoped to 103 tickers (diagnosis only)
+
+Follow-up to the marketplace scan's two flagged findings.
+
+**Part A, fixed:** `p_ffo` was only hidden for `standard` and `marketplace` in `PROFILE_HIDDEN`,
+while `ffo_margin` was correctly hidden everywhere non-`reit`. Re-grepping found the real count
+was 18 profiles missing it, not 17 as the marketplace report said — that report's own scan missed
+`insurance_pc`/`insurance_life` because they're declared as `"insurance_pc":{` (no space), which
+didn't match the grep pattern used at the time. Added `p_ffo` to all 18. Non-regression: verified
+via a reconstructed before/after diff (stripping `p_ffo` from every profile and comparing) that
+zero other metrics changed visibility anywhere.
+
+**Part B, diagnosis only, no fix:** Scanned all 365 cached tickers that resolve `LongTermDebt` via
+the base `CONCEPT_CANDIDATES` list (i.e. excluding the 5 profiles and 9 tickers that already
+override it) for the same signature that caused BKNG's bug — a current-portion-only source
+(`ConvertibleDebtCurrent`, `ConvertibleNotesPayableCurrent`, or the `LongTermDebtNoncurrent`+
+`LongTermDebtCurrent`+`NotesPayableCurrent` sum) winning a period with an implausibly small value.
+**103 tickers across 14 profiles hit it at least once** (374 quarter-level hits total). For 37 of
+those, direct same-date proof exists: a much larger value sits at a lower-priority tag
+(`LongTermDebtAndCapitalLeaseObligations` or similar) for the exact same quarter, unused — the
+same smoking-gun pattern as BKNG, just automatically confirmable rather than needing a manual
+raw-fact pull. 3 more (`ATO`, `ETR`, `EXC`) show the same isolated-stark-dip-with-consistent-
+neighbors pattern without an available shadow tag. Also surfaced a distinct, more severe variant:
+`FE`, `GNRC`, and `ETR` show structurally impossible **negative** resolved debt values at the
+contaminated quarters, not just undersized ones. The remaining 63 tickers are genuinely ambiguous
+(could be real temporary paydowns before refinancing) and need individual review. No code or
+config changed for Part B — scope-only, matching the discipline used for the `SharesOutstanding`
+scale bug and the decumulation scope-mismatch bugs before any project-wide fix was attempted.
+
+---
+
+## 2026-07-28 — Marketplace tag coverage scan (4 tickers): BKNG LongTermDebt current-portion contamination, ABNB DepreciationAndAmortization tag gap, base LongTermDebtCurrent exposure flagged project-wide
+
+Thirteenth stock-type profile batch, EBAY + BKNG/EXPE/DASH/ABNB. EBAY's own prior fixes
+(`LongTermDebt` current-portion contamination, `DividendsPerShare` hide) were actively
+re-verified against each new ticker rather than assumed inherited from the profile config.
+
+### BKNG: LongTermDebt current-portion contamination (single quarter)
+
+Same failure class as EBAY's original fix, reached through a different tag. At 2020-12-31, BKNG's
+plain `LongTermDebt` tag has a one-quarter gap; `ConvertibleDebtCurrent` (data only at 2019-12-31
+and 2020-12-31) sits ahead of the `LongTermDebtNoncurrent`+`LongTermDebtCurrent` sum in the base
+`priority_merge` chain and claims the period with just its own $985M current-portion value, vs.
+flanking quarters of $10.8B/$13.8B. Raw facts confirmed the true total ($12.014B = $11.029B
+noncurrent + $985M current) sitting one priority position lower, unused. Fixed via a `BKNG`
+`TICKER_CONCEPT_OVERRIDES` entry dropping `ConvertibleDebtCurrent`/`NotesPayableCurrent` and
+keeping direct tag → noncurrent+current sum. Every other of BKNG's 48 quarters unchanged.
+
+### ABNB: DepreciationAndAmortization — 0% coverage, wrong tag family entirely
+
+None of the base D&A tags (`DepreciationDepletionAndAmortization`, `Depreciation`,
+`AmortizationOfIntangibleAssets`, etc.) have any quarterly-length facts for ABNB — only annual,
+and only through FY2022. The real quarterly data lives under `OtherDepreciationAndAmortization`
+(YTD-cumulative, decumulates cleanly), covering 2020-Q1 through 2025-Q1. Added as a fallback via
+`TICKER_CONCEPT_OVERRIDES`: 0% → 78% coverage. 2025-Q2 onward remains a genuine gap — ABNB appears
+to have stopped breaking out this cash-flow line at all in recent 10-Qs; left unfixed.
+
+### Project-wide finding, reported not fixed: base LongTermDebt list includes LongTermDebtCurrent
+
+The base `CONCEPT_CANDIDATES["LongTermDebt"]` `priority_merge` chain includes a
+`{"type": "sum", "tags": ["LongTermDebtNoncurrent", "LongTermDebtCurrent", "NotesPayableCurrent"]}`
+source at priority position 8 — meaning any ticker on the base (non-overridden) list can suffer
+the same one-quarter current-portion contamination BKNG just had, wherever its own higher-priority
+tags have a gap. Confirmed in scope only, not fixed project-wide — flagged for a dedicated
+follow-up task since it could affect already-shipped tickers in other profiles.
+
+### Other findings (investigated, no fix needed or out of scope)
+
+`p_ffo` missing from `PROFILE_HIDDEN` in 17 of 19 non-REIT profiles (only `standard` and
+`marketplace` include it, unlike `ffo_margin` which is correctly hidden everywhere) — pre-existing,
+flagged for follow-up. `dividend_yield`/`payout_ratio` are not actually present in `PROFILE_HIDDEN`
+for any profile; their hidden appearance for non-payers is a data-driven `NaN` fallout, not a
+config decision. EXPE has a clean, fully working dividend-per-share tag (unlike EBAY) — noted as a
+stronger future candidate if the hide decision is ever reconsidered per-ticker. EXPE's 2010-2011
+`OperatingIncomeLoss` restatements (real TripAdvisor spinoff, Dec 2011) are already correctly
+resolved by the existing "later filed wins" rule, no fix needed. ABNB's `Capex` tag stops entirely
+after 2023-Q3 (real disclosure change, affects `fcf`/`fcf_margin`/`rule_of_40` coverage from then
+on) and its `Goodwill` tag goes annual-only starting FY2023 — both logged as real, unfixable gaps.
+`rule_of_40` computed across full history for all 5 tickers: BKNG (84% of quarters above 40%),
+DASH (89%), and ABNB (100% of its valid quarters) all show sustained above-40% readings, so
+`rule_of_40` was left visible for the `marketplace` profile rather than hidden.
+
+Full non-regression across all 436 cached tickers (432 pre-existing + 4 new): zero errors, zero
+change to any pre-existing ticker (both new overrides are additive dict entries under previously
+unused keys), EBAY's own prior fix reconfirmed unchanged.
+
+---
+
 ## 2026-07-27 — REIT tag coverage scan (27 tickers): Revenue lease/contract-revenue split (11 tickers), LongTermDebt tag drift (7 tickers), 5 more decumulation "implausibly-small-Q4" cases
 
 Twelfth stock-type profile batch, O + 26 new. Ticker list verified against XLRE's live holdings

@@ -692,6 +692,89 @@ track closely) suggests realized gains/losses are a minor, non-distorting factor
 
 ---
 
+## R&D Intensity
+
+**What it is:** Research and development expense divided by revenue (TTM) — what share of every dollar of sales gets reinvested into developing new products rather than flowing straight to profit.
+
+**Why it matters:** For pharma and medtech companies, R&D spend today is next decade's product pipeline. A company's ability to sustain high margins for years depends heavily on continually funding the research that produces its next patent-protected drug or device. This is one of the few metrics where spending *more* relative to revenue can be a genuinely bullish signal rather than a red flag — the opposite of how most cost ratios read.
+
+**How to read it:**
+- Pure pharma names tend to run meaningfully higher (15–25% of revenue) than medtech names (5–10%), reflecting how much more expensive and failure-prone drug discovery is compared to device engineering. Compare within the same sub-type, not across pharma vs. medtech
+- A falling R&D intensity alongside flat or falling revenue growth can be an early warning that a company is quietly harvesting its existing portfolio rather than reinvesting in the next one — worth checking against `revenue_yoy_growth` and pipeline news before assuming margin discipline
+- A rising R&D intensity isn't automatically good either — it only pays off if the spending eventually converts into approved, commercially successful products. Read it alongside the company's actual pipeline and approval history, not as a standalone score
+
+**Where it lies:** Zero R&D intensity doesn't necessarily mean "no innovation happening" — some business models (contract research organizations, health services/diagnostics companies) perform research as a *service* for clients, billed as revenue with a cost-of-revenue counterpart, rather than booking it as their own R&D expense. A CRO showing 0% here isn't skimping on science; it's simply not the entity paying for its own pipeline. Check what the company's actual business model is before reading a near-zero value as underinvestment.
+
+---
+
+## CapEx Intensity; all the following are for industrials
+
+**What it is:** Capital expenditure divided by revenue (TTM) — what share of every dollar of sales gets plowed back into property, plant, and equipment rather than flowing to profit or being returned to shareholders.
+
+**Why it matters:** This is the clearest single number for how capital-hungry a business actually is. Two companies can show identical margins while one needs to reinvest a fraction of revenue to sustain itself and the other needs to reinvest a third — that difference shows up nowhere in the margin figures themselves, only here.
+
+**How to read it:**
+- Compare within the same kind of business. Heavy-machinery and infrastructure-adjacent industrials structurally run higher capex intensity than asset-light ones — that's a business-model fact, not a performance signal on its own
+- Watch the trend alongside revenue growth. Rising capex intensity ahead of a real growth ramp (building capacity for demand that's coming) tells a very different story than rising capex intensity with flat or falling growth (aging assets needing more upkeep, or a business quietly losing its edge)
+
+**Where it lies:** This number can't tell growth capex (building new capacity) apart from maintenance capex (replacing worn-out equipment) — the dollar figure looks identical either way. A company spending heavily to expand and one spending heavily just to stand still will show the same capex intensity. Check the company's own disclosures (MD&A capex breakdowns, if given) before assuming which one you're looking at.
+
+---
+
+## Operating Income Growth (YoY)
+
+**What it is:** The year-over-year growth rate of operating income (TTM) — how fast operating profit itself is expanding or contracting, independent of what revenue is doing.
+
+**Why it matters:** On its own, this tells you whether the business is becoming more or less profitable at the operating line. It's also the numerator half of `operating_leverage` below — shown as its own metric specifically so that number has context instead of standing alone.
+
+**How to read it:** Always read next to `revenue_yoy_growth`. Operating income growing faster than revenue means the business is finding real efficiency (fixed costs being spread over more sales, or genuine cost discipline). Operating income growing slower than revenue — or shrinking while revenue grows — means costs are outrunning sales, worth understanding why before assuming the growth story is intact.
+
+**Where it lies:** Inherits two issues already logged elsewhere in this project. First, the diversified-conglomerate `OperatingIncomeLoss` tag fragility (confirmed across nine tickers now, including a scope break at HON from its 2025 spinoff) — if the underlying tag is thin or discontinuous for a given company, this growth rate will be too. Second, it can still swing wildly off a near-zero prior-period base even with the project's existing base-size safeguard — worth checking the absolute dollar figures behind a very large percentage before trusting it at face value.
+
+---
+
+## Operating Leverage
+
+**What it is:** `operating_income_yoy_growth` divided by `revenue_yoy_growth` — how many percentage points of operating profit growth a business generates for every percentage point of revenue growth.
+
+**Why it matters:** This is the classic fixed-cost-base story made numeric. A business with a lot of fixed costs and comparatively few variable costs sees its operating income swing much more than its revenue does, in both directions — a small sales increase drops disproportionately to the bottom line, but a small sales decline hurts disproportionately too. A ratio consistently well above 1 across a full cycle points to that kind of structure; a ratio consistently near or below 1 points to a more variable-cost-heavy business that doesn't get the same amplification either way.
+
+**How to read it:** Never read a single quarter in isolation — look at several consecutive periods together. This is exactly why `operating_income_yoy_growth` is shown as its own visible chart right alongside this one, rather than hidden as a mere calculation step: a huge operating-leverage number means something very different when revenue growth that quarter was a real, modest 4% versus when it was an accidental, statistically-noisy 0.1%.
+
+**Where it lies:** Masked (shown as no data) whenever revenue growth falls below roughly 2% in either direction, in either direction — not because nothing happened that quarter, but because dividing by an almost-zero base produces numbers in the hundreds or thousands that carry no real information (confirmed cases in this project's own data hit over 1,000). This is a deliberate, empirically-tuned trade-off: a genuine, small-but-real leverage story sitting in that narrow near-zero-growth band won't be visible either, in exchange for not filling the chart with meaningless spikes.
+
+---
+
+## FFO Margin
+
+**What it is:** Funds From Operations (TTM) divided by revenue (TTM). FFO itself is the NAREIT-standard adjustment for REITs: net income, with real estate depreciation added back and gains/losses from property sales removed. This tool computes it directly from raw filings (net income + D&A − gains on property sales) rather than pulling a company-reported FFO figure, since REITs each tag their own FFO under inconsistent, filer-specific labels that don't generalize across companies.
+
+**Why it matters:** GAAP net income is close to useless for valuing a REIT. Real estate is depreciated on the income statement every year, even though well-maintained property routinely holds or gains value over time — the opposite of what depreciation assumes. That non-cash charge can make a perfectly healthy, cash-generative REIT look barely profitable or even unprofitable on a GAAP basis. FFO strips that distortion out and is the actual number REIT investors, analysts, and the companies themselves use to talk about profitability.
+
+**How to read it:**
+- Compare FFO margin across REITs of the same property type — retail, residential, industrial, healthcare, and infrastructure-style REITs (towers, data centers) all carry different natural cost structures, so a "good" margin looks different in each
+- A sudden drop is worth investigating before assuming operational decline — this tool's own data has real examples of a temporary margin dip tracing to a large one-time impairment or a business-line divestiture (a REIT exiting part of its portfolio), not a change in the ongoing business
+- Watch the trend over several quarters more than any single reading — property income is generally stable and slow-moving, so a genuine multi-quarter shift means more than one unusual quarter
+
+**Where it lies:** This is Funds From Operations, not Adjusted Funds From Operations (AFFO). AFFO further subtracts recurring maintenance capital expenditure — money spent just to keep existing properties in working order, as opposed to money spent growing the portfolio — and that split isn't reliably reported in a standardized way across companies, so it isn't built here. FFO margin can look strong even in a quarter where a REIT is spending heavily just to maintain its existing buildings; it doesn't capture that distinction the way AFFO would.
+
+---
+
+## P/FFO
+
+**What it is:** Market capitalization divided by Funds From Operations (TTM) — the REIT-sector equivalent of the P/E ratio, using FFO instead of GAAP net income as the earnings figure.
+
+**Why it matters:** P/E is close to meaningless for REITs, for the same reason FFO margin exists — GAAP net income is suppressed by non-cash depreciation that doesn't reflect what's actually happening to the properties. P/FFO is the multiple REIT investors and analysts actually use when they say a REIT looks "cheap" or "expensive" relative to its peers or its own history.
+
+**How to read it:**
+- Compare within the same property type, the same way FFO margin should be — a data-center or cell-tower REIT and a shopping-mall REIT can trade at very different "normal" P/FFO levels without either being mispriced
+- This tool benchmarks it against the ticker's own multi-year history rather than an absolute level, since what counts as cheap or expensive shifts with the interest-rate environment — REITs are especially rate-sensitive (they carry a lot of debt and compete with bonds for income-seeking investors), so a multiple that looks low today might simply reflect a higher-rate world, not a bargain
+- A sharp move in this ratio is often a macro or rate story across the whole sector rather than something specific to one company — worth checking whether peers moved similarly before concluding it's company-specific
+
+**Where it lies:** Same limitation as FFO margin — this is P/FFO, not P/AFFO, so it doesn't account for how much of that FFO a REIT actually needs to reinvest just to maintain its existing properties versus how much is genuinely available for growth or distribution. Two REITs with an identical P/FFO can have very different real capital needs underneath that number.
+
+---
+
 # Part 3: How to actually use this
 
 **Start with the fundamentals chart.** Ignore the price entirely. Is revenue growing? Are margins stable or improving? Is the debt manageable? Is free cash flow real? If the answer to any of these is a clear no, the valuation doesn't matter — you can stop.
