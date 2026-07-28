@@ -581,6 +581,7 @@ def main():
     _, rolling_pe = calculate_historical_pe(facts, price_history)
     snapshot = build_snapshot(facts, metrics, prices, rolling_pe)
 
+   
 
     for cutoff in SNAPSHOT_AS_OF_DATES:
         hist_snapshot = build_snapshot_as_of(cutoff, facts, metrics, price_history, rolling_pe)

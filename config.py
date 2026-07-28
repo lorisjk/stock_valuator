@@ -1,4 +1,4 @@
-TICKERS = ["EBAY"]
+TICKERS = ["AAPL"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
@@ -206,6 +206,7 @@ TICKER_PROFILES = {
     "SYF": "financial",
     "AXP": "financial",
     "GS": "financial",
+    
 
     "TRV": "insurance_pc",
     "CB": "insurance_pc",
@@ -472,7 +473,16 @@ TICKER_PROFILES = {
 
     "EBAY": "marketplace",
     "BKNG": "marketplace", "EXPE": "marketplace",
-    "DASH": "marketplace", "ABNB": "marketplace",
+    "DASH": "marketplace", "ABNB": "marketplace", "UBER": "marketplace",
+
+    "F": "captive_finance",
+    "GM": "captive_finance", "CAT": "captive_finance",
+    "PCAR": "captive_finance", "TXT": "captive_finance",
+
+    "LUV": "airline",
+    "DAL": "airline", "UAL": "airline",
+
+   
 }
 
 PROFILE_HIDDEN = {
@@ -725,6 +735,26 @@ PROFILE_HIDDEN = {
         "operating_leverage", "operating_income_yoy_growth",
         "ffo_margin", "p_ffo", "dividend_yield",
         "payout_ratio",
+    },
+        "captive_finance": {
+        "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
+        "equity_to_assets", "provision_ratio", "p_ppnr", "combined_ratio",
+        "loss_ratio", "expense_ratio", "net_investment_yield",
+        "reserve_growth", "p_core_earnings",
+        "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
+        "rd_intensity", "operating_leverage", "operating_income_yoy_growth",
+        "ffo_margin", "p_ffo",
+        "rule_of_40",
+    },
+     "airline": {
+        "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
+        "equity_to_assets", "provision_ratio", "p_ppnr", "combined_ratio",
+        "loss_ratio", "expense_ratio", "net_investment_yield",
+        "reserve_growth", "p_core_earnings",
+        "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
+        "rd_intensity", "operating_leverage", "operating_income_yoy_growth",
+        "ffo_margin", "p_ffo",
+        "rule_of_40",
     },
 }
 
@@ -1428,6 +1458,24 @@ TICKER_CONCEPT_OVERRIDES = {
             "point_in_time": True,
             "mode": "priority_merge",
         }
+    },
+    "CAT": {
+        "CashAndEquivalents": {
+            "tags": [
+                "CashAndCashEquivalentsAtCarryingValue",
+                "CashAndCashEquivalentsAtCarryingValueIncludingDiscontinuedOperations",
+                "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+            ],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+    },
+    "F": {
+        "LongTermDebt": {
+            "tags": ["DebtAndCapitalLeaseObligations"],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
     },
     "ABNB": {
         "DepreciationAndAmortization": {

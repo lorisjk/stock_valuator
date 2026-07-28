@@ -411,13 +411,6 @@ def _mask_negative_flow_values(key: str, values: list[dict], period: str) -> lis
         return values
     return [v for v in values if v["value"] is None or v["value"] >= 0]
 
-
-# Balance-sheet (point_in_time) concepts that can never legitimately be negative.
-# Deliberately NOT the same set as the flow concepts above: those are decumulated, so their
-# guard only applies to quarterly period mode. A balance-sheet value is a level, not a
-# difference, so a negative reading is invalid in either period mode.
-# Note this set must stay narrow — StockholdersEquity, for instance, IS legitimately negative
-# for real companies (confirmed for DASH/ABNB pre-IPO and SBAC), so it must never be added here.
 _NON_NEGATIVE_BALANCE_CONCEPTS = {
     "LongTermDebt",
 }
@@ -447,6 +440,11 @@ _KNOWN_SCOPE_MISMATCH_OUTLIERS = {
     ("JBL", "OperatingCashFlow"): {"2017-08-31"},
     ("TMUS", "OperatingCashFlow"): {"2011-12-31"},
     ("OXY", "Revenue"): {"2025-12-31"},
+    # Ford's DebtAndCapitalLeaseObligations reports consolidated debt (Automotive + Ford
+    # Credit, ~$100-155B) through 2017, then silently narrows to a ~$0.5B sub-component for
+    # these three periods before stopping altogether. Masked so the series ends honestly at
+    # 2017 instead of implying Ford's debt fell 99.6% in one year.
+    ("F", "LongTermDebt"): {"2018-12-31", "2019-12-31", "2020-12-31"},
 }
 
 

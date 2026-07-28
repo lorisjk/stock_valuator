@@ -6,6 +6,108 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-07-28 — Airline batch scan (DAL, UAL + LUV): the "ASC 842" premise didn't hold up, real cause was COVID-era debt issuance; rule_of_40 hidden profile-wide
+
+Fifteenth stock-type profile batch. `airline` runs entirely on the base tag set (no profile or
+ticker overrides existed or were needed). The task's own stated premise for the reference ticker's
+`debt_to_equity` jump was checked against real data before being extended to DAL/UAL — **and it
+didn't hold, for any of the three tickers, including LUV itself.**
+
+### The ASC 842 explanation was wrong
+
+LUV's `debt_to_equity` does jump (0.19 → 0.82 → 1.14 across 2019-Q4 to 2020-Q4), but two things rule
+out "operating lease liabilities coming onto the balance sheet" as the cause: (1)
+`OperatingLeaseLiability*` tags aren't part of the `LongTermDebt` candidate list in this pipeline at
+all, and were flat-to-declining across the window regardless ($978M → $936M → $1.49B); (2) the
+timing is wrong for ASC 842 — that standard took effect 2019-01-01, but LUV's own ratio was *lower*
+at 2019-12-31 than at 2018-12-31, with the entire jump concentrated in a single quarter, **Q2 2020**.
+The actual driver is `LongTermDebtAndCapitalLeaseObligations` itself jumping $2.29B → $8.91B in that
+one quarter — Southwest's real COVID-era convertible-notes offering and credit-facility drawdowns.
+DAL and UAL show the identical mechanism (flat lease-liability tags, real debt tags jumping in 2020,
+DAL peaking Q2-Q3 and UAL concentrated in Q3 consistent with CARES Act PSP loan timing) — a real,
+correctly-resolved, industry-wide COVID financing event, not an accounting-standard scope break.
+
+### Other findings
+
+No loyalty-program revenue/income scope-break signature for DAL or UAL — expected, since DAL's
+SkyMiles-collateralized bonds and UAL's MileagePlus-collateralized term loan were both debt-side
+financings (part of the same 2020 debt increase above), not revenue transactions. `OperatingIncomeLoss`
+fragility checked independently despite DAL/UAL's more complex segment structures: all three clean
+(95-99%). DAL's near-zero-but-positive equity in 2021-Q1/Q2 ($482M/$1.28B against ~$26-28B debt)
+correctly triggered the `MIN_DEBT_TO_EQUITY_SCALE_RATIO` guard (ratio ~1.9%, below the 5% floor),
+masking what would otherwise be a meaningless 50x+ ratio — confirmed working as intended under real
+COVID-scale stress. A genuine, isolated scope break found: DAL `NetIncomeLoss` 2017-12-31 restated
+$572M → $299M (91%), with `Revenue`/`OperatingIncomeLoss` unchanged — matches the industry-wide TCJA
+Dec-2017 SAB 118 deferred-tax remeasurement finalization, already correctly resolved by "later filed
+wins." An unfiltered first pass at this scan produced dozens of false NetIncomeLoss "restatement"
+hits that were actually YTD-cumulative vs. discrete facts sharing an end date — discarded once
+correctly restricted to true quarterly-length (80-100 day) facts. LUV's negative-FCF condition
+(2022-Q4 to present, tied to 737 MAX delays and LUV's 2025 operating changes) is confirmed
+**LUV-specific**, not shared: DAL and UAL both had a real COVID-era negative-FCF stretch that has
+since fully recovered to strongly positive FCF. `rule_of_40` hidden profile-wide: all three tickers
+share the identical above-40% pattern — a 2021-Q4 to 2023 cluster (up to ~178%) driven by
+revenue_growth measured off the COVID-collapsed base, against single-digit-to-low-teens medians.
+
+Non-regression across all 441 cached tickers: **0 previously-populated values changed**, 0
+disappeared, 1,516 new values (all in DAL/UAL, brand-new tickers), LUV's own values byte-identical
+before and after.
+
+---
+
+## 2026-07-28 — Captive-finance batch scan (GM, CAT, PCAR, TXT + F): Ford's debt override was never actually applied, three distinct debt-tag patterns found, CAT cash gap fixed
+
+Fourteenth stock-type profile batch. The premise to check was whether the four new tickers share
+Ford's post-2018 consolidated-debt breakdown. **They do not** — three genuinely different patterns
+emerged, and only one of the four needed any change.
+
+### Two corrections to the reference ticker's own state
+
+The brief described F's `LongTermDebt` override as already applied. It was **not in `config.py`** —
+F was resolving through the base list, which produced only three values ($600M/$470M/$291M) for a
+company carrying $100-155B, because `DebtAndCapitalLeaseObligations` is not a member of the base
+list. Second, applying the override exactly as specified does **not** produce the described "honest
+gap from 2018": the tag keeps being filed after its scope narrows, so it yields the real 2008-2017
+series *plus* three implausibly small values. Those three periods were masked explicitly via
+`_KNOWN_SCOPE_MISMATCH_OUTLIERS[("F","LongTermDebt")]` — the mechanism already used for this exact
+"same tag, silently changed scope" class. F now has 36 clean points, $95.1B-$154.3B, 2008-2017.
+
+### Three debt-tag patterns
+
+- **Pattern A (F only)** — tag exists but changes scope mid-series; use it, mask the broken periods.
+- **Pattern B (GM, CAT)** — clean consolidated tag throughout, **no override added**. GM resolves via
+  `LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities` ($47.5B→$131.8B, 2014-2025); CAT
+  resolves via the base list's `require`-guarded sum on `LongTermDebtNoncurrent` ($20.4B-$30.7B,
+  2008-2025) — a direct benefit of the previous task's `require` fix. Both annual-only (23%), which
+  is a filing-cadence limitation, not a tagging bug.
+- **Pattern C (PCAR, TXT)** — a pattern the brief did not anticipate: **no consolidated debt balance
+  tag exists at all** in us-gaap, only flow and disclosure items. PCAR's `NotesPayable` ($0.19B vs
+  PACCAR Financial's ~$10B+ book, ~2% of true scale) was **rejected on scale-sanity grounds** rather
+  than used — the `OtherNotesPayable`/O trap exactly. TXT's maturity-ladder tags would require
+  reconstructing debt rather than reading it. Both left as honest 0% gaps.
+
+### Other findings
+
+`CAT` `CashAndEquivalents` 38% → 63%, by adding `CashCashEquivalentsRestrictedCashAndRestrictedCash
+Equivalents` as a last-resort fallback — scale-verified first: across all 20 overlapping dates the
+two tags differ by 0.03%-0.23%, so CAT's restricted cash is immaterial. `OperatingIncomeLoss` splits
+three ways (GM 97% and CAT 91% clean; F's 42% is a start-date limitation, not corruption; PCAR has
+**no such tag at all** and TXT tags it twice) — the nearby
+`IncomeLossFromContinuingOperationsBeforeIncomeTaxes*` was rejected because pre-tax income sits after
+interest expense, which is a large operating input for a finance arm. GM's 2009 bankruptcy needs no
+guard or scope-break handling: "New GM" is a separate registrant, so the series begins cleanly at the
+new entity rather than jumping a mid-series break. Ford's payout-ratio spike is **real and
+arithmetically correct** — 5,111% at 2019-12-31 (not 2020), from $0.60 DPS held flat against FY2019
+EPS of $0.0117 after a large pension remeasurement charge; 2020 correctly reads NaN via the existing
+`require_positive_denominator` guard. GM's 2017 Opel/Vauxhall and CAT's 2015 reclassification
+restatements are already resolved correctly by "later filed wins". `rule_of_40` hidden profile-wide:
+only 9 of 304 quarters clear 40%, all in two cyclical rebound windows (CAT/PCAR 2011-12, GM 2021).
+
+Non-regression across all 438 cached tickers: **0 previously-populated values changed**, 55 appeared
+(CAT cash 19, F debt 36), 3 disappeared (exactly the intentionally-masked Ford values), 436 of 438
+tickers completely untouched.
+
+---
+
 ## 2026-07-28 — Base `LongTermDebt` priority fix: current-portion contamination corrected across 58 tickers, negative-value guard added
 
 Implements the fix for the exposure scoped in the previous entry. **The literal plan ("move the
