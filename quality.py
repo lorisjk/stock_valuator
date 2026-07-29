@@ -33,8 +33,27 @@ def print_data_quality(
     expected_concepts: list[str],
     search_hints: dict = None,
     threshold: float = 0.5,
+    collect_flags: list = None,
 ) -> None:
+    """Normal (ad-hoc) use: leave collect_flags as None -- flags print to the
+    terminal exactly as before. Full-refresh mode: pass a list, and each flag is
+    appended to it (as a dict, one per below-threshold concept) instead of being
+    printed, so hundreds of tickers' worth of flags don't spam the terminal --
+    the caller collects them into a report instead."""
     problems = check_data_quality(df, expected_concepts, threshold)
+
+    if collect_flags is not None:
+        for _, row in problems.iterrows():
+            hint = search_hints.get(row["concept"]) if search_hints else None
+            collect_flags.append({
+                "ticker": row["ticker"],
+                "concept": row["concept"],
+                "count": int(row["count"]),
+                "max_for_ticker": int(row["max_for_ticker"]),
+                "ratio": row["ratio"],
+                "hint": " ".join(hint) if hint else None,
+            })
+        return
 
     if problems.empty:
         print(f"Data fine - no concept below {threshold:.0%} coverage.")

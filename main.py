@@ -9,16 +9,17 @@ from config import (
     PERIOD,
     DATA_DIR,
     FIGURE_DIR,
-    SEARCH_HINTS, 
+    SEARCH_HINTS,
     SNAPSHOT_AS_OF_DATES,
-    TICKER_PROFILES, 
+    TICKER_PROFILES,
     PROFILE_HIDDEN,
     DEFAULT_PROFILE,
     get_expected_concepts,
-    is_hidden, 
-    filter_hidden_rows, 
-    get_concept_candidates, 
-    
+    is_hidden,
+    filter_hidden_rows,
+    get_concept_candidates,
+    get_active_tickers,
+    CACHE_DIR,
 )
 from metrics import (
     add_ttm_concepts,
@@ -51,9 +52,10 @@ from figures import plot_fundamentals, plot_valuation
 from quality import print_data_quality
 
 import os
+import time
 import pandas as pd
 
-from datetime import date
+from datetime import date, datetime
 
 
 def load_facts() -> pd.DataFrame:
@@ -387,13 +389,6 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame) ->
 
     for col in ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_ebitda", "ev_sales", "p_tbv", "p_ppnr", "p_core_earnings", "p_ffo"]:
         wide[col] = wide[col].where(wide[col] <= MAX_MULTIPLE)
-
-    # peg_ratio is computed AFTER pe_ratio's own >200 exclusion above, not before it --
-    # a near-zero (but technically positive) TTM EPS, from a single large one-time
-    # charge nearly offsetting an otherwise-profitable trailing year (e.g. ANET
-    # 2021-12-31, ED 2021-12-31), sends pe_ratio into the millions before that
-    # exclusion runs. Computing peg_ratio from the pre-exclusion value let those
-    # already-suppressed pe_ratio readings leak through into peg_ratio anyway.
     wide["peg_ratio"] = wide["pe_ratio"] / (wide["revenue_yoy_growth"] * 100)
     wide["peg_ratio"] = wide["peg_ratio"].where(wide["revenue_yoy_growth"] > MIN_PEG_REVENUE_GROWTH)
     wide["peg_ratio"] = wide["peg_ratio"].where(wide["peg_ratio"].abs() <= MAX_PEG_RATIO_ABS)
@@ -409,30 +404,28 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame) ->
 
     return long.dropna(subset=["value"])
 
-def apply_profile_filter(snap: pd.DataFrame) -> pd.DataFrame:
-    snap = snap.copy()
-
-    for idx, row in snap.iterrows():
-        ticker = row["ticker"]
-        for col in snap.columns:
-            if is_hidden(ticker, col):
-                snap.at[idx, col] = None
-
-    tickers_in_snap = snap["ticker"].unique()
-    cols_to_drop = [
-        col for col in snap.columns
-        if col != "ticker" and all(is_hidden(t, col) for t in tickers_in_snap)
-    ]
-    snap = snap.drop(columns=cols_to_drop)
-
-    return snap
-
 def build_snapshot(
     facts: pd.DataFrame,
     metrics: dict,
     prices: pd.DataFrame,
     rolling_pe: pd.DataFrame,
+    as_of: "str | pd.Timestamp | None" = None,
 ) -> pd.DataFrame:
+    """Long-format snapshot: latest value of every fundamental and valuation metric
+    per ticker, shape (ticker, end, concept, value) -- the same shape as
+    metrics_long/valuation_history. Visibility filtering is intentionally NOT
+    applied here; call filter_hidden_rows() on the result at read/output time,
+    exactly like metrics_long and valuation_history already do in main(). The old
+    apply_profile_filter() masked/dropped WIDE columns during construction, which
+    made the snapshot's schema depend on which tickers happened to be present in a
+    given run (a column could vanish entirely if every ticker in that run hid it) --
+    moving the filter to read time on a long table fixes that instability.
+
+    `as_of` tags every row's "end" date: defaults to today (this is a live,
+    current-price snapshot), or pass the cutoff date used by build_snapshot_as_of
+    for a historical snapshot.
+    """
+    as_of_date = pd.Timestamp(as_of) if as_of is not None else pd.Timestamp(date.today())
 
     snap = prices.copy()
 
@@ -532,8 +525,27 @@ def build_snapshot(
     snap["p_ppnr"] = snap["market_cap"] / snap["ppnr_ttm"]
     snap["p_core_earnings"] = snap["market_cap"] / snap["core_earnings_ttm"]
 
-    snap = apply_profile_filter(snap)
-    return snap
+    # Canonical names so is_hidden()/filter_hidden_rows() gate these the same way
+    # they already gate pe_ratio/pfcf_ratio in valuation_history -- the old wide
+    # snapshot's own "pe_ttm"/"pfcf_ttm" names never matched PROFILE_HIDDEN's real
+    # keys, which was the root cause of the pe_ratio-still-visible-for-REIT leak
+    # fixed earlier in this project. No other computation above changed at all.
+    snap = snap.rename(columns={"pe_ttm": "pe_ratio", "pfcf_ttm": "pfcf_ratio"})
+
+    value_cols = [c for c in snap.columns if c != "ticker"]
+    long = snap.melt(id_vars=["ticker"], value_vars=value_cols, var_name="concept", value_name="value")
+    long = long.dropna(subset=["value"])
+    long["end"] = as_of_date
+    return long[["ticker", "end", "concept", "value"]]
+
+
+def price_summary(long_snapshot: pd.DataFrame) -> pd.DataFrame:
+    """Reconstruct the ticker/price/shares_outstanding/market_cap view the old wide
+    snapshot printed directly, from the new long-format snapshot -- these three
+    concepts are never subject to profile-hidden filtering (no PROFILE_HIDDEN entry
+    ever names them), so this is a pure reshape, not a masking step."""
+    sub = long_snapshot[long_snapshot["concept"].isin(["price", "shares_outstanding", "market_cap"])]
+    return sub.pivot_table(index="ticker", columns="concept", values="value").reset_index()
 
 
 def get_price_as_of(price_history: pd.DataFrame, cutoff_date: pd.Timestamp) -> pd.DataFrame:
@@ -562,7 +574,7 @@ def build_snapshot_as_of(
     prices_cut = pd.merge(prices_cut, shares[["ticker", "shares_outstanding"]], on="ticker", how="left")
     prices_cut["market_cap"] = prices_cut["price"] * prices_cut["shares_outstanding"]
 
-    return build_snapshot(facts_cut, metrics_cut, prices_cut, rolling_pe_cut)
+    return build_snapshot(facts_cut, metrics_cut, prices_cut, rolling_pe_cut, as_of=cutoff_date)
 
 
 def main():
@@ -602,26 +614,244 @@ def main():
 
     for cutoff in SNAPSHOT_AS_OF_DATES:
         hist_snapshot = build_snapshot_as_of(cutoff, facts, metrics, price_history, rolling_pe)
-        
+
         print(f"\n--- Snapshot as of {cutoff} ---")
-        print(hist_snapshot[["ticker", "price", "shares_outstanding", "market_cap"]])
+        print(price_summary(hist_snapshot))
         print(f"\n-------------------------------")
 
     metrics_long = filter_hidden_rows(metrics_long)
     valuation_history = filter_hidden_rows(valuation_history)
     facts = filter_hidden_rows(facts)
+    snapshot = filter_hidden_rows(snapshot)
 
     facts.to_csv(os.path.join(DATA_DIR, f"{PERIOD}_facts.csv"), index=False)
     metrics_long.to_csv(os.path.join(DATA_DIR, "metrics_long.csv"), index=False)
     valuation_history.to_csv(os.path.join(DATA_DIR, "valuation_history.csv"), index=False)
     snapshot.to_csv(os.path.join(DATA_DIR, "current_snapshot.csv"), index=False)
 
-    print(snapshot[["ticker", "price", "shares_outstanding", "market_cap"]])
+    print(price_summary(snapshot))
 
     for ticker in TICKERS:
         plot_fundamentals(ticker, metrics_long, os.path.join(FIGURE_DIR, f"{ticker}_fundamentals.png"))
         plot_valuation(ticker, valuation_history, os.path.join(FIGURE_DIR, f"{ticker}_valuation.png"))
 
 
+def delete_cached_facts(tickers: list[str]) -> list[str]:
+    """Delete every cached {TICKER}_company_info.json for the given tickers, so
+    the next fetch is a genuine live re-fetch, not a cache hit. Destructive and
+    auditable: returns the list of paths actually removed, for the report."""
+    deleted = []
+    for ticker in tickers:
+        path = os.path.join(CACHE_DIR, f"{ticker}_company_info.json")
+        if os.path.exists(path):
+            os.remove(path)
+            deleted.append(path)
+    return deleted
+
+
+def _timing_summary(times: dict, slowest_n: int = 10) -> dict:
+    if not times:
+        return {"total": 0.0, "average": 0.0, "n": 0, "slowest": []}
+    total = sum(times.values())
+    n = len(times)
+    slowest = sorted(times.items(), key=lambda kv: kv[1], reverse=True)[:slowest_n]
+    return {"total": total, "average": total / n, "n": n, "slowest": slowest}
+
+
+def write_full_refresh_report(
+    report_path: str,
+    run_start: datetime,
+    run_end: datetime,
+    active_tickers: list[str],
+    deleted_cache_files: list[str],
+    edgar_times: dict,
+    yfinance_times: dict,
+    calc_time: float,
+    plot_times: dict,
+    quality_flags: list[dict],
+) -> None:
+    edgar = _timing_summary(edgar_times)
+    yfin = _timing_summary(yfinance_times)
+    plot = _timing_summary(plot_times)
+    total_wall = (run_end - run_start).total_seconds()
+
+    lines = []
+    lines.append("# Full Refresh Report\n")
+    lines.append("## Run metadata\n")
+    lines.append(f"- Start: {run_start.isoformat(timespec='seconds')}")
+    lines.append(f"- End: {run_end.isoformat(timespec='seconds')}")
+    lines.append(f"- Total wall-clock time: {total_wall:.1f}s ({total_wall/60:.1f} min)")
+    lines.append(f"- Active tickers processed: {len(active_tickers)}")
+    lines.append(f"- Cached facts files deleted: {len(deleted_cache_files)}\n")
+    if deleted_cache_files:
+        lines.append("<details><summary>Deleted cache files</summary>\n")
+        for p in deleted_cache_files:
+            lines.append(f"- `{p}`")
+        lines.append("\n</details>\n")
+
+    lines.append("## Timing\n")
+    lines.append("### Phase 1 -- EDGAR fetch")
+    lines.append(f"- Total: {edgar['total']:.1f}s across {edgar['n']} tickers")
+    lines.append(f"- Average per ticker: {edgar['average']:.2f}s")
+    lines.append("- Slowest 10 tickers:")
+    for t, s in edgar["slowest"]:
+        lines.append(f"  - {t}: {s:.2f}s")
+    lines.append("")
+
+    lines.append("### Phase 2 -- yfinance fetch")
+    lines.append(f"- Total: {yfin['total']:.1f}s across {yfin['n']} tickers")
+    lines.append(f"- Average per ticker: {yfin['average']:.2f}s")
+    lines.append("- Slowest 10 tickers:")
+    for t, s in yfin["slowest"]:
+        lines.append(f"  - {t}: {s:.2f}s")
+    lines.append("")
+
+    lines.append("### Phase 3 -- Calculate + plot")
+    lines.append(
+        f"- Calculate (calculate_all_metrics/build_metrics_long/build_valuation_history"
+        f"/build_snapshot, whole batch, one run -- not decomposed per ticker, since "
+        f"doing so would mean calling these functions once per ticker instead of once "
+        f"for the batch, a change to how the calculation runs rather than pure "
+        f"instrumentation): {calc_time:.1f}s"
+    )
+    lines.append(f"- Plot (per ticker, both figures): total {plot['total']:.1f}s "
+                  f"across {plot['n']} tickers, average {plot['average']:.2f}s/ticker")
+    lines.append("- Slowest 10 tickers (plotting):")
+    for t, s in plot["slowest"]:
+        lines.append(f"  - {t}: {s:.2f}s")
+    lines.append("")
+
+    lines.append("## Data quality flags\n")
+    if not quality_flags:
+        lines.append("No concept fell below the coverage threshold for any active ticker.\n")
+    else:
+        by_profile = {}
+        for f in quality_flags:
+            profile = TICKER_PROFILES.get(f["ticker"], DEFAULT_PROFILE)
+            by_profile.setdefault(profile, []).append(f)
+        lines.append(f"{len(quality_flags)} flags across {len(by_profile)} profiles.\n")
+        for profile in sorted(by_profile):
+            lines.append(f"### {profile}\n")
+            flags_sorted = sorted(by_profile[profile], key=lambda f: (f["ticker"], f["ratio"]))
+            for f in flags_sorted:
+                marker = "MISSING" if f["count"] == 0 else "thin"
+                lines.append(
+                    f"- **{marker}** {f['ticker']} `{f['concept']}`: "
+                    f"{f['count']} of {f['max_for_ticker']} ({f['ratio']:.0%})"
+                    + (f" -- `python explore_tags.py {f['ticker']} {f['hint']}`" if f["hint"] else "")
+                )
+            lines.append("")
+
+    with open(report_path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines))
+
+
+def run_full_refresh():
+    """Full refresh: delete every cached company-facts file for every active
+    ticker, re-fetch EDGAR + yfinance data from scratch, recompute all metrics,
+    regenerate all plots, and write full_refresh_report.md with per-phase timing
+    and every data-quality flag (collected, not printed)."""
+    run_start = datetime.now()
+
+    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(FIGURE_DIR, exist_ok=True)
+
+    active_tickers = get_active_tickers()
+    print(f"Full refresh: {len(active_tickers)} active tickers.")
+
+    deleted = delete_cached_facts(active_tickers)
+    print(f"Deleted {len(deleted)} cached company-facts files.")
+
+    # --- Phase 1: EDGAR fetch, timed per ticker ---
+    mapping = fetch_or_cache(
+        url="https://www.sec.gov/files/company_tickers.json",
+        cache_path="cache/ticker_mapping.json",
+        headers={"User-Agent": EDGAR_USER_AGENT},
+    )
+    cik_mapping = build_ticker_to_cik(mapping)
+
+    edgar_times = {}
+    facts_frames = []
+    for ticker in active_tickers:
+        t0 = time.perf_counter()
+        concept_candidates = get_concept_candidates(ticker)
+        cik = get_cik(ticker, cik_mapping)
+        company_info = get_company_info(ticker, cik, EDGAR_USER_AGENT)
+        facts_frames.append(build_dataframe(ticker, company_info, concept_candidates, period=PERIOD))
+        edgar_times[ticker] = time.perf_counter() - t0
+    print(f"EDGAR fetch done: {sum(edgar_times.values()):.1f}s total.")
+
+    facts = pd.concat(facts_frames, ignore_index=True)
+    facts["end"] = pd.to_datetime(facts["end"]).astype("datetime64[ns]")
+    facts = normalize_split_adjusted(facts, ["SharesOutstanding"])
+
+    quality_flags = []
+    expected_by_ticker = {ticker: get_expected_concepts(ticker) for ticker in active_tickers}
+    print_data_quality(facts, expected_by_ticker, SEARCH_HINTS, collect_flags=quality_flags)
+
+    # --- Phase 2: yfinance fetch, timed per ticker ---
+    yfinance_times = {}
+    price_frames = []
+    current_price_rows = []
+    for ticker in active_tickers:
+        t0 = time.perf_counter()
+        history = get_price_history(ticker)
+        price_frames.append(history)
+        data = get_current_price_and_shares(ticker)
+        data["ticker"] = ticker
+        current_price_rows.append(data)
+        yfinance_times[ticker] = time.perf_counter() - t0
+    print(f"yfinance fetch done: {sum(yfinance_times.values()):.1f}s total.")
+
+    price_history = pd.concat(price_frames, ignore_index=True)
+    price_history["date"] = price_history["date"].dt.tz_localize(None).astype("datetime64[ns]")
+    prices = pd.DataFrame(current_price_rows)
+    prices["market_cap"] = prices["price"] * prices["shares_outstanding"]
+
+    # --- Phase 3: calculate (batch) + plot (per ticker) ---
+    t0 = time.perf_counter()
+    facts = add_derived_concepts(facts)
+    metrics = calculate_all_metrics(facts)
+    facts = add_as_concept(facts, metrics["fcf"], "fcf", "FCF_TTM")
+    facts = add_as_concept(facts, metrics["ebitda"], "ebitda", "EBITDA_TTM")
+
+    duplicates = facts[facts.duplicated(subset=["ticker", "concept", "end"], keep=False)]
+    if not duplicates.empty:
+        print(f"WARNUNG: {len(duplicates)} Duplikate gefunden!")
+
+    metrics_long = build_metrics_long(metrics)
+    valuation_history = build_valuation_history(facts, price_history)
+    _, rolling_pe = calculate_historical_pe(facts, price_history)
+    snapshot = build_snapshot(facts, metrics, prices, rolling_pe)
+    calc_time = time.perf_counter() - t0
+
+    metrics_long = filter_hidden_rows(metrics_long)
+    valuation_history = filter_hidden_rows(valuation_history)
+    facts_out = filter_hidden_rows(facts)
+    snapshot = filter_hidden_rows(snapshot)
+
+    facts_out.to_csv(os.path.join(DATA_DIR, f"{PERIOD}_facts.csv"), index=False)
+    metrics_long.to_csv(os.path.join(DATA_DIR, "metrics_long.csv"), index=False)
+    valuation_history.to_csv(os.path.join(DATA_DIR, "valuation_history.csv"), index=False)
+    snapshot.to_csv(os.path.join(DATA_DIR, "current_snapshot.csv"), index=False)
+
+    plot_times = {}
+    for ticker in active_tickers:
+        t0 = time.perf_counter()
+        plot_fundamentals(ticker, metrics_long, os.path.join(FIGURE_DIR, f"{ticker}_fundamentals.png"))
+        plot_valuation(ticker, valuation_history, os.path.join(FIGURE_DIR, f"{ticker}_valuation.png"))
+        plot_times[ticker] = time.perf_counter() - t0
+    print(f"Calculate + plot done: {calc_time + sum(plot_times.values()):.1f}s total.")
+
+    run_end = datetime.now()
+
+    report_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "full_refresh_report.md")
+    write_full_refresh_report(
+        report_path, run_start, run_end, active_tickers, deleted,
+        edgar_times, yfinance_times, calc_time, plot_times, quality_flags,
+    )
+    print(f"Full refresh complete. Report: {report_path}")
+
+
 if __name__ == "__main__":
-    main()
+    run_full_refresh()

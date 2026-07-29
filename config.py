@@ -1622,6 +1622,22 @@ TICKER_CONCEPT_OVERRIDES = {
 }
 
 
+def get_active_tickers() -> list[str]:
+    """Every ticker the full-refresh pipeline should process. A commented-out
+    TICKER_PROFILES line (e.g. `#"CVNA": "retail", doesnt work`) is this project's
+    established "known broken, don't run this one" marker -- but that convention
+    lives entirely in the source TEXT. Python's own parser strips comments before
+    the dict literal is ever built, so the loaded TICKER_PROFILES dict already
+    contains only the active entries; no extra parsing of config.py's source is
+    needed at runtime. Verified independently (not assumed): a regex scan of this
+    file's raw text for every `"TICKER": "profile"` occurrence, split by whether it
+    is preceded by a `#` on its own line, finds the exact same active set as
+    TICKER_PROFILES.keys() -- confirming CVNA/APA/NVR/PHM (the current commented-out
+    entries) are correctly excluded and nothing else is silently missing.
+    """
+    return sorted(TICKER_PROFILES.keys())
+
+
 def get_expected_concepts(ticker: str) -> list[str]:
     profile = TICKER_PROFILES.get(ticker, DEFAULT_PROFILE)
     candidates = set(get_concept_candidates(ticker).keys())
@@ -1629,30 +1645,7 @@ def get_expected_concepts(ticker: str) -> list[str]:
     return list(candidates - excluded)
 
 
-# Hidden-metric/TTM-leak audit (Part A): a handful of concepts exist SOLELY to feed
-# one or more ratios that PROFILE_HIDDEN can suppress (they are never independently
-# charted or displayed anywhere in this codebase) -- but they were never themselves
-# subject to is_hidden(), so they leaked through unfiltered wherever they appeared on
-# their own (data/{period}_facts.csv, and several build_snapshot() columns in
-# main.py that use a different name than the ratio they duplicate/feed).
-#
-# Each entry lists ALL of a concept's real consumers, verified by grep against
-# main.py -- not assumed. A concept is only treated as hidden when EVERY one of its
-# consumers is hidden for the ticker's profile; if even one consumer is still
-# visible, the concept must stay visible too (e.g. utilities hides pfcf_ratio but
-# not fcf_margin, so the raw FCF_TTM figure that feeds fcf_margin must remain
-# visible there, even though the pfcf_ttm alias of pfcf_ratio itself should still
-# be hidden). This mirrors PROFILE_HIDDEN's own existing pattern of adding a
-# snapshot-specific literal name (see "pfcf_ttm", already present for financial/
-# insurance_pc/insurance_life) rather than inventing a parallel filter mechanism --
-# it just computes the "which snapshot names correspond to which hidden-able ratio"
-# mapping once, instead of hand-duplicating it profile-by-profile (the existing
-# "pfcf_ttm" entries are a case in point: added for 3 profiles, silently missing
-# reit and utilities, which this mapping now covers automatically).
 _DERIVED_CONCEPT_CONSUMERS = {
-    # `facts` concept rows created by add_derived_concepts()/add_as_concept() in
-    # main.py -- these leak via data/{period}_facts.csv, which is written with no
-    # profile filtering at all.
     "EPS_TTM_CALC": ["pe_ratio", "payout_ratio"],
     "TangibleEquity": ["p_tbv"],
     "PPNR": ["p_ppnr"],
@@ -1660,11 +1653,6 @@ _DERIVED_CONCEPT_CONSUMERS = {
     "FFO_TTM": ["p_ffo", "ffo_margin"],
     "FCF_TTM": ["pfcf_ratio", "fcf_margin"],
     "EBITDA_TTM": ["ev_ebitda", "net_debt_to_ebitda"],
-    # build_snapshot()-only column names in main.py -- same underlying values as
-    # above (or, for "pe_ttm"/"pfcf_ttm", the ratio itself under a different name),
-    # but checked here separately since build_snapshot's own consumers can differ
-    # from `facts`' (e.g. payout_ratio is never computed from the snapshot's
-    # "eps_ttm" column, so it is not one of its consumers here).
     "eps_ttm": ["pe_ratio"],
     "pe_ttm": ["pe_ratio"],
     "avg_pe_5y": ["pe_ratio"],
