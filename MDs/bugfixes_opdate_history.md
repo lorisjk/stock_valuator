@@ -6,6 +6,312 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-07-29 — Hidden-metric TTM leaks project-wide (facts.csv + snapshot columns), and a peg_ratio ordering bug that let a 13.6-million P/E through
+
+Two-part task. Part A: a hidden ratio (e.g. `pe_ratio` for `reit`) doesn't stop its
+raw/TTM inputs from being written out on their own. Part B: `peg_ratio` had no
+guard and wasn't even wired into plotting.
+
+**Part A.** Seven concepts exist only to feed a hidden-able ratio and are never
+independently displayed: `EPS_TTM_CALC` (-> `pe_ratio`, and -- found only by
+grepping every occurrence, not from the task's own example -- `payout_ratio`
+too), `TangibleEquity` (-> `p_tbv`), `PPNR` (-> `p_ppnr`), `CoreOperatingEarnings`
+(-> `p_core_earnings`), `FFO_TTM` (-> `p_ffo`, `ffo_margin`), `FCF_TTM` (->
+`pfcf_ratio`, `fcf_margin`), `EBITDA_TTM` (-> `ev_ebitda`, `net_debt_to_ebitda`).
+Two leak sites, found by enumerating every concept/column name in every output
+and cross-checking against the full union of `PROFILE_HIDDEN` keys rather than
+assuming only the named REIT/pe_ratio case existed:
+
+1. `data/{period}_facts.csv` was written with **no profile filtering at all** --
+   `metrics_long`/`valuation_history` already went through `filter_hidden_rows()`
+   before their own `.to_csv()`, but `facts` itself never did.
+2. `build_snapshot()`'s `apply_profile_filter()` already loops every column
+   through `is_hidden()` -- the mechanism was there -- but several of its own
+   column names don't match the canonical ones: `pe_ttm` (alias of `pe_ratio`)
+   was hidden in **zero** profiles; `pfcf_ttm` (alias of `pfcf_ratio`) was
+   already hand-added to 3 profiles' hidden sets but missing `reit` and
+   `utilities`, where `pfcf_ratio` is *also* hidden -- concrete evidence that
+   hand-duplicating a ratio's name into `PROFILE_HIDDEN` drifts out of sync,
+   the same failure mode the `p_ffo` audit found earlier in this project.
+
+The fix couldn't just add more literal names (that's the pattern that already
+drifted once) or blanket-hide a concept whenever *any* one of its consumers is
+hidden (utilities hides `pfcf_ratio` but not `fcf_margin`, so the raw `FCF_TTM`
+figure must stay visible there even though the `pfcf_ttm` *alias* of
+`pfcf_ratio` must not; retail has the same asymmetry between `ev_ebitda` and
+`net_debt_to_ebitda`). Extended `is_hidden()` with a `_DERIVED_CONCEPT_CONSUMERS`
+map (each concept -> every metric that actually consumes it, verified by grep)
+and a concept is hidden only when **all** its consumers are hidden. This fixed
+`apply_profile_filter()` for free (zero changes needed there) and needed exactly
+one added line, `facts = filter_hidden_rows(facts)`, before `facts.to_csv()`.
+
+Non-regression across all 499 cached tickers: **59,047 rows removed, every one
+from the 7 named concepts, 0 from anything else**; `metrics_long` byte-identical
+under old vs. new `is_hidden()`. `PPNR`/`CoreOperatingEarnings` showed exactly 0
+rows removed -- not a fix gap, confirmed: their own source data only ever
+populates in the profiles where those two ratios are already visible, so there
+was nothing to leak in the cached data to begin with.
+
+**Part B.** Characterizing `peg_ratio` against real data (24,312 valid pairs
+across all 499 tickers) found the sign-flip case the task hypothesized -- 5,306
+negative values, **100% from negative revenue growth, 0% from negative pe_ratio**
+(which is already structurally non-negative in `build_valuation_history`) -- and
+found something the task didn't hypothesize: an **ordering bug**. `peg_ratio` was
+computed from `pe_ratio` *before* the existing `MAX_MULTIPLE=200` exclusion ran on
+it, so `pe_ratio`'s own safeguard never protected `peg_ratio` at all. Traced to
+its root cause: `ANET`'s trailing-twelve-month net income at 2021-12-31 summed to
+**$841** (three profitable quarters of ~$180-224M nearly exactly offset by a
+-$601.6M one-time charge) -- technically positive, so `pe_ratio_raw` came out to
+**13,635,224**. `ED`, `SCHW`, `WAT` and others showed the identical pattern at
+other dates (375 rows had `pe_ratio_raw > 200` project-wide). Fixed by moving the
+`pe_ratio` exclusion before `peg_ratio`'s computation -- reusing the existing
+safeguard instead of adding a parallel one -- which alone drops `ANET`'s worst
+reading from 13.6 million to 4.28.
+
+On top of that: a growth floor of 2% (independently re-derived from `peg_ratio`'s
+own distribution -- collateral cost stays low, 58 of 11,383 otherwise-plausible
+readings, up to the 2% mark before rising sharply at 3%+ -- it just happens to
+numerically match `MIN_OPERATING_LEVERAGE_REVENUE_GROWTH`) plus a final cap of 30
+(99.5th percentile of the post-floor distribution is ~22, cap removes only 37 of
+17,089, 0.22%). A **second, separate gap** was found in `build_snapshot()`'s own
+independent `peg_ratio` computation: unlike `build_valuation_history`'s
+`pe_ratio`, `snap["pe_ttm"]` has no positivity guard upstream, so a negative
+trailing EPS survived the growth-only guard untouched (verified with a synthetic
+case: `pe_ttm=-15`, `growth=10%` produced `peg=-1.5`, unmasked). Fixed by requiring
+`pe_ttm > 0` explicitly in that path too.
+
+Non-regression: all 10 other valuation ratios (`pe_ratio` through `p_ffo`) are
+byte-identical old vs. new; `peg_ratio` itself masks 7,598 of 24,650 rows and
+changes **0** of the rows that survive in both. Added `peg_ratio` to
+`plot_valuation()`'s `concepts_to_plot` (it was computed but never wired into any
+chart) and confirmed it renders against real `AAPL` data. Full detail in
+`hidden_ttm_leak_and_peg_guard_report.md`.
+
+---
+
+## 2026-07-29 — MS/SOFI/UNH reassignment verified: SOFI had a real SPAC-merger scope break producing equity_to_assets = -815.7 and roa = -28%
+
+Verified the `standard` -> `financial`/`health_services` reassignment for MS, SOFI,
+UNH with a real coverage check and metric spot-check, not just the tag-signature
+match that justified the reassignment itself.
+
+**MS: clean.** Two small negative-metric quarters (net_interest_margin at
+2012-Q3/Q4, provision_ratio in 7 quarters across 2014-2021) were checked rather
+than assumed benign — both are real, smooth, small (a temporary funding-cost
+quarter; loan-loss reserve releases in good credit years), not scale/tag defects.
+
+**UNH: the reassignment's own premise didn't hold up.** Diffing
+`PROFILE_HIDDEN["standard"]` against `PROFILE_HIDDEN["health_services"]` directly
+in `config.py` (not from memory) shows `health_services`'s hidden set is a
+**strict superset** of `standard`'s -- moving UNH reveals **zero** newly-visible
+metrics. The only effect is that `rule_of_40` becomes newly **hidden**. The
+reassignment is still correct (it changes concept *resolution*, not metric
+visibility -- health_services applies its own Capex/R&D overrides), just not for
+the reason it was framed around.
+
+**SOFI: a real, previously-undetected SPAC-merger scope break.** SoFi went public
+via SPAC merger (June 2021); its CIK is the former SPAC shell
+(Social Capital Hedosophia Holdings Corp V). `Assets` at 2020-09-30 resolved to
+**$466,179** and at 2021-03-31 to **$805,817,385** -- the SPAC's own trust-account
+assets, not SoFi's real balance sheet (~$7-8B at neighboring dates). Confirmed via
+same-CIK filing history: `StockholdersEquity` already resolves correctly at every
+date because a post-merger restatement was filed for every StockholdersEquity
+end-date, but **no restated Assets value was ever filed for these two specific
+interim quarters** -- 10-Qs only restate the current quarter-end and prior fiscal
+year-end. A permanent SEC-record gap, not a resolution-order bug. Left unmasked,
+this produced `equity_to_assets = -815.7` at 2020-09-30 and `roa = -28.0%` at
+2021-03-31. Fixed via the existing `_KNOWN_SCOPE_MISMATCH_OUTLIERS` mechanism
+(the same one already used for Ford's LongTermDebt) -- masking, not substitution,
+since no correct value exists anywhere in the filing history for these dates.
+
+Also fixed: `ProvisionForCreditLosses` coverage was 7.1% (2 of 28 quarters) because
+SoFi tags its provision as `FinancingReceivableExcludingAccruedInterestCreditLossExpenseReversal`,
+not any of the base `financial` profile's three candidate tags. Verified before
+trusting it: the one date where both the old and new tag report a value
+(2022-03-31) match **exactly** ($12,961,000) -- confirming same concept, different
+tag name, not a coincidence. Appended via `TICKER_CONCEPT_OVERRIDES["SOFI"]`,
+scoped to SOFI only since this tag name is not expected to generalize to MS, GS, or
+any other `financial` ticker. Coverage rose 7.1% -> 71.4%.
+
+**Verdict: SOFI is a clean fit for `financial`, not a partial one** -- the initial
+concern (fintech/neobank vs. traditional bank) does not survive the coverage check
+once the tag gap is fixed. `DividendsPerShare` at 32.1% is not a fit problem: no
+per-share tag beyond two that report $0.0 in all 9 resolved quarters, and the only
+cash-dividend tag present is preferred-stock-specific. SoFi has never paid a common
+dividend -- the standard non-payer exception, verified directly rather than assumed.
+
+Non-regression, task scope (MS/SOFI/UNH): 0 changed for MS and UNH; SOFI shows
+exactly 2 disappeared (masked Assets) + 18 new (ProvisionForCreditLosses) and
+nothing else. Full-universe diff also caught an **unrelated, out-of-scope
+change**: `CVNA` has been commented out of `TICKER_PROFILES`
+(`#"CVNA": "retail", doesnt work`) by an edit external to this task, so it now
+falls back to `standard` and its retail-specific concepts (AccountsPayable,
+AccountsReceivable, Inventory, CostOfRevenue -- 150 values) stopped resolving,
+with 5 LongTermDebt values changing under the new profile path. Not reverted --
+out of scope for this task -- but noted here since the mandatory full-universe
+diff would otherwise look like an unexplained regression. Full detail in
+`ms_sofi_unh_reassignment_verification_report.md`.
+
+---
+
+## 2026-07-29 — Retroactive scan of the 58 reconciliation tickers: TROW's D&A was wrong by 150-250x, and coverage% could not see it
+
+The reconciliation task added 58 tickers on a quick resolution probe. This pass
+applied the full per-batch discipline to all of them, grouped by profile. **3 of 58
+needed a real fix**; the rest were confirmed structural, confirmed non-payers, or
+logged ambiguous.
+
+**The lesson worth keeping: a coverage percentage is blind to a concept that
+resolves to the *wrong tag*.** TROW's `DepreciationAndAmortization` showed as a mild
+"36%" — but the values it *did* produce were **$100,000-$200,000 per quarter when
+actual depreciation was $15.3M-$25.1M**, off by 150-250x. Root cause: T. Rowe tags
+depreciation as `DepreciationNonproduction`, which is not in the base D&A list, so
+the priority list fell through to `AmortizationOfIntangibleAssets` — a trivial line
+for this company. Confirmed by same-date identity: where
+`DepreciationDepletionAndAmortization` does resolve (2021 Q1-Q3) it equals
+`DepreciationNonproduction` **exactly** ($49.0M / $50.4M / $51.7M).
+
+Because of that, a **plausibility sweep** was added to the method: median D&A and
+median Capex against median Revenue across the whole batch. It flagged 4 tickers.
+Three were fine on inspection (COIN and APP are genuinely asset-light; VICI's Capex
+is excluded by the `reit` profile anyway) and one was a real defect — **CVNA's D&A
+at 0.18% of revenue**, resolving to intangible amortization. Unlike TROW, Carvana
+files **no depreciation flow tag at all**, so there is nothing to substitute.
+Escalated as needing a decision rather than left as a silent gap.
+
+Other two fixes: **FIS** `Revenue` 49%->95% (pre-ASC-606 `SalesRevenueServicesNet`
+missing; verified by reconstructing FY2009 $3.735B / FY2019 $10.333B / FY2020
+$12.553B against reported figures, with a continuous seam). **ERIE** `Capex`
+49%->94% (tag switch in 2018; the two tags agree **to the dollar** on all three
+overlapping quarters).
+
+**Eight candidate fixes were rejected on evidence** — this was most of the work:
+
+- **AMP** `CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents` is
+  **2.14-2.39x** larger than the carrying-value tag on overlapping dates. Splicing
+  would fabricate a 2.2x jump. Notable because the *same* fix was correctly applied
+  to **CAT** in the captive-finance batch — there the ratio is **exactly 1.00 across
+  20 overlapping dates**. Same tag, opposite verdict, decided by data.
+- **AJG/AMP** `CostsAndExpenses` as a route to operating income: for AJG,
+  `Revenue - CostsAndExpenses` equals reported **pretax** income with a **$0
+  difference in 45 of 46 periods** — it includes interest expense.
+- **RJF** `NoninterestIncomeOtherOperatingIncome` is ~**1%** of the real
+  `NoninterestIncome` ($18M vs $1,688M) — the TROW failure mode exactly.
+- **RJF/IBKR** `RevenuesNetOfInterestExpense` — different aggregate, ~12% high.
+- **ARE** `GainLossOnSaleOfPropertiesNetOfApplicableIncomeTaxes` had *zero* overlap
+  with the resolving tag, so it looked like a free 40%->68% win — but its range is
+  $0-$1.86M against the gross tag's -$435k-$619.9M (~300x mismatch); it is the
+  taxable-REIT-subsidiary slice. Logged ambiguous, not taken.
+- **CI** `PaymentsForProceedsFromProductiveAssets` — exact duplicate, adds 0 periods.
+- **CVNA** `FinanceLeaseRightOfUseAssetAmortization` — a lease component, not D&A.
+- **FISV** `AmortizationOfAcquiredIntangibleAssets` — would extend coverage while
+  propagating a known understatement (amortization is only 62-79% of true D&A).
+
+**Two findings worth remembering beyond this batch.** First, `OperatingIncomeLoss`
+is genuinely absent for **AJG, BRO, AMP and CTVA** — insurance brokers and Corteva
+do not report an operating-income subtotal at all, so this is not the
+diversified-conglomerate tag fragility seen elsewhere. Second, a 0%
+`DividendsPerShare` is **not** always the non-payer exception: **ERIE** and **VRT**
+both pay real dividends (ERIE up to $272.9M) but file no per-share tag, and for
+ERIE it cannot even be derived because `SharesOutstanding` is absent too. 13 of the
+batch *were* verified as genuine non-payers.
+
+Before accepting any "structurally absent" verdict, the cached facts were checked
+for company-extension taxonomies — only standard namespaces exist (`us-gaap`, `dei`,
+`srt`, `invest`, `ffd`) and none carries the missing concepts.
+
+Non-regression, all 499 cached tickers: **21 changed (all TROW, all corrections),
+0 disappeared, 91 new** (FIS 34, ERIE 30, TROW 27). Only 3 tickers appear in the
+diff. All three fixes went through `TICKER_CONCEPT_OVERRIDES`, which cannot reach
+another ticker — so cross-group contamination is structurally impossible as well as
+empirically confirmed (Groups 2-11 each returned 0/0/0). Full detail in
+`retroactive_new_ticker_scan_report.md`.
+
+---
+
+## 2026-07-28 — Ticker universe reconciliation: 79 implicit `standard` assignments made explicit, 58 missing S&P 500 members added, 13 left unassigned on purpose
+
+Not a bugfix — a coverage/bookkeeping pass — but it surfaced enough that is worth
+recording, and the non-regression discipline was the same as every batch scan.
+
+**Part A.** 441 cached tickers, 358 assigned, so **85 were resolving to
+`DEFAULT_PROFILE` by fallback** with no way to tell "deliberately standard" from
+"never assigned". 79 were made explicit. The interesting part is the **six that
+were not**, each caught by checking the tag signature rather than the name:
+
+- **MS** carries all 7 bank tags checked — *the identical set to GS*, already
+  `financial`. A bank sitting unassigned.
+- **SOFI** carries 4 of 7 including `Deposits`.
+- **UNH** carries `PremiumsEarnedNet` / `PolicyholderBenefitsAndClaimsIncurredNet`
+  / `LiabilityForFuturePolicyBenefits` — the same signature CVS has post-Aetna.
+- **APA / NVR / PHM** were already deliberately commented out of `energy` and
+  `homebuilder`. Writing `"APA": "standard"` would have *erased* that signal.
+  (APA's config comment "HAS NO REVENUE" was confirmed against the data: it has
+  neither `Revenues` nor `RevenueFromContractWithCustomerExcludingAssessedTax`.)
+
+Part A non-regression was **provably inert**: 331,856 values before, 331,856
+after, 0 changed / 0 disappeared / 0 new. The default-fallback path and the
+explicit-assignment path are confirmed identical.
+
+**Part B — two methodology lessons worth keeping.**
+
+*Don't let a summariser produce a reference list.* The first attempt to read the
+S&P 500 constituents through a summarising fetch **truncated mid-alphabet at
+`MET`** and mixed real symbols with invented ones. Parsing the raw wikitext
+directly gave 503 rows / 503 unique symbols with per-sector counts summing exactly
+to 503. Everything downstream depended on that list being right.
+
+*Cross-check symbols against SEC's own map before believing a gap.* All 67
+candidate-missing symbols were validated against the cached
+`company_tickers.json`. All 67 resolved — including several that looked like
+errors but are real recent renames (`MRSH`←MMC, `XYZ`←SQ) or 2026 spinoffs
+(`HONA`, `FDXF`). More importantly it caught the reverse case: **`ECHO` resolves
+to CIK 1415404, which is already cached as `SATS`** — a rename, not a gap. Adding
+it would have double-cached one registrant under two symbols. Real gap: **66, not
+67.** The same check proved `SATS` is *not* index drift, unlike CAG/CPB/POOL/CE
+which genuinely left the index in June 2026.
+
+**58 assigned, 8 left unassigned.** Assignment was decided by building the
+dataframe under each *candidate* profile and counting what actually populates, not
+by GICS label. Three calls worth recording:
+
+- **Healthcare distributors (CAH, COR, MCK, HSIC) → `retail`**, not
+  `health_services`. They run on ~1% operating margins where the business *is*
+  working capital, and `retail` is the only profile that keeps
+  `dio`/`dpo`/`dso`/`cash_conversion_cycle`/`inventory_turnover` visible —
+  `health_services` hides all five. All four resolve 15/15 under `retail`.
+- **HOOD → `financial` even though `standard` scored higher** (9/13 vs 10/12).
+  `standard` would actively show leverage metrics off a broker balance sheet
+  dominated by customer payables; `financial` merely leaves `efficiency_ratio` and
+  `provision_ratio` blank. **A blank metric beats a misleading one.**
+- **SNA → `industrials`, not `captive_finance`**, despite Snap-on Credit: it
+  resolves identically (11/12) under all three candidates and `LongTermDebt`
+  resolves cleanly, which is the quirk `captive_finance` exists for. Same
+  reasoning kept **TSLA** out of `captive_finance` — no finance-company balance
+  sheet on the scale of GM Financial / Ford Credit.
+
+**The 8 left unassigned are the actual finding** — they map the categories the
+project still lacks. `BX`/`KKR`/`APO`/`ARES` were flagged on hard data: quarterly
+revenue swings of **538× / 30× / 16× / 124×** against 1.5–5× for genuine fee
+businesses (BLK, CME, AON, AMP, SPGI, TROW), because reported revenue includes
+performance allocations and consolidated-fund results — and KKR/APO additionally
+consolidate life insurers (Global Atlantic, Athene). `BRK-B` fits nothing (best is
+`standard` at 10/12, missing `LongTermDebt` for a company carrying ~$120B of it).
+`MRNA` → the in-construction `biotech` profile; `INCY` was tested against the same
+bar and *does* fit `pharma_medtech`. `HONA`/`FDXF` have **0 us-gaap tags** — valid
+but empty companyfacts documents, nothing to profile yet.
+
+Part B non-regression: **0 changed, 0 disappeared**, 39,023 new values landing on
+exactly the 58 new tickers and none on a previously-cached one. `TICKER_PROFILES`
+was additionally parsed with `ast` to confirm **no duplicate keys** (495 literal,
+495 unique) — a silent override would have been invisible to a value diff whenever
+the two entries happened to agree.
+
+Universe went 441→499 cached, 358→495 assigned, 437→490 of 503 index members
+covered. Full detail in `ticker_universe_reconciliation_report.md`.
+
+---
+
 ## 2026-07-28 — Airline batch scan (DAL, UAL + LUV): the "ASC 842" premise didn't hold up, real cause was COVID-era debt issuance; rule_of_40 hidden profile-wide
 
 Fifteenth stock-type profile batch. `airline` runs entirely on the base tag set (no profile or

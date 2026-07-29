@@ -445,6 +445,20 @@ _KNOWN_SCOPE_MISMATCH_OUTLIERS = {
     # these three periods before stopping altogether. Masked so the series ends honestly at
     # 2017 instead of implying Ford's debt fell 99.6% in one year.
     ("F", "LongTermDebt"): {"2018-12-31", "2019-12-31", "2020-12-31"},
+    # SoFi went public via SPAC merger (June 2021); its CIK is the former SPAC shell
+    # (Social Capital Hedosophia Holdings Corp V). Pre-merger Assets facts filed under
+    # this CIK are the SPAC's own trust-account assets, not SoFi Technologies' real
+    # consolidated balance sheet: $466,179 at 2020-09-30 and $805,817,385 at
+    # 2021-03-31, vs. $8.56B and $7.65B at the neighboring 2020-12-31/2021-06-30
+    # dates. StockholdersEquity already resolves correctly for these same dates via
+    # later-filed-wins (a post-merger restatement exists for every StockholdersEquity
+    # date). No restated Assets value was ever filed for these two specific interim
+    # quarters -- 10-Qs only restate the current quarter-end and prior fiscal
+    # year-end -- so masking (not substituting) is the only honest option. Left
+    # unmasked this produced equity_to_assets = -815.7 at 2020-09-30 and
+    # roa = -0.28 at 2021-03-31, both artifacts of dividing real figures by the
+    # wrong-scope SPAC-shell Assets value.
+    ("SOFI", "Assets"): {"2020-09-30", "2021-03-31"},
 }
 
 

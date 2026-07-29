@@ -10,6 +10,24 @@ MIN_DEBT_TO_EQUITY_SCALE_RATIO = 0.05
 REVENUE_SELF_SCALE_WINDOW = 8
 MIN_REVENUE_SELF_SCALE_RATIO = 0.10
 
+# peg_ratio guard, calibrated against real data across all 499 cached tickers
+# (24,304 valid pe_ratio/revenue_yoy_growth pairs). Unlike operating_leverage,
+# pe_ratio here can never be negative (it is nulled below zero upstream), so the
+# only sign-flip risk is a negative growth denominator -- 21.8% of raw values were
+# negative, 100% of those from negative growth, none from negative pe_ratio.
+# MIN_PEG_REVENUE_GROWTH requires growth to be POSITIVE (removing the sign-flip
+# case entirely) AND above a small floor (removing near-zero-growth explosions):
+# a 2% floor removes only 58 of 11,383 otherwise-plausible (0 < peg < 3) cases
+# (0.5%) while cutting the >10-magnitude explosions from 3,192 to 594 -- the floor
+# where collateral cost stays low before rising sharply at 3%+ (183 lost) and 5%+
+# (950 lost). It happens to match MIN_OPERATING_LEVERAGE_REVENUE_GROWTH numerically,
+# but was independently re-derived from peg_ratio's own distribution, not reused.
+# MAX_PEG_RATIO_ABS catches the remaining extreme tail after the floor: the 99.5th
+# percentile of the post-floor distribution is ~22, the max is ~68; 30 removes only
+# 37 of 17,089 (0.22%) values, all comfortably above the bulk of real readings.
+MIN_PEG_REVENUE_GROWTH = 0.02
+MAX_PEG_RATIO_ABS = 30
+
 
 def apply_denominator_scale_guard(
     ratio: pd.Series,

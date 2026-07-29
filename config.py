@@ -1,4 +1,4 @@
-TICKERS = ["AAPL"]
+TICKERS = ["SOFI"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
@@ -206,7 +206,10 @@ TICKER_PROFILES = {
     "SYF": "financial",
     "AXP": "financial",
     "GS": "financial",
-    
+    "SCHW": "financial", "RJF": "financial",
+    "IBKR": "financial", "HOOD": "financial",
+    "MS": "financial", "SOFI": "financial",
+
 
     "TRV": "insurance_pc",
     "CB": "insurance_pc",
@@ -251,6 +254,8 @@ TICKER_PROFILES = {
     "TGT": "retail",
     "DG": "retail",
     "DLTR": "retail",
+    "CAH": "retail", "COR": "retail", "MCK": "retail", "HSIC": "retail",
+    #"CVNA": "retail", doesnt work
 
     "MO": "consumer_staples",
     "ADM": "consumer_staples",
@@ -282,6 +287,7 @@ TICKER_PROFILES = {
     "SJM": "consumer_staples",
     "SYY": "consumer_staples",
     "TSN": "consumer_staples",
+    "CL": "consumer_staples",  
 
     "JNJ": "pharma_medtech",
     "ABT": "pharma_medtech",
@@ -325,6 +331,7 @@ TICKER_PROFILES = {
     "WST": "pharma_medtech",
     "ZBH": "pharma_medtech",
     "ZTS": "pharma_medtech",
+    "INCY": "pharma_medtech",
 
     "DGX": "health_services",
     "LH": "health_services",
@@ -332,6 +339,8 @@ TICKER_PROFILES = {
     "DVA": "health_services",
     "UHS": "health_services",
     "CVS": "health_services",
+    "CI": "health_services", "ELV": "health_services",
+    "HUM": "health_services", "CNC": "health_services", "UNH": "health_services",
 
     "HON": "industrials",
     "MMM": "industrials",
@@ -400,6 +409,9 @@ TICKER_PROFILES = {
     "WM": "industrials",
     "GWW": "industrials",
     "XYL": "industrials",
+    "APTV": "industrials", "VRT": "industrials",
+    "SNA": "industrials",
+    "TSLA": "industrials",
 
     "DIS": "media",
     "NFLX": "media",
@@ -426,6 +438,7 @@ TICKER_PROFILES = {
     "MAR": "leisure", "HLT": "leisure",
     "CCL": "leisure", "RCL": "leisure", "NCLH": "leisure",
     "LVS": "leisure", "MGM": "leisure", "WYNN": "leisure",
+    "DRI": "leisure", "YUM": "leisure",  
 
     "SO": "utilities",
     "AES": "utilities", "LNT": "utilities", "AEE": "utilities", "AEP": "utilities",
@@ -454,6 +467,7 @@ TICKER_PROFILES = {
     "WMB": "energy", "OKE": "energy", "KMI": "energy", "TRGP": "energy",
     "MPC": "energy", "PSX": "energy_integrated", "VLO": "energy",
     "SLB": "energy_integrated", "HAL": "energy", "BKR": "energy_integrated",
+    "TPL": "energy",
 
     "LIN": "materials",
     "APD": "materials", "SHW": "materials_integrated", "ECL": "materials", "FCX": "materials",
@@ -462,6 +476,7 @@ TICKER_PROFILES = {
     "MLM": "materials", "VMC": "materials", "NUE": "materials_integrated", "STLD": "materials",
     "PKG": "materials", "IP": "materials_integrated", "AVY": "materials_integrated", "BALL": "materials_integrated",
     "AMCR": "materials", "CF": "materials", "MOS": "materials",
+    "CRH": "materials", "SW": "materials", "CTVA": "materials",
 
     "O": "reit",
     "PLD": "reit", "PSA": "reit", "EXR": "reit", "DLR": "reit", "EQIX": "reit",
@@ -470,6 +485,7 @@ TICKER_PROFILES = {
     "ESS": "reit", "INVH": "reit", "UDR": "reit", "CPT": "reit", "WELL": "reit",
     "VTR": "reit", "DOC": "reit", "BXP": "reit", "HST": "reit", "WY": "reit",
     "IRM": "reit",
+    "ARE": "reit", "VICI": "reit",  
 
     "EBAY": "marketplace",
     "BKNG": "marketplace", "EXPE": "marketplace",
@@ -482,7 +498,39 @@ TICKER_PROFILES = {
     "LUV": "airline",
     "DAL": "airline", "UAL": "airline",
 
-   
+ 
+    "AAPL": "standard", "ACN": "standard", "ADBE": "standard", "ADI": "standard",
+    "ADSK": "standard", "AKAM": "standard", "AMAT": "standard", "AMD": "standard",
+    "AMZN": "standard", "ANET": "standard", "APH": "standard", "AVGO": "standard",
+    "CDNS": "standard", "CDW": "standard", "CIEN": "standard", "COHR": "standard",
+    "CRM": "standard", "CRWD": "standard", "CSCO": "standard", "CTSH": "standard",
+    "DDOG": "standard", "DELL": "standard", "FFIV": "standard", "FICO": "standard",
+    "FLEX": "standard", "FSLR": "standard", "FTNT": "standard", "GDDY": "standard",
+    "GEN": "standard", "GLW": "standard", "GOOG": "standard", "GOOGL": "standard",
+    "HPE": "standard", "HPQ": "standard", "IBM": "standard", "INTC": "standard",
+    "INTU": "standard", "IT": "standard", "JBL": "standard", "KEYS": "standard",
+    "KLAC": "standard", "LITE": "standard", "LRCX": "standard", "MA": "standard",
+    "MCHP": "standard", "META": "standard", "MPWR": "standard", "MRVL": "standard",
+    "MSFT": "standard", "MSI": "standard", "MU": "standard", "NTAP": "standard",
+    "NVDA": "standard", "NXPI": "standard", "ON": "standard", "ORCL": "standard",
+    "PANW": "standard", "PLTR": "standard", "PTC": "standard", "Q": "standard",
+    "QCOM": "standard", "RDDT": "standard", "ROP": "standard", "SMCI": "standard",
+    "SNDK": "standard", "SNPS": "standard", "STX": "standard", "SWKS": "standard",
+    "TDY": "standard", "TEL": "standard", "TER": "standard", "TRMB": "standard",
+    "TXN": "standard", "TYL": "standard", "V": "standard", "VRSN": "standard",
+    "WDAY": "standard", "WDC": "standard", "ZBRA": "standard",
+    "FISV": "standard", "FIS": "standard", "GPN": "standard", "PYPL": "standard",
+    "XYZ": "standard", "CPAY": "standard", "JKHY": "standard",
+    "CME": "standard", "CBOE": "standard", "ICE": "standard", "NDAQ": "standard",
+    "COIN": "standard",
+    "SPGI": "standard", "MCO": "standard", "MSCI": "standard", "FDS": "standard",
+    "AON": "standard", "MRSH": "standard", "WTW": "standard", "AJG": "standard",
+    "BRO": "standard",
+    "ERIE": "standard",
+    "BLK": "standard", "TROW": "standard", "BEN": "standard", "IVZ": "standard",
+    "AMP": "standard",
+    "CBRE": "standard", "CSGP": "standard",
+    "APP": "standard", "NOW": "standard",
 }
 
 PROFILE_HIDDEN = {
@@ -1347,6 +1395,85 @@ PROFILE_EXCLUDED_CONCEPTS = {
 
 
 TICKER_CONCEPT_OVERRIDES = {
+    # --- retroactive batch scan of the 58 reconciliation tickers, Group 1 (`standard`) ---
+    "SOFI": {
+        # SoFi (a fintech lender, not a traditional bank) tags its loan-loss provision
+        # as FinancingReceivableExcludingAccruedInterestCreditLossExpenseReversal, not
+        # any of the base financial-profile's provision tags. Without it, coverage was
+        # 2 of 28 quarters (7.1%), both from ProvisionForLoanLossesExpensed. Verified:
+        # the one date where both tags report (2022-03-31) matches EXACTLY
+        # ($12,961,000), confirming this is the same underlying figure under SoFi's
+        # own tag name, not a different concept. Adding it (kept after the existing
+        # tags, so nothing already resolving changes) raises coverage to 19/28 (68%).
+        # Scoped to SOFI only -- this tag name is specific to SoFi's XBRL filings and
+        # is not expected to generalize to MS, GS, or any other `financial` ticker.
+        "ProvisionForCreditLosses": {
+            "tags": [
+                "ProvisionForLoanLeaseAndOtherLosses",
+                "ProvisionForLoanAndLeaseLosses",
+                "ProvisionForLoanLossesExpensed",
+                "FinancingReceivableExcludingAccruedInterestCreditLossExpenseReversal",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+    },
+    "FIS": {
+        # Pre-ASC-606 FIS tagged revenue as SalesRevenueServicesNet, which is not in
+        # the base Revenue list, so everything before 2017-03-31 was missing (49%).
+        # Appending it is purely additive (fallback = first tag per end-date wins) and
+        # changes no existing value. Verified by reconstructing annual revenue from the
+        # spliced quarterly series: FY2009 $3.735B, FY2019 $10.333B, FY2020 $12.553B,
+        # all matching reported figures, with a continuous seam at 2016-12-31 -> 2017-03-31.
+        "Revenue": {
+            "tags": [
+                "RevenueFromContractWithCustomerExcludingAssessedTax",
+                "Revenues",
+                "SalesRevenueNet",
+                "SalesRevenueGoodsNet",
+                "RevenueFromContractWithCustomerIncludingAssessedTax",
+                "SalesRevenueServicesNet",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+    },
+    "TROW": {
+        # T. Rowe tags its real depreciation as DepreciationNonproduction, which is not
+        # in the base D&A list. Without it the list fell through to
+        # AmortizationOfIntangibleAssets -- a trivial line for this company -- and
+        # resolved D&A to $100k-$200k per quarter for 2008-2013 when actual
+        # depreciation was $15.3M-$25.1M. That is a wrong value, not a gap: off by
+        # ~150-250x. Confirmed correct because where DepreciationDepletionAndAmortization
+        # does resolve (2021-03-31 onward) it equals DepreciationNonproduction exactly.
+        "DepreciationAndAmortization": {
+            "sources": [
+                {"type": "tag", "tag": "DepreciationDepletionAndAmortization"},
+                {"type": "tag", "tag": "DepreciationNonproduction"},
+                {"type": "tag", "tag": "DepreciationAndAmortization"},
+                {"type": "tag", "tag": "DepreciationAmortizationAndAccretionNet"},
+                {"type": "sum", "tags": ["Depreciation", "AmortizationOfIntangibleAssets"]},
+            ],
+            "point_in_time": False,
+            "mode": "priority_merge",
+        },
+    },
+    "ERIE": {
+        # Erie switched from PaymentsForProceedsFromProductiveAssets to
+        # PaymentsToAcquireProductiveAssets in 2018. The two agree to the dollar in all
+        # three overlapping quarters, so appending the older tag extends Capex back to
+        # 2008 without altering anything. Its three net-proceeds (negative) quarters are
+        # handled by the existing _NON_NEGATIVE_FLOW_CONCEPTS mask, which covers Capex.
+        "Capex": {
+            "tags": [
+                "PaymentsToAcquirePropertyPlantAndEquipment",
+                "PaymentsToAcquireProductiveAssets",
+                "PaymentsForProceedsFromProductiveAssets",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+    },
     "NVR": {
         "Inventory": {
             "tags": ["InventoryRealEstateLandAndLandDevelopmentCosts"],
@@ -1502,9 +1629,65 @@ def get_expected_concepts(ticker: str) -> list[str]:
     return list(candidates - excluded)
 
 
+# Hidden-metric/TTM-leak audit (Part A): a handful of concepts exist SOLELY to feed
+# one or more ratios that PROFILE_HIDDEN can suppress (they are never independently
+# charted or displayed anywhere in this codebase) -- but they were never themselves
+# subject to is_hidden(), so they leaked through unfiltered wherever they appeared on
+# their own (data/{period}_facts.csv, and several build_snapshot() columns in
+# main.py that use a different name than the ratio they duplicate/feed).
+#
+# Each entry lists ALL of a concept's real consumers, verified by grep against
+# main.py -- not assumed. A concept is only treated as hidden when EVERY one of its
+# consumers is hidden for the ticker's profile; if even one consumer is still
+# visible, the concept must stay visible too (e.g. utilities hides pfcf_ratio but
+# not fcf_margin, so the raw FCF_TTM figure that feeds fcf_margin must remain
+# visible there, even though the pfcf_ttm alias of pfcf_ratio itself should still
+# be hidden). This mirrors PROFILE_HIDDEN's own existing pattern of adding a
+# snapshot-specific literal name (see "pfcf_ttm", already present for financial/
+# insurance_pc/insurance_life) rather than inventing a parallel filter mechanism --
+# it just computes the "which snapshot names correspond to which hidden-able ratio"
+# mapping once, instead of hand-duplicating it profile-by-profile (the existing
+# "pfcf_ttm" entries are a case in point: added for 3 profiles, silently missing
+# reit and utilities, which this mapping now covers automatically).
+_DERIVED_CONCEPT_CONSUMERS = {
+    # `facts` concept rows created by add_derived_concepts()/add_as_concept() in
+    # main.py -- these leak via data/{period}_facts.csv, which is written with no
+    # profile filtering at all.
+    "EPS_TTM_CALC": ["pe_ratio", "payout_ratio"],
+    "TangibleEquity": ["p_tbv"],
+    "PPNR": ["p_ppnr"],
+    "CoreOperatingEarnings": ["p_core_earnings"],
+    "FFO_TTM": ["p_ffo", "ffo_margin"],
+    "FCF_TTM": ["pfcf_ratio", "fcf_margin"],
+    "EBITDA_TTM": ["ev_ebitda", "net_debt_to_ebitda"],
+    # build_snapshot()-only column names in main.py -- same underlying values as
+    # above (or, for "pe_ttm"/"pfcf_ttm", the ratio itself under a different name),
+    # but checked here separately since build_snapshot's own consumers can differ
+    # from `facts`' (e.g. payout_ratio is never computed from the snapshot's
+    # "eps_ttm" column, so it is not one of its consumers here).
+    "eps_ttm": ["pe_ratio"],
+    "pe_ttm": ["pe_ratio"],
+    "avg_pe_5y": ["pe_ratio"],
+    "tangible_equity": ["p_tbv"],
+    "ppnr_ttm": ["p_ppnr"],
+    "core_earnings_ttm": ["p_core_earnings"],
+    "fcf_ttm": ["pfcf_ratio", "fcf_margin"],
+    "pfcf_ttm": ["pfcf_ratio"],
+    "ebitda_ttm": ["ev_ebitda", "net_debt_to_ebitda"],
+    "net_debt": ["net_debt_to_ebitda"],
+    "ev": ["ev_ebitda", "ev_sales"],
+}
+
+
 def is_hidden(ticker: str, metric_name: str) -> bool:
     profile = TICKER_PROFILES.get(ticker, DEFAULT_PROFILE)
-    return metric_name in PROFILE_HIDDEN.get(profile, set())
+    hidden_set = PROFILE_HIDDEN.get(profile, set())
+    if metric_name in hidden_set:
+        return True
+    consumers = _DERIVED_CONCEPT_CONSUMERS.get(metric_name)
+    if consumers:
+        return all(c in hidden_set for c in consumers)
+    return False
 
 def filter_hidden_rows(df, ticker_col="ticker", concept_col="concept"):
     if df.empty:

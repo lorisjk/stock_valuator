@@ -126,7 +126,7 @@ def plot_valuation(ticker: str, valuation_history: pd.DataFrame, output_path: st
         ("p_ppnr", "P/PPNR", None, False),
         ("p_core_earnings", "P/Core Earnings", None, False),
         ("p_ffo", "P/FFO (TTM)", None, False),
-        
+        ("peg_ratio", "PEG Ratio", 1.0, False),
     ]
 
     concepts_to_plot = [c for c in concepts_to_plot if not is_hidden(ticker, c[0])]

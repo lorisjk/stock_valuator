@@ -44,6 +44,8 @@ from metrics import (
     MIN_DEBT_TO_EQUITY_SCALE_RATIO,
     REVENUE_SELF_SCALE_WINDOW,
     MIN_REVENUE_SELF_SCALE_RATIO,
+    MIN_PEG_REVENUE_GROWTH,
+    MAX_PEG_RATIO_ABS,
 )
 from figures import plot_fundamentals, plot_valuation
 from quality import print_data_quality
@@ -375,19 +377,28 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame) ->
     wide["ev_ebitda"] = wide["ev"] / wide["EBITDA_TTM"].where(wide["EBITDA_TTM"] > 0)
     wide["ev_sales"] = wide["ev"] / wide["Revenue_TTM"].where(wide["Revenue_TTM"] > 0)
     wide["dividend_yield"] = (wide["DividendsPerShare_TTM"].where(wide["DividendsPerShare_TTM"] >= 0) / wide["close"])
-    wide["peg_ratio"] = wide["pe_ratio"] / (wide["revenue_yoy_growth"] * 100)
 
     wide["p_tbv"] = wide["market_cap"] / wide["TangibleEquity"].where(wide["TangibleEquity"] > 0)
     wide["p_ppnr"] = wide["market_cap"] / wide["PPNR"].where(wide["PPNR"] > 0)
     wide["p_core_earnings"] = wide["market_cap"] / wide["CoreOperatingEarnings"].where(wide["CoreOperatingEarnings"] > 0)
     wide["p_ffo"] = wide["market_cap"] / wide["FFO_TTM"].where(wide["FFO_TTM"] > 0)
 
-    value_cols = ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_ebitda", "ev_sales", "dividend_yield", "p_tbv", "p_ppnr", "p_core_earnings", "peg_ratio", "p_ffo"]
-
     MAX_MULTIPLE = 200
 
     for col in ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_ebitda", "ev_sales", "p_tbv", "p_ppnr", "p_core_earnings", "p_ffo"]:
         wide[col] = wide[col].where(wide[col] <= MAX_MULTIPLE)
+
+    # peg_ratio is computed AFTER pe_ratio's own >200 exclusion above, not before it --
+    # a near-zero (but technically positive) TTM EPS, from a single large one-time
+    # charge nearly offsetting an otherwise-profitable trailing year (e.g. ANET
+    # 2021-12-31, ED 2021-12-31), sends pe_ratio into the millions before that
+    # exclusion runs. Computing peg_ratio from the pre-exclusion value let those
+    # already-suppressed pe_ratio readings leak through into peg_ratio anyway.
+    wide["peg_ratio"] = wide["pe_ratio"] / (wide["revenue_yoy_growth"] * 100)
+    wide["peg_ratio"] = wide["peg_ratio"].where(wide["revenue_yoy_growth"] > MIN_PEG_REVENUE_GROWTH)
+    wide["peg_ratio"] = wide["peg_ratio"].where(wide["peg_ratio"].abs() <= MAX_PEG_RATIO_ABS)
+
+    value_cols = ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_ebitda", "ev_sales", "dividend_yield", "p_tbv", "p_ppnr", "p_core_earnings", "peg_ratio", "p_ffo"]
 
     long = wide.melt(
         id_vars=["ticker", "end"],
@@ -507,7 +518,13 @@ def build_snapshot(
     snap["pfcf_ttm"] = snap["market_cap"] / snap["fcf_ttm"]
     snap["ev_ebitda"] = snap["ev"] / snap["ebitda_ttm"]
     snap["ev_sales"] = snap["ev"] / snap["revenue_ttm"]
-    snap["peg_ratio"] = snap["pe_ttm"] / (snap["yoy_growth"] * 100)
+    # Unlike build_valuation_history's pe_ratio (nulled below zero upstream via
+    # EPS_TTM_CALC.where(...>0)), snap["pe_ttm"] has no such guard, so a negative
+    # trailing EPS can still reach peg_ratio here -- require it positive explicitly,
+    # matching the positive-P/E-positive-growth convention PEG is defined under.
+    snap["peg_ratio"] = snap["pe_ttm"].where(snap["pe_ttm"] > 0) / (snap["yoy_growth"] * 100)
+    snap["peg_ratio"] = snap["peg_ratio"].where(snap["yoy_growth"] > MIN_PEG_REVENUE_GROWTH)
+    snap["peg_ratio"] = snap["peg_ratio"].where(snap["peg_ratio"].abs() <= MAX_PEG_RATIO_ABS)
     snap["dividend_yield"] = snap["dividends_ttm"] / snap["price"]
     snap["p_tbv"] = apply_denominator_scale_guard(
         snap["market_cap"] / snap["tangible_equity"], snap["tangible_equity"], snap["revenue_ttm"], MIN_DENOMINATOR_SCALE_RATIO
@@ -592,7 +609,8 @@ def main():
 
     metrics_long = filter_hidden_rows(metrics_long)
     valuation_history = filter_hidden_rows(valuation_history)
-    
+    facts = filter_hidden_rows(facts)
+
     facts.to_csv(os.path.join(DATA_DIR, f"{PERIOD}_facts.csv"), index=False)
     metrics_long.to_csv(os.path.join(DATA_DIR, "metrics_long.csv"), index=False)
     valuation_history.to_csv(os.path.join(DATA_DIR, "valuation_history.csv"), index=False)
