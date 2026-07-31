@@ -48,7 +48,7 @@ from metrics import (
     MIN_PEG_REVENUE_GROWTH,
     MAX_PEG_RATIO_ABS,
 )
-from figures import plot_fundamentals, plot_valuation
+from figures import plot_fundamentals, plot_valuation, plot_growth
 from quality import print_data_quality
 
 import os
@@ -134,6 +134,49 @@ def add_derived_concepts(facts: pd.DataFrame) -> pd.DataFrame:
     ffo["value"] = ffo["ni"] + ffo["dep"] - ffo["gains"]
     ffo["concept"] = "FFO_TTM"
     facts = pd.concat([facts, ffo[["ticker", "end", "concept", "value"]]], ignore_index=True)
+
+    return facts
+
+
+def add_quarterly_derived_concepts(facts: pd.DataFrame) -> pd.DataFrame:
+    """Single-quarter counterparts of the derived concepts in add_derived_concepts()
+    that currently exist only in TTM form -- so a single quarter's inflection (e.g. a
+    company's most recent quarterly FCF turning negative) is visible immediately
+    instead of only once it has moved the trailing-twelve-month sum. Mirrors
+    add_derived_concepts() exactly, just built from the plain (already-quarterly)
+    concepts instead of their "_TTM" versions. Purely additive: every concept added
+    here is new (a "_QUARTERLY" name), nothing here touches or replaces a TTM concept.
+    """
+    eps_q = calculate_ratio(facts, "NetIncomeLoss", "SharesOutstanding", "value")
+    eps_q["concept"] = "EPS_QUARTERLY_CALC"
+    facts = pd.concat([facts, eps_q[["ticker", "end", "concept", "value"]]], ignore_index=True)
+
+    nii = facts[facts["concept"] == "NetInterestIncome"][["ticker", "end", "value"]].rename(columns={"value": "nii"})
+    nonii = facts[facts["concept"] == "NoninterestIncome"][["ticker", "end", "value"]].rename(columns={"value": "nonii"})
+    nonexp = facts[facts["concept"] == "NoninterestExpense"][["ticker", "end", "value"]].rename(columns={"value": "nonexp"})
+
+    ppnr_q = nii.merge(nonii, on=["ticker", "end"]).merge(nonexp, on=["ticker", "end"])
+    ppnr_q["value"] = ppnr_q["nii"] + ppnr_q["nonii"] - ppnr_q["nonexp"]
+    ppnr_q["concept"] = "PPNR_QUARTERLY"
+    facts = pd.concat([facts, ppnr_q[["ticker", "end", "concept", "value"]]], ignore_index=True)
+
+    ni = facts[facts["concept"] == "NetIncomeLoss"][["ticker", "end", "value"]].rename(columns={"value": "ni"})
+    realized = facts[facts["concept"] == "RealizedInvestmentGains"][["ticker", "end", "value"]].rename(columns={"value": "realized"})
+
+    core_q = ni.merge(realized, on=["ticker", "end"])
+    core_q["value"] = core_q["ni"] - core_q["realized"]
+    core_q["concept"] = "CoreOperatingEarnings_QUARTERLY"
+    facts = pd.concat([facts, core_q[["ticker", "end", "concept", "value"]]], ignore_index=True)
+
+    ni_ffo = facts[facts["concept"] == "NetIncomeLoss"][["ticker", "end", "value"]].rename(columns={"value": "ni"})
+    dep_ffo = facts[facts["concept"] == "DepreciationAndAmortization"][["ticker", "end", "value"]].rename(columns={"value": "dep"})
+    re_gains = facts[facts["concept"] == "GainLossOnSaleOfProperties"][["ticker", "end", "value"]].rename(columns={"value": "gains"})
+
+    ffo_q = ni_ffo.merge(dep_ffo, on=["ticker", "end"]).merge(re_gains, on=["ticker", "end"], how="left")
+    ffo_q["gains"] = ffo_q["gains"].fillna(0)
+    ffo_q["value"] = ffo_q["ni"] + ffo_q["dep"] - ffo_q["gains"]
+    ffo_q["concept"] = "FFO_QUARTERLY"
+    facts = pd.concat([facts, ffo_q[["ticker", "end", "concept", "value"]]], ignore_index=True)
 
     return facts
 
@@ -274,7 +317,117 @@ def calculate_all_metrics(facts: pd.DataFrame) -> dict:
     return m
 
 
-def build_metrics_long(metrics: dict) -> pd.DataFrame:
+def calculate_quarterly_metrics(facts: pd.DataFrame) -> dict:
+    m = {}
+
+    m["fcf_quarterly"] = calculate_difference(
+        facts, "OperatingCashFlow", "Capex", "fcf_quarterly", "-"
+    )
+    m["ebitda_quarterly"] = calculate_difference(
+        facts, "OperatingIncomeLoss", "DepreciationAndAmortization", "ebitda_quarterly", "+"
+    )
+
+    revenue_q_rows = facts[facts["concept"] == "Revenue"][["ticker", "end", "value"]].rename(
+        columns={"value": "Revenue"}
+    )
+
+    m["operating_margin_quarterly"] = calculate_ratio(
+        facts, "OperatingIncomeLoss", "Revenue", "operating_margin_quarterly"
+    )
+    m["payout_ratio_quarterly"] = calculate_ratio(
+        facts, "DividendsPerShare", "EPS_QUARTERLY_CALC", "payout_ratio_quarterly",
+        require_positive_denominator=True,
+    )
+    m["fcf_margin_quarterly"] = calculate_ratio_from_dfs(
+        m["fcf_quarterly"], revenue_q_rows, "fcf_quarterly", "Revenue", "fcf_margin_quarterly"
+    )
+    m["efficiency_ratio_quarterly"] = calculate_ratio(
+        facts, "NoninterestExpense", "Revenue", "efficiency_ratio_quarterly"
+    )
+    m["provision_ratio_quarterly"] = calculate_ratio(
+        facts, "ProvisionForCreditLosses", "Revenue", "provision_ratio_quarterly"
+    )
+    m["combined_ratio_quarterly"] = calculate_ratio(
+        facts, "BenefitsLossesAndExpenses", "EarnedPremiums", "combined_ratio_quarterly"
+    )
+    m["loss_ratio_quarterly"] = calculate_ratio(
+        facts, "IncurredLosses", "EarnedPremiums", "loss_ratio_quarterly"
+    )
+    m["expense_ratio_quarterly"] = calculate_difference_from_dfs(
+        m["combined_ratio_quarterly"], m["loss_ratio_quarterly"],
+        "combined_ratio_quarterly", "loss_ratio_quarterly", "expense_ratio_quarterly"
+    )
+    m["rd_intensity_quarterly"] = calculate_ratio(
+        facts, "ResearchAndDevelopment", "Revenue", "rd_intensity_quarterly"
+    )
+    m["capex_intensity_quarterly"] = calculate_ratio(
+        facts, "Capex", "Revenue", "capex_intensity_quarterly"
+    )
+    m["ffo_margin_quarterly"] = calculate_ratio(
+        facts, "FFO_QUARTERLY", "Revenue", "ffo_margin_quarterly"
+    )
+
+    return m
+
+
+_TTM_LIKE_SUFFIX = "_TTM"
+_TTM_LIKE_NAMES = {"PPNR", "CoreOperatingEarnings"}   # TTM-derived despite the name
+
+_GROWTH_EXCLUDED_CONCEPTS = {"GainLossOnSaleOfProperties", "RealizedInvestmentGains"}
+
+
+GROWTH_MIN_BASE_RATIO_OVERRIDES = {
+    "Capex": 0.05,
+    "Goodwill": 0.05,
+    "CashAndEquivalents": 0.05,
+    "Inventory": 0.05,
+    "LongTermDebt": 0.05,
+    "ProvisionForCreditLosses": 0.05,
+    "TangibleEquity": 0.05,
+}
+
+GROWTH_COLUMN = "yoy_growth"
+
+
+def growth_concepts(facts: pd.DataFrame) -> list[str]:
+    return sorted(
+        c for c in facts["concept"].unique()
+        if _TTM_LIKE_SUFFIX not in c
+        and c not in _TTM_LIKE_NAMES
+        and c not in _GROWTH_EXCLUDED_CONCEPTS
+    )
+
+
+def add_growth_column(facts: pd.DataFrame) -> pd.DataFrame:
+    """Attach a year-over-year growth column to the facts frame.
+
+    Purely additive by construction: the row set and the `value` column are returned
+    untouched, and rows with no prior-year match within calculate_growth()'s date
+    tolerance (or masked by min_base_ratio) simply get NaN in the new column rather than
+    being dropped. Applied at the very end of the pipeline, immediately before writing
+    the CSV, so no intermediate consumer of `facts` ever sees the extra column.
+    """
+    parts = []
+    for concept in growth_concepts(facts):
+        g = calculate_growth(
+            facts, concept, 4, GROWTH_COLUMN,
+            min_base_ratio=GROWTH_MIN_BASE_RATIO_OVERRIDES.get(concept, 0.33),
+        )
+        if g.empty:
+            continue
+        g = g[["ticker", "end", GROWTH_COLUMN]].copy()
+        g["concept"] = concept
+        parts.append(g)
+
+    if not parts:
+        facts[GROWTH_COLUMN] = pd.NA
+        return facts
+
+    growth = pd.concat(parts, ignore_index=True).drop_duplicates(subset=["ticker", "concept", "end"])
+    return facts.merge(growth, on=["ticker", "concept", "end"], how="left")
+
+
+def build_metrics_long(metrics: dict, quarterly_metrics: dict = None) -> pd.DataFrame:
     spec = [
         (metrics["revenue_growth"], "yoy_growth", "revenue_yoy_growth"),
         (metrics["income_growth"], "yoy_growth", "income_yoy_growth"),
@@ -307,8 +460,26 @@ def build_metrics_long(metrics: dict) -> pd.DataFrame:
         (metrics["ffo_margin"], "ffo_margin", "ffo_margin"),
     ]
 
+    if quarterly_metrics:
+        spec += [
+            (quarterly_metrics["operating_margin_quarterly"], "operating_margin_quarterly", "operating_margin_quarterly"),
+            (quarterly_metrics["payout_ratio_quarterly"], "payout_ratio_quarterly", "payout_ratio_quarterly"),
+            (quarterly_metrics["fcf_margin_quarterly"], "fcf_margin_quarterly", "fcf_margin_quarterly"),
+            (quarterly_metrics["efficiency_ratio_quarterly"], "efficiency_ratio_quarterly", "efficiency_ratio_quarterly"),
+            (quarterly_metrics["provision_ratio_quarterly"], "provision_ratio_quarterly", "provision_ratio_quarterly"),
+            (quarterly_metrics["combined_ratio_quarterly"], "combined_ratio_quarterly", "combined_ratio_quarterly"),
+            (quarterly_metrics["loss_ratio_quarterly"], "loss_ratio_quarterly", "loss_ratio_quarterly"),
+            (quarterly_metrics["expense_ratio_quarterly"], "expense_ratio_quarterly", "expense_ratio_quarterly"),
+            (quarterly_metrics["rd_intensity_quarterly"], "rd_intensity_quarterly", "rd_intensity_quarterly"),
+            (quarterly_metrics["capex_intensity_quarterly"], "capex_intensity_quarterly", "capex_intensity_quarterly"),
+            (quarterly_metrics["ffo_margin_quarterly"], "ffo_margin_quarterly", "ffo_margin_quarterly"),
+        ]
+
     rows = [to_long_format(df, value_col, name) for df, value_col, name in spec]
     return pd.concat(rows, ignore_index=True)
+
+
+MIN_VALUATION_DENOMINATOR_SCALE_RATIO = 0.001
 
 
 def calculate_historical_pe(facts: pd.DataFrame, price_history: pd.DataFrame) -> tuple:
@@ -368,17 +539,6 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame, pr
     )
     wide["revenue_yoy_growth"] = wide.groupby("ticker")["Revenue_TTM"].pct_change(periods=4)
 
-    # market_cap: prefer EDGAR's own quarterly SharesOutstanding history (most accurate
-    # per period). For the rare ticker with ZERO SharesOutstanding facts anywhere in its
-    # EDGAR history (a confirmed, genuine, unfixable gap -- see bugfixed_update_history.md),
-    # fall back to yfinance's current share count instead of leaving market_cap entirely
-    # NaN. Without this, market_cap (and everything derived from it: ev, pb_ratio,
-    # pfcf_ratio, ev_ebitda, ev_sales, p_tbv, p_ppnr, p_core_earnings, p_ffo) silently comes
-    # out empty for that ticker even though every one of those multiples' OTHER required
-    # inputs is present and fine -- the coupling bug this function was reworked to fix.
-    # Scoped to tickers with a COMPLETE gap only (never a per-row fill), so tickers with
-    # real, partial EDGAR coverage are completely untouched -- this fix does not, and is
-    # not intended to, patch individual missing quarters.
     shares_outstanding_count = wide.groupby("ticker")["SharesOutstanding"].transform("count")
     shares_fallback = wide["ticker"].map(prices.set_index("ticker")["shares_outstanding"])
     shares_for_market_cap = wide["SharesOutstanding"].where(shares_outstanding_count > 0, shares_fallback)
@@ -400,10 +560,21 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame, pr
     wide["p_core_earnings"] = wide["market_cap"] / wide["CoreOperatingEarnings"].where(wide["CoreOperatingEarnings"] > 0)
     wide["p_ffo"] = wide["market_cap"] / wide["FFO_TTM"].where(wide["FFO_TTM"] > 0)
 
-    MAX_MULTIPLE = 200
+    implied_earnings_ttm = wide["EPS_TTM_CALC"] * shares_for_market_cap
+    for col, denominator in [
+        ("pe_ratio", implied_earnings_ttm),
+        ("pb_ratio", wide["StockholdersEquity"]),
+        ("pfcf_ratio", wide["FCF_TTM"]),
+        ("ev_ebitda", wide["EBITDA_TTM"]),
+        ("p_tbv", wide["TangibleEquity"]),
+        ("p_ppnr", wide["PPNR"]),
+        ("p_core_earnings", wide["CoreOperatingEarnings"]),
+        ("p_ffo", wide["FFO_TTM"]),
+    ]:
+        wide[col] = apply_denominator_scale_guard(
+            wide[col], denominator, wide["Revenue_TTM"], MIN_VALUATION_DENOMINATOR_SCALE_RATIO
+        )
 
-    for col in ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_ebitda", "ev_sales", "p_tbv", "p_ppnr", "p_core_earnings", "p_ffo"]:
-        wide[col] = wide[col].where(wide[col] <= MAX_MULTIPLE)
     wide["peg_ratio"] = wide["pe_ratio"] / (wide["revenue_yoy_growth"] * 100)
     wide["peg_ratio"] = wide["peg_ratio"].where(wide["revenue_yoy_growth"] > MIN_PEG_REVENUE_GROWTH)
     wide["peg_ratio"] = wide["peg_ratio"].where(wide["peg_ratio"].abs() <= MAX_PEG_RATIO_ABS)
@@ -578,18 +749,21 @@ def main():
     
 
     facts = add_derived_concepts(facts)
+    facts = add_quarterly_derived_concepts(facts)
     metrics = calculate_all_metrics(facts)
+    quarterly_metrics = calculate_quarterly_metrics(facts)
 
     facts = add_as_concept(facts, metrics["fcf"], "fcf", "FCF_TTM")
     facts = add_as_concept(facts, metrics["ebitda"], "ebitda", "EBITDA_TTM")
+    facts = add_as_concept(facts, quarterly_metrics["fcf_quarterly"], "fcf_quarterly", "FCF_QUARTERLY")
+    facts = add_as_concept(facts, quarterly_metrics["ebitda_quarterly"], "ebitda_quarterly", "EBITDA_QUARTERLY")
 
-    
     duplicates = facts[facts.duplicated(subset=["ticker", "concept", "end"], keep=False)]
     if not duplicates.empty:
         print("WARNUNG: Duplikate gefunden!")
         print(duplicates)
 
-    metrics_long = build_metrics_long(metrics)
+    metrics_long = build_metrics_long(metrics, quarterly_metrics)
 
     price_history = load_price_history()
     prices = load_current_prices()
@@ -612,6 +786,8 @@ def main():
     facts = filter_hidden_rows(facts)
     snapshot = filter_hidden_rows(snapshot)
 
+    facts = add_growth_column(facts)
+
     facts.to_csv(os.path.join(DATA_DIR, f"{PERIOD}_facts.csv"), index=False)
     metrics_long.to_csv(os.path.join(DATA_DIR, "metrics_long.csv"), index=False)
     valuation_history.to_csv(os.path.join(DATA_DIR, "valuation_history.csv"), index=False)
@@ -622,6 +798,7 @@ def main():
     for ticker in TICKERS:
         plot_fundamentals(ticker, metrics_long, os.path.join(FIGURE_DIR, f"{ticker}_fundamentals.png"))
         plot_valuation(ticker, valuation_history, os.path.join(FIGURE_DIR, f"{ticker}_valuation.png"))
+        plot_growth(ticker, facts, os.path.join(FIGURE_DIR, f"{ticker}_growth.png"))
 
 
 def delete_cached_facts(tickers: list[str]) -> list[str]:
@@ -792,15 +969,19 @@ def run_full_refresh():
     # --- Phase 3: calculate (batch) + plot (per ticker) ---
     t0 = time.perf_counter()
     facts = add_derived_concepts(facts)
+    facts = add_quarterly_derived_concepts(facts)
     metrics = calculate_all_metrics(facts)
+    quarterly_metrics = calculate_quarterly_metrics(facts)
     facts = add_as_concept(facts, metrics["fcf"], "fcf", "FCF_TTM")
     facts = add_as_concept(facts, metrics["ebitda"], "ebitda", "EBITDA_TTM")
+    facts = add_as_concept(facts, quarterly_metrics["fcf_quarterly"], "fcf_quarterly", "FCF_QUARTERLY")
+    facts = add_as_concept(facts, quarterly_metrics["ebitda_quarterly"], "ebitda_quarterly", "EBITDA_QUARTERLY")
 
     duplicates = facts[facts.duplicated(subset=["ticker", "concept", "end"], keep=False)]
     if not duplicates.empty:
         print(f"WARNUNG: {len(duplicates)} Duplikate gefunden!")
 
-    metrics_long = build_metrics_long(metrics)
+    metrics_long = build_metrics_long(metrics, quarterly_metrics)
     valuation_history = build_valuation_history(facts, price_history, prices)
     _, rolling_pe = calculate_historical_pe(facts, price_history)
     snapshot = build_snapshot(facts, metrics, prices, rolling_pe)
@@ -810,6 +991,8 @@ def run_full_refresh():
     valuation_history = filter_hidden_rows(valuation_history)
     facts_out = filter_hidden_rows(facts)
     snapshot = filter_hidden_rows(snapshot)
+
+    facts_out = add_growth_column(facts_out)
 
     facts_out.to_csv(os.path.join(DATA_DIR, f"{PERIOD}_facts.csv"), index=False)
     metrics_long.to_csv(os.path.join(DATA_DIR, "metrics_long.csv"), index=False)
@@ -821,6 +1004,7 @@ def run_full_refresh():
         t0 = time.perf_counter()
         plot_fundamentals(ticker, metrics_long, os.path.join(FIGURE_DIR, f"{ticker}_fundamentals.png"))
         plot_valuation(ticker, valuation_history, os.path.join(FIGURE_DIR, f"{ticker}_valuation.png"))
+        plot_growth(ticker, facts_out, os.path.join(FIGURE_DIR, f"{ticker}_growth.png"))
         plot_times[ticker] = time.perf_counter() - t0
     print(f"Calculate + plot done: {calc_time + sum(plot_times.values()):.1f}s total.")
 

@@ -1,4 +1,4 @@
-TICKERS = ["V"]
+TICKERS = ["TSLA"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
@@ -530,6 +530,8 @@ TICKER_PROFILES = {
     "AMP": "standard",
     "CBRE": "standard", "CSGP": "standard",
     "APP": "standard", "NOW": "standard",
+
+    "BX": "alt_asset_manager",
 }
 
 PROFILE_HIDDEN = {
@@ -802,6 +804,15 @@ PROFILE_HIDDEN = {
         "rd_intensity", "operating_leverage", "operating_income_yoy_growth",
         "ffo_margin", "p_ffo",
         "rule_of_40",
+    },
+        "alt_asset_manager": {
+        "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
+        "equity_to_assets", "provision_ratio", "p_ppnr", "combined_ratio",
+        "loss_ratio", "expense_ratio", "net_investment_yield",
+        "reserve_growth", "p_core_earnings",
+        "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
+        "rd_intensity", "operating_leverage", "operating_income_yoy_growth",
+        "ffo_margin", "p_ffo",
     },
 }
 
@@ -1762,15 +1773,29 @@ _DERIVED_CONCEPT_CONSUMERS = {
     "ebitda_ttm": ["ev_ebitda", "net_debt_to_ebitda"],
     "net_debt": ["net_debt_to_ebitda"],
     "ev": ["ev_ebitda", "ev_sales"],
+    # quarterly (non-TTM) counterparts of the derived concepts above -- hidden under
+    # exactly the same condition as their TTM sibling, so a profile that hides e.g.
+    # PPNR-derived output also hides the new PPNR_QUARTERLY reporting-view concept.
+    "EPS_QUARTERLY_CALC": ["pe_ratio", "payout_ratio"],
+    "PPNR_QUARTERLY": ["p_ppnr"],
+    "CoreOperatingEarnings_QUARTERLY": ["p_core_earnings"],
+    "FFO_QUARTERLY": ["p_ffo", "ffo_margin"],
+    "FCF_QUARTERLY": ["pfcf_ratio", "fcf_margin"],
+    "EBITDA_QUARTERLY": ["ev_ebitda", "net_debt_to_ebitda"],
 }
 
 
 def is_hidden(ticker: str, metric_name: str) -> bool:
     profile = TICKER_PROFILES.get(ticker, DEFAULT_PROFILE)
     hidden_set = PROFILE_HIDDEN.get(profile, set())
-    if metric_name in hidden_set:
+    # quarterly metric counterparts (e.g. "operating_margin_quarterly") follow the
+    # same visibility as their TTM sibling ("operating_margin") -- for any pre-existing
+    # metric_name this is a no-op, since base_name == metric_name when there's no
+    # "_quarterly" suffix to strip.
+    base_name = metric_name[:-len("_quarterly")] if metric_name.endswith("_quarterly") else metric_name
+    if metric_name in hidden_set or base_name in hidden_set:
         return True
-    consumers = _DERIVED_CONCEPT_CONSUMERS.get(metric_name)
+    consumers = _DERIVED_CONCEPT_CONSUMERS.get(metric_name) or _DERIVED_CONCEPT_CONSUMERS.get(base_name)
     if consumers:
         return all(c in hidden_set for c in consumers)
     return False
