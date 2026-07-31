@@ -307,6 +307,25 @@ _KNOWN_BAD_FACTS = {
     ("GLW", "PaymentsToAcquireProductiveAssets"): [
         {"end": "2011-03-31", "filed": "2011-04-29", "val": 100000000000},
     ],
+    ("BKR", "CommonStockSharesOutstanding"): [
+        # Both points come from the same 10-Q (accn 0001701605-17-000066, filed
+        # 2017-07-28) covering the "Baker Hughes, a GE Company" formation around the
+        # July 2017 GE Oil & Gas / Baker Hughes merger. val=100 is a nominal shell-entity
+        # share count from before the merger's real share issuance, not BKR's actual
+        # outstanding count (which is in the hundreds of millions) -- implausible at any
+        # scale for a large-cap filer, so dropped rather than trusted.
+        {"end": "2016-12-31", "filed": "2017-07-28", "val": 100},
+        {"end": "2017-06-30", "filed": "2017-07-28", "val": 100},
+    ],
+
+    ("WDAY", "CommonStockSharesOutstanding"): [
+        # Same 10-Q (Q3 FY2012, filed 2012-12-07) that correctly reports val=36,000,000
+        # for end=2012-01-31 also reports val=0 for end=2012-10-31 (WDAY's October 2012
+        # IPO quarter) -- a same-filing tagging artifact, not a real post-IPO share count
+        # of zero. No WeightedAverageNumberOfShares* tag covers 2012 at all, so this bad
+        # value would otherwise flow straight through as the resolved SharesOutstanding.
+        {"end": "2012-10-31", "filed": "2012-12-07", "val": 0},
+    ],
 
     ("FIX", "Revenues"): [
         {"end": "2025-12-31", "filed": "2026-04-23", "val": 1831286000},
@@ -440,24 +459,7 @@ _KNOWN_SCOPE_MISMATCH_OUTLIERS = {
     ("JBL", "OperatingCashFlow"): {"2017-08-31"},
     ("TMUS", "OperatingCashFlow"): {"2011-12-31"},
     ("OXY", "Revenue"): {"2025-12-31"},
-    # Ford's DebtAndCapitalLeaseObligations reports consolidated debt (Automotive + Ford
-    # Credit, ~$100-155B) through 2017, then silently narrows to a ~$0.5B sub-component for
-    # these three periods before stopping altogether. Masked so the series ends honestly at
-    # 2017 instead of implying Ford's debt fell 99.6% in one year.
     ("F", "LongTermDebt"): {"2018-12-31", "2019-12-31", "2020-12-31"},
-    # SoFi went public via SPAC merger (June 2021); its CIK is the former SPAC shell
-    # (Social Capital Hedosophia Holdings Corp V). Pre-merger Assets facts filed under
-    # this CIK are the SPAC's own trust-account assets, not SoFi Technologies' real
-    # consolidated balance sheet: $466,179 at 2020-09-30 and $805,817,385 at
-    # 2021-03-31, vs. $8.56B and $7.65B at the neighboring 2020-12-31/2021-06-30
-    # dates. StockholdersEquity already resolves correctly for these same dates via
-    # later-filed-wins (a post-merger restatement exists for every StockholdersEquity
-    # date). No restated Assets value was ever filed for these two specific interim
-    # quarters -- 10-Qs only restate the current quarter-end and prior fiscal
-    # year-end -- so masking (not substituting) is the only honest option. Left
-    # unmasked this produced equity_to_assets = -815.7 at 2020-09-30 and
-    # roa = -0.28 at 2021-03-31, both artifacts of dividing real figures by the
-    # wrong-scope SPAC-shell Assets value.
     ("SOFI", "Assets"): {"2020-09-30", "2021-03-31"},
 }
 

@@ -331,7 +331,7 @@ def calculate_historical_pe(facts: pd.DataFrame, price_history: pd.DataFrame) ->
     return with_price, rolling
 
 
-def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame) -> pd.DataFrame:
+def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame, prices: pd.DataFrame) -> pd.DataFrame:
     needed = [
         "EPS_TTM_CALC",
         "Revenue_TTM",
@@ -368,7 +368,22 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame) ->
     )
     wide["revenue_yoy_growth"] = wide.groupby("ticker")["Revenue_TTM"].pct_change(periods=4)
 
-    wide["market_cap"] = wide["close"] * wide["SharesOutstanding"]
+    # market_cap: prefer EDGAR's own quarterly SharesOutstanding history (most accurate
+    # per period). For the rare ticker with ZERO SharesOutstanding facts anywhere in its
+    # EDGAR history (a confirmed, genuine, unfixable gap -- see bugfixed_update_history.md),
+    # fall back to yfinance's current share count instead of leaving market_cap entirely
+    # NaN. Without this, market_cap (and everything derived from it: ev, pb_ratio,
+    # pfcf_ratio, ev_ebitda, ev_sales, p_tbv, p_ppnr, p_core_earnings, p_ffo) silently comes
+    # out empty for that ticker even though every one of those multiples' OTHER required
+    # inputs is present and fine -- the coupling bug this function was reworked to fix.
+    # Scoped to tickers with a COMPLETE gap only (never a per-row fill), so tickers with
+    # real, partial EDGAR coverage are completely untouched -- this fix does not, and is
+    # not intended to, patch individual missing quarters.
+    shares_outstanding_count = wide.groupby("ticker")["SharesOutstanding"].transform("count")
+    shares_fallback = wide["ticker"].map(prices.set_index("ticker")["shares_outstanding"])
+    shares_for_market_cap = wide["SharesOutstanding"].where(shares_outstanding_count > 0, shares_fallback)
+
+    wide["market_cap"] = wide["close"] * shares_for_market_cap
     wide["net_debt"] = wide["LongTermDebt"] - wide["CashAndEquivalents"]
     wide["ev"] = wide["market_cap"] + wide["net_debt"]
     
@@ -411,20 +426,7 @@ def build_snapshot(
     rolling_pe: pd.DataFrame,
     as_of: "str | pd.Timestamp | None" = None,
 ) -> pd.DataFrame:
-    """Long-format snapshot: latest value of every fundamental and valuation metric
-    per ticker, shape (ticker, end, concept, value) -- the same shape as
-    metrics_long/valuation_history. Visibility filtering is intentionally NOT
-    applied here; call filter_hidden_rows() on the result at read/output time,
-    exactly like metrics_long and valuation_history already do in main(). The old
-    apply_profile_filter() masked/dropped WIDE columns during construction, which
-    made the snapshot's schema depend on which tickers happened to be present in a
-    given run (a column could vanish entirely if every ticker in that run hid it) --
-    moving the filter to read time on a long table fixes that instability.
-
-    `as_of` tags every row's "end" date: defaults to today (this is a live,
-    current-price snapshot), or pass the cutoff date used by build_snapshot_as_of
-    for a historical snapshot.
-    """
+    
     as_of_date = pd.Timestamp(as_of) if as_of is not None else pd.Timestamp(date.today())
 
     snap = prices.copy()
@@ -511,10 +513,6 @@ def build_snapshot(
     snap["pfcf_ttm"] = snap["market_cap"] / snap["fcf_ttm"]
     snap["ev_ebitda"] = snap["ev"] / snap["ebitda_ttm"]
     snap["ev_sales"] = snap["ev"] / snap["revenue_ttm"]
-    # Unlike build_valuation_history's pe_ratio (nulled below zero upstream via
-    # EPS_TTM_CALC.where(...>0)), snap["pe_ttm"] has no such guard, so a negative
-    # trailing EPS can still reach peg_ratio here -- require it positive explicitly,
-    # matching the positive-P/E-positive-growth convention PEG is defined under.
     snap["peg_ratio"] = snap["pe_ttm"].where(snap["pe_ttm"] > 0) / (snap["yoy_growth"] * 100)
     snap["peg_ratio"] = snap["peg_ratio"].where(snap["yoy_growth"] > MIN_PEG_REVENUE_GROWTH)
     snap["peg_ratio"] = snap["peg_ratio"].where(snap["peg_ratio"].abs() <= MAX_PEG_RATIO_ABS)
@@ -524,12 +522,6 @@ def build_snapshot(
     )
     snap["p_ppnr"] = snap["market_cap"] / snap["ppnr_ttm"]
     snap["p_core_earnings"] = snap["market_cap"] / snap["core_earnings_ttm"]
-
-    # Canonical names so is_hidden()/filter_hidden_rows() gate these the same way
-    # they already gate pe_ratio/pfcf_ratio in valuation_history -- the old wide
-    # snapshot's own "pe_ttm"/"pfcf_ttm" names never matched PROFILE_HIDDEN's real
-    # keys, which was the root cause of the pe_ratio-still-visible-for-REIT leak
-    # fixed earlier in this project. No other computation above changed at all.
     snap = snap.rename(columns={"pe_ttm": "pe_ratio", "pfcf_ttm": "pfcf_ratio"})
 
     value_cols = [c for c in snap.columns if c != "ticker"]
@@ -540,10 +532,6 @@ def build_snapshot(
 
 
 def price_summary(long_snapshot: pd.DataFrame) -> pd.DataFrame:
-    """Reconstruct the ticker/price/shares_outstanding/market_cap view the old wide
-    snapshot printed directly, from the new long-format snapshot -- these three
-    concepts are never subject to profile-hidden filtering (no PROFILE_HIDDEN entry
-    ever names them), so this is a pure reshape, not a masking step."""
     sub = long_snapshot[long_snapshot["concept"].isin(["price", "shares_outstanding", "market_cap"])]
     return sub.pivot_table(index="ticker", columns="concept", values="value").reset_index()
 
@@ -606,7 +594,7 @@ def main():
     price_history = load_price_history()
     prices = load_current_prices()
 
-    valuation_history = build_valuation_history(facts, price_history)
+    valuation_history = build_valuation_history(facts, price_history, prices)
     _, rolling_pe = calculate_historical_pe(facts, price_history)
     snapshot = build_snapshot(facts, metrics, prices, rolling_pe)
 
@@ -637,9 +625,6 @@ def main():
 
 
 def delete_cached_facts(tickers: list[str]) -> list[str]:
-    """Delete every cached {TICKER}_company_info.json for the given tickers, so
-    the next fetch is a genuine live re-fetch, not a cache hit. Destructive and
-    auditable: returns the list of paths actually removed, for the report."""
     deleted = []
     for ticker in tickers:
         path = os.path.join(CACHE_DIR, f"{ticker}_company_info.json")
@@ -747,10 +732,6 @@ def write_full_refresh_report(
 
 
 def run_full_refresh():
-    """Full refresh: delete every cached company-facts file for every active
-    ticker, re-fetch EDGAR + yfinance data from scratch, recompute all metrics,
-    regenerate all plots, and write full_refresh_report.md with per-phase timing
-    and every data-quality flag (collected, not printed)."""
     run_start = datetime.now()
 
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -820,7 +801,7 @@ def run_full_refresh():
         print(f"WARNUNG: {len(duplicates)} Duplikate gefunden!")
 
     metrics_long = build_metrics_long(metrics)
-    valuation_history = build_valuation_history(facts, price_history)
+    valuation_history = build_valuation_history(facts, price_history, prices)
     _, rolling_pe = calculate_historical_pe(facts, price_history)
     snapshot = build_snapshot(facts, metrics, prices, rolling_pe)
     calc_time = time.perf_counter() - t0
@@ -854,4 +835,4 @@ def run_full_refresh():
 
 
 if __name__ == "__main__":
-    run_full_refresh()
+    main()

@@ -1,4 +1,4 @@
-TICKERS = ["SOFI"]
+TICKERS = ["V"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
@@ -92,7 +92,6 @@ CONCEPT_CANDIDATES = {
             {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligations"},
             {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities"},
             {"type": "tag", "tag": "UnsecuredLongTermDebt"},
-            # --- current-portion-only tags: last resort, after every complete-debt source ---
             {"type": "tag", "tag": "ConvertibleDebtCurrent"},
             {"type": "tag", "tag": "ConvertibleNotesPayableCurrent"},
         ],
@@ -1395,18 +1394,7 @@ PROFILE_EXCLUDED_CONCEPTS = {
 
 
 TICKER_CONCEPT_OVERRIDES = {
-    # --- retroactive batch scan of the 58 reconciliation tickers, Group 1 (`standard`) ---
     "SOFI": {
-        # SoFi (a fintech lender, not a traditional bank) tags its loan-loss provision
-        # as FinancingReceivableExcludingAccruedInterestCreditLossExpenseReversal, not
-        # any of the base financial-profile's provision tags. Without it, coverage was
-        # 2 of 28 quarters (7.1%), both from ProvisionForLoanLossesExpensed. Verified:
-        # the one date where both tags report (2022-03-31) matches EXACTLY
-        # ($12,961,000), confirming this is the same underlying figure under SoFi's
-        # own tag name, not a different concept. Adding it (kept after the existing
-        # tags, so nothing already resolving changes) raises coverage to 19/28 (68%).
-        # Scoped to SOFI only -- this tag name is specific to SoFi's XBRL filings and
-        # is not expected to generalize to MS, GS, or any other `financial` ticker.
         "ProvisionForCreditLosses": {
             "tags": [
                 "ProvisionForLoanLeaseAndOtherLosses",
@@ -1419,12 +1407,6 @@ TICKER_CONCEPT_OVERRIDES = {
         },
     },
     "FIS": {
-        # Pre-ASC-606 FIS tagged revenue as SalesRevenueServicesNet, which is not in
-        # the base Revenue list, so everything before 2017-03-31 was missing (49%).
-        # Appending it is purely additive (fallback = first tag per end-date wins) and
-        # changes no existing value. Verified by reconstructing annual revenue from the
-        # spliced quarterly series: FY2009 $3.735B, FY2019 $10.333B, FY2020 $12.553B,
-        # all matching reported figures, with a continuous seam at 2016-12-31 -> 2017-03-31.
         "Revenue": {
             "tags": [
                 "RevenueFromContractWithCustomerExcludingAssessedTax",
@@ -1439,13 +1421,6 @@ TICKER_CONCEPT_OVERRIDES = {
         },
     },
     "TROW": {
-        # T. Rowe tags its real depreciation as DepreciationNonproduction, which is not
-        # in the base D&A list. Without it the list fell through to
-        # AmortizationOfIntangibleAssets -- a trivial line for this company -- and
-        # resolved D&A to $100k-$200k per quarter for 2008-2013 when actual
-        # depreciation was $15.3M-$25.1M. That is a wrong value, not a gap: off by
-        # ~150-250x. Confirmed correct because where DepreciationDepletionAndAmortization
-        # does resolve (2021-03-31 onward) it equals DepreciationNonproduction exactly.
         "DepreciationAndAmortization": {
             "sources": [
                 {"type": "tag", "tag": "DepreciationDepletionAndAmortization"},
@@ -1459,11 +1434,6 @@ TICKER_CONCEPT_OVERRIDES = {
         },
     },
     "ERIE": {
-        # Erie switched from PaymentsForProceedsFromProductiveAssets to
-        # PaymentsToAcquireProductiveAssets in 2018. The two agree to the dollar in all
-        # three overlapping quarters, so appending the older tag extends Capex back to
-        # 2008 without altering anything. Its three net-proceeds (negative) quarters are
-        # handled by the existing _NON_NEGATIVE_FLOW_CONCEPTS mask, which covers Capex.
         "Capex": {
             "tags": [
                 "PaymentsToAcquirePropertyPlantAndEquipment",
@@ -1535,6 +1505,17 @@ TICKER_CONCEPT_OVERRIDES = {
         "LongTermDebt": {
             "tags": ["DebtAndCapitalLeaseObligations", "LongTermDebt", "LongTermDebtNoncurrent"],
             "point_in_time": True,
+            "mode": "fallback",
+        },
+        "GainLossOnSaleOfProperties": {
+            "tags": [
+                "GainLossOnSaleOfProperties",
+                "GainsLossesOnSalesOfInvestmentRealEstate",
+                "GainLossOnSaleOfPropertiesNetOfTax",
+                "GainLossOnDispositionOfRealEstate",
+                "GainLossOnSaleOfPropertiesNetOfApplicableIncomeTaxes",
+            ],
+            "point_in_time": False,
             "mode": "fallback",
         },
     },
@@ -1619,22 +1600,139 @@ TICKER_CONCEPT_OVERRIDES = {
             "mode": "priority_merge",
         }
     },
+    # --- full flag sweep task ---
+    "PRU": {
+        "RealizedInvestmentGains": {
+            "sources": [
+                {"type": "sum", "tags": ["GainLossOnSaleOfInvestments", "GainLossOnSaleOfOtherInvestments"]},
+                {"type": "tag", "tag": "GainLossOnInvestments"},
+                {"type": "tag", "tag": "RealizedInvestmentGainsLosses"},
+            ],
+            "point_in_time": False,
+            "mode": "priority_merge",
+        },
+    },
+    "AIG": {
+        "LongTermDebt": {
+            "sources": [
+                {"type": "tag", "tag": "LongTermDebt"},
+                {"type": "tag", "tag": "DebtLongtermAndShorttermCombinedAmount"},
+                {"type": "tag", "tag": "LongTermNotesAndLoans"},
+                {"type": "tag", "tag": "ConvertibleLongTermNotesPayable"},
+                {"type": "tag", "tag": "ConvertibleDebtNoncurrent"},
+                {"type": "tag", "tag": "ConvertibleDebtCurrent"},
+                {"type": "tag", "tag": "ConvertibleNotesPayableCurrent"},
+                {"type": "sum", "tags": ["LongTermDebtNoncurrent", "LongTermDebtCurrent", "NotesPayableCurrent"]},
+                {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligations"},
+                {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities"},
+                {"type": "tag", "tag": "UnsecuredLongTermDebt"},
+                {"type": "tag", "tag": "SeniorLongTermNotes"},
+                {"type": "sum", "tags": ["SeniorNotes", "NotesPayable", "SubordinatedDebt"]},
+                {"type": "tag", "tag": "OtherLongTermDebt"},
+            ],
+            "point_in_time": True,
+            "mode": "priority_merge",
+        },
+    },
+    "IDXX": {
+        "LongTermDebt": {
+            "sources": [
+                {"type": "tag", "tag": "LongTermDebt"},
+                {"type": "tag", "tag": "DebtLongtermAndShorttermCombinedAmount"},
+                {"type": "tag", "tag": "LongTermNotesAndLoans"},
+                {"type": "tag", "tag": "ConvertibleLongTermNotesPayable"},
+                {"type": "tag", "tag": "ConvertibleDebtNoncurrent"},
+                {
+                    "type": "sum",
+                    "tags": ["LongTermDebtNoncurrent", "LongTermDebtCurrent", "NotesPayableCurrent"],
+                    "require": "LongTermDebtNoncurrent",
+                },
+                {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligations"},
+                {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities"},
+                {"type": "tag", "tag": "UnsecuredLongTermDebt"},
+                {"type": "tag", "tag": "ConvertibleDebtCurrent"},
+                {"type": "tag", "tag": "ConvertibleNotesPayableCurrent"},
+                {"type": "tag", "tag": "SecuredLongTermDebt"},
+            ],
+            "point_in_time": True,
+            "mode": "priority_merge",
+            "non_negative": True,
+        },
+    },
+    "ARE": {
+        "GainLossOnSaleOfProperties": {
+            "tags": [
+                "GainLossOnSaleOfProperties",
+                "GainsLossesOnSalesOfInvestmentRealEstate",
+                "GainLossOnSaleOfPropertiesNetOfTax",
+                "GainLossOnDispositionOfRealEstate",
+                "GainLossOnDispositionOfRealEstateDiscontinuedOperations",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+    },
+    "TGT": {
+        "AccountsReceivable": {
+            "tags": [
+                "AccountsReceivableNetCurrent",
+                "ReceivablesNetCurrent",
+                "AccountsReceivableTradeNetCurrent",
+                "AccountsNotesAndLoansReceivableNetCurrent",
+                "AccountsAndOtherReceivablesNetCurrent",
+            ],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+    },
+    "GDDY": {
+        "CashAndEquivalents": {
+            "tags": [
+                "CashAndCashEquivalentsAtCarryingValue",
+                "CashAndCashEquivalentsAtCarryingValueIncludingDiscontinuedOperations",
+                "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+            ],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+    },
+    "GLW": {
+        "Capex": {
+            "tags": [
+                "PaymentsToAcquirePropertyPlantAndEquipment",
+                "PaymentsToAcquireProductiveAssets",
+                "PaymentsForProceedsFromProductiveAssets",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+    },
+    "MA": {
+        "NetIncomeLoss": {
+            "tags": [
+                "NetIncomeLoss",
+                "NetIncomeLossAvailableToCommonStockholdersBasic",
+                "ProfitLoss",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+    },
+    "KEYS": {
+        "NetIncomeLoss": {
+            "tags": [
+                "NetIncomeLoss",
+                "NetIncomeLossAvailableToCommonStockholdersBasic",
+                "ProfitLoss",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+    },
 }
 
 
 def get_active_tickers() -> list[str]:
-    """Every ticker the full-refresh pipeline should process. A commented-out
-    TICKER_PROFILES line (e.g. `#"CVNA": "retail", doesnt work`) is this project's
-    established "known broken, don't run this one" marker -- but that convention
-    lives entirely in the source TEXT. Python's own parser strips comments before
-    the dict literal is ever built, so the loaded TICKER_PROFILES dict already
-    contains only the active entries; no extra parsing of config.py's source is
-    needed at runtime. Verified independently (not assumed): a regex scan of this
-    file's raw text for every `"TICKER": "profile"` occurrence, split by whether it
-    is preceded by a `#` on its own line, finds the exact same active set as
-    TICKER_PROFILES.keys() -- confirming CVNA/APA/NVR/PHM (the current commented-out
-    entries) are correctly excluded and nothing else is silently missing.
-    """
     return sorted(TICKER_PROFILES.keys())
 
 
