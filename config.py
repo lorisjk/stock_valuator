@@ -1,4 +1,4 @@
-TICKERS = ["TSLA"]
+TICKERS = ["META"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
@@ -1788,10 +1788,7 @@ _DERIVED_CONCEPT_CONSUMERS = {
 def is_hidden(ticker: str, metric_name: str) -> bool:
     profile = TICKER_PROFILES.get(ticker, DEFAULT_PROFILE)
     hidden_set = PROFILE_HIDDEN.get(profile, set())
-    # quarterly metric counterparts (e.g. "operating_margin_quarterly") follow the
-    # same visibility as their TTM sibling ("operating_margin") -- for any pre-existing
-    # metric_name this is a no-op, since base_name == metric_name when there's no
-    # "_quarterly" suffix to strip.
+
     base_name = metric_name[:-len("_quarterly")] if metric_name.endswith("_quarterly") else metric_name
     if metric_name in hidden_set or base_name in hidden_set:
         return True
@@ -1816,6 +1813,49 @@ def get_concept_candidates(ticker: str) -> dict:
     resolved.update(overrides)
     resolved.update(TICKER_CONCEPT_OVERRIDES.get(ticker, {}))
     return resolved
+
+GROWTH_BASE_PANELS = ["shares_outstanding_growth", "equity_growth", "debt_growth"]
+
+GROWTH_PROFILE_EXTRA = {
+    # capital/asset-light sectors where growth investors watch cash generation directly
+    "standard": ["fcf_growth", "ebitda_growth"],
+    "media": ["fcf_growth", "ebitda_growth"],
+    "leisure": ["fcf_growth", "ebitda_growth"],
+    "marketplace": ["fcf_growth", "ebitda_growth"],
+    # capex-heavy / physical-asset sectors: capex growth is the central capacity signal
+    "industrials": ["fcf_growth", "capex_growth"],
+    "telecom_cable": ["fcf_growth", "capex_growth"],
+    "railroads": ["fcf_growth", "capex_growth"],
+    "airline": ["fcf_growth", "capex_growth"],
+    "energy": ["capex_growth", "ebitda_growth"],
+    "energy_integrated": ["capex_growth", "ebitda_growth"],
+    "utilities": ["capex_growth", "assets_growth"],
+    "materials": ["capex_growth", "inventory_growth"],
+    "materials_integrated": ["capex_growth", "inventory_growth"],
+    # inventory-driven sectors
+    "retail": ["inventory_growth", "cash_growth"],
+    "consumer_staples": ["inventory_growth", "fcf_growth"],
+    "homebuilder": ["inventory_growth", "fcf_growth"],
+    # R&D-driven sectors
+    "pharma_medtech": ["rd_growth", "fcf_growth"],
+    "health_services": ["rd_growth", "fcf_growth"],
+    # bank / balance-sheet-driven sectors
+    "financial": ["nii_growth", "provision_growth"],
+    "captive_finance": ["fcf_growth", "assets_growth"],
+    "alt_asset_manager": ["fcf_growth", "assets_growth"],
+    # insurance: premium and investment-income growth are the core underwriting signals
+    # (reserve_growth already exists and is already plotted on the fundamentals chart)
+    "insurance_pc": ["earned_premiums_growth", "net_investment_income_growth"],
+    "insurance_life": ["earned_premiums_growth", "net_investment_income_growth"],
+    # REIT: FFO growth is the headline metric this sector is valued on
+    "reit": ["ffo_growth", "cash_growth"],
+}
+
+
+def get_growth_panels(ticker: str) -> list[str]:
+    profile = TICKER_PROFILES.get(ticker, DEFAULT_PROFILE)
+    return GROWTH_BASE_PANELS + GROWTH_PROFILE_EXTRA.get(profile, [])
+
 
 CACHE_DIR = "cache"
 DATA_DIR = "data"

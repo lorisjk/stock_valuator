@@ -1,4 +1,11 @@
-from fetchers.edgar import fetch_or_cache, build_ticker_to_cik, get_cik, get_company_info
+from fetchers.edgar import (
+    fetch_or_cache,
+    build_ticker_to_cik,
+    get_cik,
+    get_company_info,
+    get_submissions,
+    get_latest_filed_period,
+)
 from fetchers.yfinance_fetcher import get_current_price_and_shares, get_price_history
 from parsers.parse_edgar import build_dataframe
 from config import (
@@ -575,11 +582,11 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame, pr
             wide[col], denominator, wide["Revenue_TTM"], MIN_VALUATION_DENOMINATOR_SCALE_RATIO
         )
 
-    wide["peg_ratio"] = wide["pe_ratio"] / (wide["revenue_yoy_growth"] * 100)
-    wide["peg_ratio"] = wide["peg_ratio"].where(wide["revenue_yoy_growth"] > MIN_PEG_REVENUE_GROWTH)
-    wide["peg_ratio"] = wide["peg_ratio"].where(wide["peg_ratio"].abs() <= MAX_PEG_RATIO_ABS)
+    wide["pe_to_revenue_growth"] = wide["pe_ratio"] / (wide["revenue_yoy_growth"] * 100)
+    wide["pe_to_revenue_growth"] = wide["pe_to_revenue_growth"].where(wide["revenue_yoy_growth"] > MIN_PEG_REVENUE_GROWTH)
+    wide["pe_to_revenue_growth"] = wide["pe_to_revenue_growth"].where(wide["pe_to_revenue_growth"].abs() <= MAX_PEG_RATIO_ABS)
 
-    value_cols = ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_ebitda", "ev_sales", "dividend_yield", "p_tbv", "p_ppnr", "p_core_earnings", "peg_ratio", "p_ffo"]
+    value_cols = ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_ebitda", "ev_sales", "dividend_yield", "p_tbv", "p_ppnr", "p_core_earnings", "pe_to_revenue_growth", "p_ffo"]
 
     long = wide.melt(
         id_vars=["ticker", "end"],
@@ -590,6 +597,25 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame, pr
 
     return long.dropna(subset=["value"])
 
+MIN_SHARE_COUNT_DISAGREEMENT = 0.10
+
+
+def resolve_snapshot_share_count(facts: pd.DataFrame, prices: pd.DataFrame) -> pd.Series:
+    """Share count for build_snapshot()'s market_cap, indexed like `prices`."""
+    yf_shares = prices["shares_outstanding"]
+
+    edgar = get_latest_value(facts, "SharesOutstanding")[["ticker", "value"]]
+    edgar_shares = prices["ticker"].map(edgar.set_index("ticker")["value"])
+
+    prefer_edgar = (
+        edgar_shares.notna()
+        & yf_shares.notna()
+        & (yf_shares > 0)
+        & (edgar_shares / yf_shares > 1 + MIN_SHARE_COUNT_DISAGREEMENT)
+    )
+    return edgar_shares.where(prefer_edgar, yf_shares)
+
+
 def build_snapshot(
     facts: pd.DataFrame,
     metrics: dict,
@@ -597,10 +623,12 @@ def build_snapshot(
     rolling_pe: pd.DataFrame,
     as_of: "str | pd.Timestamp | None" = None,
 ) -> pd.DataFrame:
-    
+
     as_of_date = pd.Timestamp(as_of) if as_of is not None else pd.Timestamp(date.today())
 
     snap = prices.copy()
+    snap["shares_outstanding"] = resolve_snapshot_share_count(facts, snap)
+    snap["market_cap"] = snap["price"] * snap["shares_outstanding"]
 
     eps = get_latest_value(facts, "EPS_TTM_CALC").rename(columns={"value": "eps_ttm"})
     revenue = get_latest_value(facts, "Revenue_TTM").rename(columns={"value": "revenue_ttm"})
@@ -684,9 +712,10 @@ def build_snapshot(
     snap["pfcf_ttm"] = snap["market_cap"] / snap["fcf_ttm"]
     snap["ev_ebitda"] = snap["ev"] / snap["ebitda_ttm"]
     snap["ev_sales"] = snap["ev"] / snap["revenue_ttm"]
-    snap["peg_ratio"] = snap["pe_ttm"].where(snap["pe_ttm"] > 0) / (snap["yoy_growth"] * 100)
-    snap["peg_ratio"] = snap["peg_ratio"].where(snap["yoy_growth"] > MIN_PEG_REVENUE_GROWTH)
-    snap["peg_ratio"] = snap["peg_ratio"].where(snap["peg_ratio"].abs() <= MAX_PEG_RATIO_ABS)
+    # see build_valuation_history() for why this is revenue growth and renamed, not recomputed
+    snap["pe_to_revenue_growth"] = snap["pe_ttm"].where(snap["pe_ttm"] > 0) / (snap["yoy_growth"] * 100)
+    snap["pe_to_revenue_growth"] = snap["pe_to_revenue_growth"].where(snap["yoy_growth"] > MIN_PEG_REVENUE_GROWTH)
+    snap["pe_to_revenue_growth"] = snap["pe_to_revenue_growth"].where(snap["pe_to_revenue_growth"].abs() <= MAX_PEG_RATIO_ABS)
     snap["dividend_yield"] = snap["dividends_ttm"] / snap["price"]
     snap["p_tbv"] = apply_denominator_scale_guard(
         snap["market_cap"] / snap["tangible_equity"], snap["tangible_equity"], snap["revenue_ttm"], MIN_DENOMINATOR_SCALE_RATIO
@@ -700,6 +729,62 @@ def build_snapshot(
     long = long.dropna(subset=["value"])
     long["end"] = as_of_date
     return long[["ticker", "end", "concept", "value"]]
+
+
+STALENESS_DAYS_FALLBACK = 135
+
+
+def add_staleness_fields(
+    snapshot: pd.DataFrame,
+    facts: pd.DataFrame,
+    latest_filed_periods: dict | None = None,
+    as_of: "str | pd.Timestamp | None" = None,
+) -> pd.DataFrame:
+
+    as_of_date = pd.Timestamp(as_of) if as_of is not None else pd.Timestamp(date.today())
+
+    newest = facts.groupby("ticker")["end"].max().rename("newest_end").reset_index()
+    newest["days_since_last_filing"] = (as_of_date - newest["newest_end"]).dt.days
+
+    if latest_filed_periods:
+        published = newest["ticker"].map(
+            {t: pd.Timestamp(p) for t, p in latest_filed_periods.items() if p}
+        )
+        stale = published.notna() & (published > newest["newest_end"])
+        # a ticker with no submissions entry still gets the date-based answer
+        stale = stale.where(published.notna(),
+                            newest["days_since_last_filing"] > STALENESS_DAYS_FALLBACK)
+    else:
+        stale = newest["days_since_last_filing"] > STALENESS_DAYS_FALLBACK
+
+    newest["fundamentals_stale"] = stale.astype(float)
+
+    extra = newest.melt(
+        id_vars=["ticker"],
+        value_vars=["days_since_last_filing", "fundamentals_stale"],
+        var_name="concept",
+        value_name="value",
+    )
+    extra["end"] = as_of_date
+    return pd.concat([snapshot, extra[["ticker", "end", "concept", "value"]]], ignore_index=True)
+
+
+def load_latest_filed_periods(tickers: list[str]) -> dict:
+    mapping = fetch_or_cache(
+        url="https://www.sec.gov/files/company_tickers.json",
+        cache_path="cache/ticker_mapping.json",
+        headers={"User-Agent": EDGAR_USER_AGENT},
+    )
+    cik_mapping = build_ticker_to_cik(mapping)
+
+    periods = {}
+    for ticker in tickers:
+        try:
+            submissions = get_submissions(ticker, get_cik(ticker, cik_mapping), EDGAR_USER_AGENT)
+            periods[ticker] = get_latest_filed_period(submissions)
+        except Exception:
+            periods[ticker] = None
+    return periods
 
 
 def price_summary(long_snapshot: pd.DataFrame) -> pd.DataFrame:
@@ -771,6 +856,7 @@ def main():
     valuation_history = build_valuation_history(facts, price_history, prices)
     _, rolling_pe = calculate_historical_pe(facts, price_history)
     snapshot = build_snapshot(facts, metrics, prices, rolling_pe)
+    snapshot = add_staleness_fields(snapshot, facts, load_latest_filed_periods(TICKERS))
 
    
 
@@ -804,10 +890,12 @@ def main():
 def delete_cached_facts(tickers: list[str]) -> list[str]:
     deleted = []
     for ticker in tickers:
-        path = os.path.join(CACHE_DIR, f"{ticker}_company_info.json")
-        if os.path.exists(path):
-            os.remove(path)
-            deleted.append(path)
+        for name in (f"{ticker}_company_info.json", f"{ticker}_submissions.json",
+                     f"{ticker}_cache_meta.json"):
+            path = os.path.join(CACHE_DIR, name)
+            if os.path.exists(path):
+                os.remove(path)
+                deleted.append(path)
     return deleted
 
 
@@ -985,6 +1073,7 @@ def run_full_refresh():
     valuation_history = build_valuation_history(facts, price_history, prices)
     _, rolling_pe = calculate_historical_pe(facts, price_history)
     snapshot = build_snapshot(facts, metrics, prices, rolling_pe)
+    snapshot = add_staleness_fields(snapshot, facts, load_latest_filed_periods(active_tickers))
     calc_time = time.perf_counter() - t0
 
     metrics_long = filter_hidden_rows(metrics_long)

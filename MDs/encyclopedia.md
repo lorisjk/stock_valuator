@@ -294,11 +294,27 @@ This is the metric used in actual acquisitions, because an acquirer inherits the
 
 ---
 
-## PEG — Price/Earnings to Growth
+## `pe_to_revenue_growth` — P/E ÷ Revenue Growth
 
-**What it is:** P/E divided by the earnings growth rate (in percentage points). A P/E of 30 with 30% growth gives a PEG of 1.0.
+**Note on the name.** This metric used to be called `peg_ratio`, which was wrong. The
+conventional PEG divides P/E by the *earnings* growth rate; this project has always divided
+by the *revenue* growth rate. The label promised one thing and the computation did another,
+so it was renamed to describe what it actually is. **The numbers did not change** — only the
+name. See `meta_fetch_and_related_fixes_report.md` Part 4.
 
-**Why it matters:** It attempts to answer the obvious objection to P/E: *of course* a fast-growing company should be more expensive. PEG asks whether it is *too* expensive given how fast it's growing.
+**Why revenue growth rather than earnings growth**, having measured both on the real data:
+an earnings-growth version would be materially worse. 38.4% of rows would have a negative
+(and therefore meaningless) denominator versus 21.9% for revenue; only 59.0% would survive
+the project's existing guards versus 69.7%; and because `NetIncomeLoss_TTM` crosses zero it
+produces infinities that revenue growth never does. Revenue is the more stable growth signal,
+so the metric was kept and relabelled rather than recomputed into the textbook definition.
+
+**What it is:** P/E divided by the revenue growth rate (in percentage points). A P/E of 30
+with 30% revenue growth gives 1.0.
+
+**Why it matters:** It attempts to answer the obvious objection to P/E: *of course* a
+fast-growing company should be more expensive. This asks whether it is *too* expensive given
+how fast it's growing.
 
 **How to read it:**
 - Below 1.0: growth may be underpriced
@@ -306,11 +322,16 @@ This is the metric used in actual acquisitions, because an acquirer inherits the
 - Above 2.0: expensive even accounting for growth
 
 **Where it lies — and it lies a lot:**
-- **Meaningless when growth is negative or near zero.** JPM shows a PEG of -6.7 in the snapshot. That is not a signal; it's a division by a negative number
-- Extremely sensitive to which growth rate you use. Last year's? Next year's estimate? A five-year average? The metric changes entirely depending on the answer
-- The rule "PEG below 1 is cheap" has no theoretical foundation. It was a heuristic that became folklore
+- **Meaningless when growth is negative or near zero.** A negative reading is not a signal;
+  it's a division by a negative number. The project guards against this (growth must exceed
+  2% and the result is capped at ±30), but the underlying fragility remains
+- Because the denominator is *revenue* growth, a company growing revenue fast while margins
+  collapse will look cheaper here than a true PEG would suggest. Read it alongside the
+  margin panels, not instead of them
+- The rule "below 1 is cheap" has no theoretical foundation. It was a heuristic that became
+  folklore
 
-Treat PEG as a rough sanity check on P/E, never as a decision criterion.
+Treat it as a rough sanity check on P/E, never as a decision criterion.
 
 ---
 
