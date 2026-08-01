@@ -1,4 +1,4 @@
-TICKERS = ["CRM"]
+TICKERS = ["AMD", "MU"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
@@ -556,7 +556,7 @@ PROFILE_HIDDEN = {
     },
     "financial": {
         "pfcf_ttm", "ev_ebitda", "ev_sales",
-        "pfcf_ratio", "net_debt_to_ebitda", "fcf_margin",
+        "pfcf_ratio", "ev_fcf", "net_debt_to_ebitda", "fcf_margin",
         "debt_to_equity", "operating_margin", "rule_of_40",
         "pb_ratio",
         "combined_ratio",
@@ -571,11 +571,12 @@ PROFILE_HIDDEN = {
         "ffo_margin", "p_ffo",
     },
     "insurance_pc":{
-        "pfcf_ttm", 
-        "ev_ebitda", 
+        "pfcf_ttm",
+        "ev_ebitda",
         "ev_sales",
-        "pfcf_ratio", 
-        "net_debt_to_ebitda", 
+        "pfcf_ratio",
+        "ev_fcf",
+        "net_debt_to_ebitda",
         "fcf_margin",
         "debt_to_equity", 
         "operating_margin", 
@@ -592,11 +593,12 @@ PROFILE_HIDDEN = {
         "capex_intensity","operating_leverage","operating_income_yoy_growth", "ffo_margin", "p_ffo",
     },
     "insurance_life":{
-        "pfcf_ttm", 
-        "ev_ebitda", 
+        "pfcf_ttm",
+        "ev_ebitda",
         "ev_sales",
-        "pfcf_ratio", 
-        "net_debt_to_ebitda", 
+        "pfcf_ratio",
+        "ev_fcf",
+        "net_debt_to_ebitda",
         "fcf_margin",
         "debt_to_equity", 
         "operating_margin", 
@@ -697,7 +699,7 @@ PROFILE_HIDDEN = {
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
         "rd_intensity",
         "operating_leverage", "operating_income_yoy_growth",
-        "rule_of_40", "pfcf_ratio", "ffo_margin", "p_ffo",
+        "rule_of_40", "pfcf_ratio", "ev_fcf", "ffo_margin", "p_ffo",
     },
         "telecom_cable": {
         "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
@@ -1760,11 +1762,33 @@ _DERIVED_CONCEPT_CONSUMERS = {
     "PPNR": ["p_ppnr"],
     "CoreOperatingEarnings": ["p_core_earnings"],
     "FFO_TTM": ["p_ffo", "ffo_margin"],
-    "FCF_TTM": ["pfcf_ratio", "fcf_margin"],
+    "FCF_TTM": ["pfcf_ratio", "fcf_margin", "ev_fcf"],
     "EBITDA_TTM": ["ev_ebitda", "net_debt_to_ebitda"],
     "eps_ttm": ["pe_ratio"],
     "pe_ttm": ["pe_ratio"],
+    # avg_X_5y / _median / _diverges names must stay in sync with main.py's AVG_5Y_FIELD_NAMES --
+    # otherwise a hidden multiple's rolling reference fields leak visible for that profile.
     "avg_pe_5y": ["pe_ratio"],
+    "avg_pe_5y_median": ["pe_ratio"],
+    "avg_pe_5y_diverges": ["pe_ratio"],
+    "avg_pfcf_5y": ["pfcf_ratio"],
+    "avg_pfcf_5y_median": ["pfcf_ratio"],
+    "avg_pfcf_5y_diverges": ["pfcf_ratio"],
+    "avg_ev_ebitda_5y": ["ev_ebitda"],
+    "avg_ev_ebitda_5y_median": ["ev_ebitda"],
+    "avg_ev_ebitda_5y_diverges": ["ev_ebitda"],
+    "avg_p_tbv_5y": ["p_tbv"],
+    "avg_p_tbv_5y_median": ["p_tbv"],
+    "avg_p_tbv_5y_diverges": ["p_tbv"],
+    "avg_p_ppnr_5y": ["p_ppnr"],
+    "avg_p_ppnr_5y_median": ["p_ppnr"],
+    "avg_p_ppnr_5y_diverges": ["p_ppnr"],
+    "avg_p_core_earnings_5y": ["p_core_earnings"],
+    "avg_p_core_earnings_5y_median": ["p_core_earnings"],
+    "avg_p_core_earnings_5y_diverges": ["p_core_earnings"],
+    "avg_p_ffo_5y": ["p_ffo"],
+    "avg_p_ffo_5y_median": ["p_ffo"],
+    "avg_p_ffo_5y_diverges": ["p_ffo"],
     "tangible_equity": ["p_tbv"],
     "ppnr_ttm": ["p_ppnr"],
     "core_earnings_ttm": ["p_core_earnings"],
@@ -1921,6 +1945,7 @@ VALUATIONS_TO_PLOT = [
     ("pe_ratio", "P/E (TTM)", None, False),
     ("pb_ratio", "P/B", None, False),
     ("pfcf_ratio", "P/FCF (TTM)", None, False),
+    ("ev_fcf", "EV/FCF (TTM)", None, False),
     ("ev_ebitda", "EV/EBITDA", None, False),
     ("ev_sales", "EV/Sales", None, False),
     ("dividend_yield", "dividend yield", None, True),
@@ -1930,3 +1955,15 @@ VALUATIONS_TO_PLOT = [
     ("p_ffo", "P/FFO (TTM)", None, False),
     ("peg_ratio", "PEG Ratio Revenue", None, False),
 ]
+
+# Multiples where the denominator can plausibly approach zero (thin earnings/FCF/EBITDA),
+# so the arithmetic mean of the ratio gets distorted by near-infinite spikes -- the harmonic
+# mean (mean of the reciprocal "yield", inverted back) is used instead for the chart reference
+# line and the rolling 5y snapshot average. Scope calibrated from real cached valuation_history
+# data (median divergence 4-12% across these seven, materially larger than ev_sales' ~3% or
+# dividend_yield's noise-dominated near-zero comparisons); ev_sales (revenue is never
+# realistically near zero) and pe_to_revenue_growth (a ratio-of-ratios with its own dedicated
+# guards, not a simple price/flow multiple) were checked and excluded.
+HARMONIC_MEAN_CONCEPTS = {
+    "pe_ratio", "pfcf_ratio", "ev_ebitda", "p_tbv", "p_ppnr", "p_core_earnings", "p_ffo",
+}

@@ -27,6 +27,7 @@ from config import (
     get_concept_candidates,
     get_active_tickers,
     CACHE_DIR,
+    HARMONIC_MEAN_CONCEPTS,
 )
 from metrics import (
     add_ttm_concepts,
@@ -37,7 +38,7 @@ from metrics import (
     calculate_ratio_from_dfs,
     calculate_sum_from_dfs,
     calculate_difference_from_dfs,
-    calculate_rolling_average,
+    calculate_rolling_harmonic_stats,
     get_latest_value,
     get_latest_row,
     to_long_format,
@@ -188,8 +189,49 @@ def add_quarterly_derived_concepts(facts: pd.DataFrame) -> pd.DataFrame:
     return facts
 
 
+MIN_BUYBACK_EQUITY_QOQ_DECLINE = 0.15
+BUYBACK_QOQ_GAP_DAYS = (60, 120)
+
+
+def calculate_buyback_distortion_flag(facts: pd.DataFrame) -> pd.DataFrame:
+    """Flags (ticker, end) where StockholdersEquity fell more than
+    MIN_BUYBACK_EQUITY_QOQ_DECLINE quarter-over-quarter while the company stayed profitable on
+    a TTM basis -- the ORLY/MCD/HD/LOW pattern of a profitable company shrinking its own equity
+    base via buybacks. Restricted to periods where equity was positive both quarters: an
+    already-negative or near-zero equity base is the existing scale guards' territory (a
+    different, already-understood story), not this one -- AZO, whose equity has been
+    continuously negative since 2009, correctly never qualifies here.
+
+    0.15 was calibrated from real cached data, not guessed: the general population's QoQ
+    decline (profitable, both-quarters-positive periods) sits at p97=13.3%/p99=28.3%, so >15%
+    is already a rare tail event universe-wide, while still catching the upper tail of all
+    five confirmed buyback names' own history (MCD's own p90=17.4%, just above the threshold).
+    """
+    se = facts[facts["concept"] == "StockholdersEquity"][["ticker", "end", "value"]].rename(columns={"value": "equity"})
+    ni = facts[facts["concept"] == "NetIncomeLoss_TTM"][["ticker", "end", "value"]].rename(columns={"value": "ni_ttm"})
+
+    se = se.sort_values(["ticker", "end"])
+    se["prev_equity"] = se.groupby("ticker")["equity"].shift(1)
+    se["prev_end"] = se.groupby("ticker")["end"].shift(1)
+    gap_days = (se["end"] - se["prev_end"]).dt.days
+    # computed as columns on `se` itself (not free-standing Series) so they survive the merge
+    # below row-for-row instead of being re-aligned against merged's fresh RangeIndex.
+    se["_applicable"] = gap_days.between(*BUYBACK_QOQ_GAP_DAYS) & (se["equity"] > 0) & (se["prev_equity"] > 0)
+    se["_qoq_decline"] = 1 - se["equity"] / se["prev_equity"]
+
+    merged = se.merge(ni, on=["ticker", "end"], how="left")
+    profitable = merged["ni_ttm"] > 0
+
+    raw_flag = (merged["_qoq_decline"] > MIN_BUYBACK_EQUITY_QOQ_DECLINE) & profitable
+    merged["buyback_distortion_flag"] = raw_flag.astype(float).where(merged["_applicable"])
+
+    return merged[["ticker", "end", "buyback_distortion_flag"]].dropna(subset=["buyback_distortion_flag"])
+
+
 def calculate_all_metrics(facts: pd.DataFrame) -> dict:
     m = {}
+
+    m["buyback_distortion_flag"] = calculate_buyback_distortion_flag(facts)
 
     m["revenue_growth"] = calculate_growth(facts, "Revenue_TTM", 4, "yoy_growth")
     m["income_growth"] = calculate_growth(facts, "NetIncomeLoss_TTM", 4, "yoy_growth")
@@ -429,6 +471,7 @@ def add_growth_column(facts: pd.DataFrame) -> pd.DataFrame:
 
 def build_metrics_long(metrics: dict, quarterly_metrics: dict = None) -> pd.DataFrame:
     spec = [
+        (metrics["buyback_distortion_flag"], "buyback_distortion_flag", "buyback_distortion_flag"),
         (metrics["revenue_growth"], "yoy_growth", "revenue_yoy_growth"),
         (metrics["income_growth"], "yoy_growth", "income_yoy_growth"),
         (metrics["operating_margin"], "operating_margin", "operating_margin"),
@@ -482,24 +525,44 @@ def build_metrics_long(metrics: dict, quarterly_metrics: dict = None) -> pd.Data
 MIN_VALUATION_DENOMINATOR_SCALE_RATIO = 0.001
 
 
-def calculate_historical_pe(facts: pd.DataFrame, price_history: pd.DataFrame) -> tuple:
-    eps_ttm = facts[facts["concept"] == "EPS_TTM_CALC"][["ticker", "end", "value"]].copy()
-    eps_ttm = eps_ttm.rename(columns={"value": "eps_ttm"})
+AVG_5Y_WINDOW = 20
+MIN_AVG_5Y_DIVERGENCE = 0.20   # calibrated below, in build_snapshot()'s divergence flag
 
-    with_price = pd.merge_asof(
-        eps_ttm.sort_values("end"),
-        price_history.sort_values("date"),
-        left_on="end",
-        right_on="date",
-        by="ticker",
-        direction="backward",
-    )
-    with_price["pe_ratio"] = with_price["close"] / with_price["eps_ttm"]
+# Naming for each in-scope multiple's rolling 5y reference field, generalizing the original
+# PE-only "avg_pe_5y" (built by the now-removed calculate_historical_pe()) to every multiple in
+# HARMONIC_MEAN_CONCEPTS. pe_ratio keeps its original name for backward compatibility with
+# existing consumers of the snapshot CSV.
+AVG_5Y_FIELD_NAMES = {
+    "pe_ratio": "avg_pe_5y",
+    "pfcf_ratio": "avg_pfcf_5y",
+    "ev_ebitda": "avg_ev_ebitda_5y",
+    "p_tbv": "avg_p_tbv_5y",
+    "p_ppnr": "avg_p_ppnr_5y",
+    "p_core_earnings": "avg_p_core_earnings_5y",
+    "p_ffo": "avg_p_ffo_5y",
+}
 
-    with_price["pe_ratio"] = with_price["pe_ratio"].where(with_price["pe_ratio"] <= 200)
 
-    rolling = calculate_rolling_average(with_price, "pe_ratio", 20, "avg_pe_5y")
-    return with_price, rolling
+def calculate_rolling_multiple_averages(valuation_history: pd.DataFrame) -> pd.DataFrame:
+    """Rolling 20-observation harmonic mean + median for every multiple in
+    HARMONIC_MEAN_CONCEPTS, replacing the old PE-only arithmetic calculate_historical_pe().
+    Sourced from build_valuation_history()'s already denominator-guarded series (not
+    recomputed from raw facts), so this can't drift from the guards already applied there.
+    Returns one row per (ticker, end) any in-scope concept has a value at (outer-merged, so a
+    date where one multiple was itself masked doesn't drop the others) -- build_snapshot()
+    collapses each concept's own columns to its own latest independently, the same
+    "each field is as fresh as its own last available point" pattern as every other
+    get_latest_value()/get_latest_row() call there.
+    """
+    wide = None
+    for concept in sorted(HARMONIC_MEAN_CONCEPTS):
+        field = AVG_5Y_FIELD_NAMES[concept]
+        series = valuation_history[valuation_history["concept"] == concept][["ticker", "end", "value"]]
+        if series.empty:
+            continue
+        stats = calculate_rolling_harmonic_stats(series, "value", AVG_5Y_WINDOW, field)
+        wide = stats if wide is None else wide.merge(stats, on=["ticker", "end"], how="outer")
+    return wide if wide is not None else pd.DataFrame(columns=["ticker", "end"])
 
 
 def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame, prices: pd.DataFrame) -> pd.DataFrame:
@@ -551,9 +614,18 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame, pr
     wide["pe_ratio"] = wide["close"] / wide["EPS_TTM_CALC"].where(wide["EPS_TTM_CALC"] > 0)
     wide["pb_ratio"] = wide["market_cap"] / wide["StockholdersEquity"].where(wide["StockholdersEquity"] > 0)
     wide["pfcf_ratio"] = wide["market_cap"] / wide["FCF_TTM"].where(wide["FCF_TTM"] > 0)
+    wide["ev_fcf"] = wide["ev"] / wide["FCF_TTM"].where(wide["FCF_TTM"] > 0)
     wide["ev_ebitda"] = wide["ev"] / wide["EBITDA_TTM"].where(wide["EBITDA_TTM"] > 0)
     wide["ev_sales"] = wide["ev"] / wide["Revenue_TTM"].where(wide["Revenue_TTM"] > 0)
     wide["dividend_yield"] = (wide["DividendsPerShare_TTM"].where(wide["DividendsPerShare_TTM"] >= 0) / wide["close"])
+
+    # tangible_book: this project already computes StockholdersEquity - Goodwill as
+    # "TangibleEquity" for p_tbv -- no separate intangibles-net-of-goodwill concept exists
+    # anywhere in CONCEPT_CANDIDATES project-wide (checked directly), so tangible_book IS
+    # TangibleEquity, not a second parallel field. A negative tangible book makes P/B on a
+    # tangible basis undefined, so pb_ratio (the ordinary, goodwill-inclusive P/B) is hidden
+    # for that ticker/period -- data-triggered visibility, independent of the scale guard above.
+    wide["pb_ratio"] = wide["pb_ratio"].where(~(wide["TangibleEquity"] < 0))
 
     wide["p_tbv"] = wide["market_cap"] / wide["TangibleEquity"].where(wide["TangibleEquity"] > 0)
     wide["p_ppnr"] = wide["market_cap"] / wide["PPNR"].where(wide["PPNR"] > 0)
@@ -565,6 +637,7 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame, pr
         ("pe_ratio", implied_earnings_ttm),
         ("pb_ratio", wide["StockholdersEquity"]),
         ("pfcf_ratio", wide["FCF_TTM"]),
+        ("ev_fcf", wide["FCF_TTM"]),
         ("ev_ebitda", wide["EBITDA_TTM"]),
         ("p_tbv", wide["TangibleEquity"]),
         ("p_ppnr", wide["PPNR"]),
@@ -579,7 +652,11 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame, pr
     wide["pe_to_revenue_growth"] = wide["pe_to_revenue_growth"].where(wide["revenue_yoy_growth"] > MIN_PEG_REVENUE_GROWTH)
     wide["pe_to_revenue_growth"] = wide["pe_to_revenue_growth"].where(wide["pe_to_revenue_growth"].abs() <= MAX_PEG_RATIO_ABS)
 
-    value_cols = ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_ebitda", "ev_sales", "dividend_yield", "p_tbv", "p_ppnr", "p_core_earnings", "pe_to_revenue_growth", "p_ffo"]
+    # single implementation shared with build_metrics_long()'s roe-adjacent flag -- see
+    # calculate_buyback_distortion_flag() for the calibration reasoning.
+    wide = wide.merge(calculate_buyback_distortion_flag(facts), on=["ticker", "end"], how="left")
+
+    value_cols = ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_fcf", "ev_ebitda", "ev_sales", "dividend_yield", "p_tbv", "p_ppnr", "p_core_earnings", "pe_to_revenue_growth", "p_ffo", "buyback_distortion_flag"]
 
     long = wide.melt(
         id_vars=["ticker", "end"],
@@ -593,8 +670,10 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame, pr
 MIN_SHARE_COUNT_DISAGREEMENT = 0.10
 
 
-def resolve_snapshot_share_count(facts: pd.DataFrame, prices: pd.DataFrame) -> pd.Series:
-    """Share count for build_snapshot()'s market_cap, indexed like `prices`."""
+def _resolve_share_sources(facts: pd.DataFrame, prices: pd.DataFrame) -> tuple:
+    """The edgar/yfinance share counts, the prefer_edgar decision, and the % delta between
+    them -- the single implementation both resolve_snapshot_share_count() and build_snapshot()'s
+    shares_source_is_edgar/shares_delta_pct columns are built from, so the two can't drift."""
     yf_shares = prices["shares_outstanding"]
 
     edgar = get_latest_value(facts, "SharesOutstanding")[["ticker", "value"]]
@@ -606,6 +685,13 @@ def resolve_snapshot_share_count(facts: pd.DataFrame, prices: pd.DataFrame) -> p
         & (yf_shares > 0)
         & (edgar_shares / yf_shares > 1 + MIN_SHARE_COUNT_DISAGREEMENT)
     )
+    delta_pct = (edgar_shares - yf_shares) / yf_shares * 100
+    return edgar_shares, yf_shares, prefer_edgar, delta_pct
+
+
+def resolve_snapshot_share_count(facts: pd.DataFrame, prices: pd.DataFrame) -> pd.Series:
+    """Share count for build_snapshot()'s market_cap, indexed like `prices`."""
+    edgar_shares, yf_shares, prefer_edgar, _ = _resolve_share_sources(facts, prices)
     return edgar_shares.where(prefer_edgar, yf_shares)
 
 
@@ -613,7 +699,7 @@ def build_snapshot(
     facts: pd.DataFrame,
     metrics: dict,
     prices: pd.DataFrame,
-    rolling_pe: pd.DataFrame,
+    rolling_multiples: pd.DataFrame,
     as_of: "str | pd.Timestamp | None" = None,
 ) -> pd.DataFrame:
 
@@ -622,6 +708,10 @@ def build_snapshot(
     snap = prices.copy()
     snap["shares_outstanding"] = resolve_snapshot_share_count(facts, snap)
     snap["market_cap"] = snap["price"] * snap["shares_outstanding"]
+
+    _, _, prefer_edgar, shares_delta_pct = _resolve_share_sources(facts, snap)
+    snap["shares_source_is_edgar"] = prefer_edgar.astype(float)
+    snap["shares_delta_pct"] = shares_delta_pct
 
     eps = get_latest_value(facts, "EPS_TTM_CALC").rename(columns={"value": "eps_ttm"})
     revenue = get_latest_value(facts, "Revenue_TTM").rename(columns={"value": "revenue_ttm"})
@@ -635,7 +725,6 @@ def build_snapshot(
     cash = get_latest_value(facts, "CashAndEquivalents").rename(columns={"value": "cash"})
 
     growth = get_latest_row(metrics["revenue_growth"])
-    avg_pe = get_latest_row(rolling_pe)
 
     nim = get_latest_row(metrics["net_interest_margin"])
     efficiency = get_latest_row(metrics["efficiency_ratio"])
@@ -670,7 +759,6 @@ def build_snapshot(
         (debt, ["ticker", "debt"]),
         (cash, ["ticker", "cash"]),
         (growth, ["ticker", "yoy_growth"]),
-        (avg_pe, ["ticker", "avg_pe_5y"]),
         (nim, ["ticker", "net_interest_margin"]),
         (efficiency, ["ticker", "efficiency_ratio"]),
         (tangible_equity, ["ticker", "tangible_equity"]),
@@ -695,6 +783,27 @@ def build_snapshot(
     ]:
         snap = pd.merge(snap, df[cols], on="ticker", how="left")
 
+    # Rolling 5y harmonic-mean reference + median, collapsed to each multiple's OWN latest
+    # available point independently (not a single shared "latest end" across all multiples --
+    # see calculate_rolling_multiple_averages()), plus a divergence flag calibrated from real
+    # data: 0.20 sits at ~p90 of the observed |harmonic-median|/median distribution across the
+    # in-scope multiples (~9% of ticker-concept pairs flagged), a deliberately selective,
+    # tail-focused signal rather than routine noise.
+    for concept in HARMONIC_MEAN_CONCEPTS:
+        field = AVG_5Y_FIELD_NAMES[concept]
+        median_field = f"{field}_median"
+        cols = ["ticker", "end", field, median_field]
+        sub = rolling_multiples[cols].dropna(subset=[field]) if field in rolling_multiples.columns else pd.DataFrame(columns=cols)
+        if sub.empty:
+            continue
+        latest = get_latest_row(sub)
+        diverges = (latest[field] - latest[median_field]).abs() / latest[median_field]
+        latest[f"{field}_diverges"] = (diverges > MIN_AVG_5Y_DIVERGENCE).astype(float)
+        snap = pd.merge(
+            snap, latest[["ticker", field, median_field, f"{field}_diverges"]],
+            on="ticker", how="left",
+        )
+
     snap["net_debt"] = snap["debt"] - snap["cash"]
     snap["ev"] = snap["market_cap"] + snap["net_debt"]
 
@@ -702,6 +811,9 @@ def build_snapshot(
     snap["pb_ratio"] = apply_denominator_scale_guard(
         snap["market_cap"] / snap["equity"], snap["equity"], snap["revenue_ttm"], MIN_DENOMINATOR_SCALE_RATIO
     )
+    # tangible_book == tangible_equity (see build_valuation_history()); a negative tangible
+    # book makes P/B on a tangible basis undefined, so hide the ordinary P/B for that ticker.
+    snap["pb_ratio"] = snap["pb_ratio"].where(~(snap["tangible_equity"] < 0))
     snap["pfcf_ttm"] = snap["market_cap"] / snap["fcf_ttm"]
     snap["ev_ebitda"] = snap["ev"] / snap["ebitda_ttm"]
     snap["ev_sales"] = snap["ev"] / snap["revenue_ttm"]
@@ -796,13 +908,13 @@ def build_snapshot_as_of(
     facts: pd.DataFrame,
     metrics: dict,
     price_history: pd.DataFrame,
-    rolling_pe: pd.DataFrame,
+    rolling_multiples: pd.DataFrame,
 ) -> pd.DataFrame:
     cutoff_date = pd.Timestamp(cutoff_date)
 
     facts_cut = facts[facts["end"] <= cutoff_date]
     metrics_cut = {k: df[df["end"] <= cutoff_date] for k, df in metrics.items()}
-    rolling_pe_cut = rolling_pe[rolling_pe["end"] <= cutoff_date]
+    rolling_multiples_cut = rolling_multiples[rolling_multiples["end"] <= cutoff_date]
 
     prices_cut = get_price_as_of(price_history, cutoff_date)
     shares = get_latest_value(facts_cut, "SharesOutstanding").rename(
@@ -811,7 +923,7 @@ def build_snapshot_as_of(
     prices_cut = pd.merge(prices_cut, shares[["ticker", "shares_outstanding"]], on="ticker", how="left")
     prices_cut["market_cap"] = prices_cut["price"] * prices_cut["shares_outstanding"]
 
-    return build_snapshot(facts_cut, metrics_cut, prices_cut, rolling_pe_cut, as_of=cutoff_date)
+    return build_snapshot(facts_cut, metrics_cut, prices_cut, rolling_multiples_cut, as_of=cutoff_date)
 
 
 def main():
@@ -847,15 +959,15 @@ def main():
     prices = load_current_prices()
 
     valuation_history = build_valuation_history(facts, price_history, prices)
-    _, rolling_pe = calculate_historical_pe(facts, price_history)
-    snapshot = build_snapshot(facts, metrics, prices, rolling_pe)
+    rolling_multiples = calculate_rolling_multiple_averages(valuation_history)
+    snapshot = build_snapshot(facts, metrics, prices, rolling_multiples)
     snapshot = add_staleness_fields(snapshot, facts, load_latest_filed_periods(TICKERS))
-   
 
-   
+
+
 
     for cutoff in SNAPSHOT_AS_OF_DATES:
-        hist_snapshot = build_snapshot_as_of(cutoff, facts, metrics, price_history, rolling_pe)
+        hist_snapshot = build_snapshot_as_of(cutoff, facts, metrics, price_history, rolling_multiples)
         hist_snapshot = filter_hidden_rows(hist_snapshot)
 
         print(f"\n--- Snapshot as of {cutoff} ---")
@@ -1075,8 +1187,8 @@ def run_full_refresh():
 
     metrics_long = build_metrics_long(metrics, quarterly_metrics)
     valuation_history = build_valuation_history(facts, price_history, prices)
-    _, rolling_pe = calculate_historical_pe(facts, price_history)
-    snapshot = build_snapshot(facts, metrics, prices, rolling_pe)
+    rolling_multiples = calculate_rolling_multiple_averages(valuation_history)
+    snapshot = build_snapshot(facts, metrics, prices, rolling_multiples)
     snapshot = add_staleness_fields(snapshot, facts, load_latest_filed_periods(active_tickers))
     calc_time = time.perf_counter() - t0
 

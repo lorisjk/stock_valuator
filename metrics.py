@@ -228,6 +228,32 @@ def calculate_rolling_average(df: pd.DataFrame, value_col: str, window: int, res
     return df[["ticker", "end", result_name]]
 
 
+def harmonic_mean(values: pd.Series) -> float:
+
+    positive = values[values > 0].dropna()
+    if positive.empty:
+        return float("nan")
+    return len(positive) / (1 / positive).sum()
+
+
+def calculate_rolling_harmonic_stats(
+    df: pd.DataFrame, value_col: str, window: int, result_prefix: str
+) -> pd.DataFrame:
+
+    df = df.sort_values(["ticker", "end"]).copy()
+    positive = df[value_col].where(df[value_col] > 0)
+
+    inv_mean = (1 / positive).groupby(df["ticker"]).transform(
+        lambda s: s.rolling(window=window, min_periods=1).mean()
+    )
+    df[result_prefix] = 1 / inv_mean
+    df[f"{result_prefix}_median"] = positive.groupby(df["ticker"]).transform(
+        lambda s: s.rolling(window=window, min_periods=1).median()
+    )
+
+    return df[["ticker", "end", result_prefix, f"{result_prefix}_median"]]
+
+
 def get_latest_value(df: pd.DataFrame, concept: str) -> pd.DataFrame:
     filtered_df = df[df["concept"] == concept]
     latest = filtered_df.loc[filtered_df.groupby("ticker")["end"].idxmax()]

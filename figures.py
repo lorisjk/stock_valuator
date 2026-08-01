@@ -2,7 +2,11 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import pandas as pd
 from matplotlib.ticker import PercentFormatter
-from config import is_hidden, FUNDAMENTALS_TO_PLOT, QUARTERLY_COUNTERPART, GROWTH_PANELS, VALUATIONS_TO_PLOT
+from config import (
+    is_hidden, FUNDAMENTALS_TO_PLOT, QUARTERLY_COUNTERPART, GROWTH_PANELS,
+    VALUATIONS_TO_PLOT, HARMONIC_MEAN_CONCEPTS,
+)
+from metrics import harmonic_mean
 import numpy as np
 
 
@@ -16,6 +20,7 @@ def plot_metric(
     percent: bool = False,
     symlog: bool = False,
     show_mean: bool = False,
+    harmonic: bool = False,
 ) -> None:
 
     filtered = metrics_long[
@@ -39,8 +44,9 @@ def plot_metric(
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
 
     if show_mean:
-        mean_value = filtered["value"].mean()
-        label = f"Ø {mean_value:.2%}" if percent else f"Ø {mean_value:.1f}"
+        mean_value = harmonic_mean(filtered["value"]) if harmonic else filtered["value"].mean()
+        prefix = "Ø (harm.)" if harmonic else "Ø"
+        label = f"{prefix} {mean_value:.2%}" if percent else f"{prefix} {mean_value:.1f}"
         ax.axhline(mean_value, color="red", linewidth=1, label=label)
         ax.legend(fontsize=8)
 
@@ -185,7 +191,8 @@ def plot_valuation(ticker: str, valuation_history: pd.DataFrame, output_path: st
     axes = np.atleast_1d(axes).flatten()
 
     for ax, (concept, ylabel, ref_line, percent) in zip(axes, concepts_to_plot):
-        plot_metric(ax, filtered, ticker, concept, ylabel, ref_line, percent, show_mean=True)
+        plot_metric(ax, filtered, ticker, concept, ylabel, ref_line, percent,
+                    show_mean=True, harmonic=concept in HARMONIC_MEAN_CONCEPTS)
 
     for ax in axes[len(concepts_to_plot):]:
         ax.axis("off")
