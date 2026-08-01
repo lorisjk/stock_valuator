@@ -1,10 +1,10 @@
-TICKERS = ["META"]
+TICKERS = ["CRM"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
 PERIOD = "quarterly"
 
-SNAPSHOT_AS_OF_DATES = []  
+SNAPSHOT_AS_OF_DATES = []  # in YYYY-MM-DD format, e.g. ["2023-12-31", "2024-03-31"]
 
 CONCEPT_CANDIDATES = {
     "Revenue": {
@@ -1861,3 +1861,72 @@ CACHE_DIR = "cache"
 DATA_DIR = "data"
 FIGURE_DIR = "figures"
 
+
+
+# FOR FIGURES:PY
+
+QUARTERLY_COUNTERPART = {
+    "operating_margin": "operating_margin_quarterly",
+    "payout_ratio": "payout_ratio_quarterly",
+    "fcf_margin": "fcf_margin_quarterly",
+    "efficiency_ratio": "efficiency_ratio_quarterly",
+    "provision_ratio": "provision_ratio_quarterly",
+    "combined_ratio": "combined_ratio_quarterly",
+    "loss_ratio": "loss_ratio_quarterly",
+    "expense_ratio": "expense_ratio_quarterly",
+    "rd_intensity": "rd_intensity_quarterly",
+    "capex_intensity": "capex_intensity_quarterly",
+    "ffo_margin": "ffo_margin_quarterly",
+}
+
+FUNDAMENTALS_TO_PLOT = [
+    ("revenue_yoy_growth", "Revenue growth", 0, True, False),
+    ("income_yoy_growth", "Income growth", 0, True, False),
+    ("operating_margin", "Operating Margin", None, True, False),
+    ("roe", "Return on Equity", None, True, False),
+    ("debt_to_equity", "Debt-to-Equity Ratio", None, False, False),
+    ("payout_ratio", "Payout Ratio", None, True, False),
+    ("fcf_margin", "Free Cash Flow Margin", None, True, False),
+    ("net_debt_to_ebitda", "Net Debt / EBITDA", 0, False, False),
+    ("rule_of_40", "Rule of 40", 0.4, True, False),
+    ("net_interest_margin", "Net Interest Margin", None, True, False),
+    ("efficiency_ratio", "Efficiency Ratio", None, True, False),
+    ("roa", "Return on Assets", None, True, False),
+    ("equity_to_assets", "Equity / Assets", None, True, False),
+    ("provision_ratio", "Provision/Revenue", 0, True, False),
+    ("combined_ratio", "Combined Ratio", 1.0, True, False),
+    ("loss_ratio", "Loss Ratio", None, True, False),
+    ("expense_ratio", "Expense Ratio", None, True, False),
+    ("net_investment_yield", "Net Investment Yield", None, True, False),
+    ("reserve_growth", "Reserve Growth", 0, True, False),
+    ("inventory_turnover", "Inventory Turnover (x/Year)", None, False, False),
+    ("dio", "Days Inventory Outstanding", None, False, False),
+    ("dso", "Days Sales Outstanding", None, False, False),
+    ("dpo", "Days Payable Outstanding", None, False, False),
+    ("cash_conversion_cycle", "Cash Conversion Cycle (Days)", 0, False, False),
+    ("rd_intensity", "R&D Intensity (% Revenue)", None, True, False),
+    ("capex_intensity", "CapEx Intensity (% Revenue)", None, True, False),
+    ("operating_leverage", "Operating Leverage", 1.0, False, False),
+    ("operating_income_yoy_growth", "Operating Income YOY Growth", 0, True, False),
+    ("ffo_margin", "FFO Margin (% Revenue)", None, True, False),
+]
+
+GROWTH_PANELS = [
+    ("Revenue", "Revenue growth (Quartal, YoY)"),
+    ("NetIncomeLoss", "Net Income Growth (Quartal, YoY)"),
+    ("SharesOutstanding", "Shares Outstanding (Stock Dilution/Repurchase)"),
+]
+
+VALUATIONS_TO_PLOT = [
+    ("pe_ratio", "P/E (TTM)", None, False),
+    ("pb_ratio", "P/B", None, False),
+    ("pfcf_ratio", "P/FCF (TTM)", None, False),
+    ("ev_ebitda", "EV/EBITDA", None, False),
+    ("ev_sales", "EV/Sales", None, False),
+    ("dividend_yield", "dividend yield", None, True),
+    ("p_tbv", "P/TBV", None, False),
+    ("p_ppnr", "P/PPNR", None, False),
+    ("p_core_earnings", "P/Core Earnings", None, False),
+    ("p_ffo", "P/FFO (TTM)", None, False),
+    ("peg_ratio", "PEG Ratio Revenue", None, False),
+]

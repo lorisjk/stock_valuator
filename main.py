@@ -55,7 +55,7 @@ from metrics import (
     MIN_PEG_REVENUE_GROWTH,
     MAX_PEG_RATIO_ABS,
 )
-from figures import plot_fundamentals, plot_valuation, plot_growth
+from figures import (plot_fundamentals, plot_valuation, plot_growth)
 from quality import print_data_quality
 
 import os
@@ -406,14 +406,7 @@ def growth_concepts(facts: pd.DataFrame) -> list[str]:
 
 
 def add_growth_column(facts: pd.DataFrame) -> pd.DataFrame:
-    """Attach a year-over-year growth column to the facts frame.
 
-    Purely additive by construction: the row set and the `value` column are returned
-    untouched, and rows with no prior-year match within calculate_growth()'s date
-    tolerance (or masked by min_base_ratio) simply get NaN in the new column rather than
-    being dropped. Applied at the very end of the pipeline, immediately before writing
-    the CSV, so no intermediate consumer of `facts` ever sees the extra column.
-    """
     parts = []
     for concept in growth_concepts(facts):
         g = calculate_growth(
@@ -857,15 +850,21 @@ def main():
     _, rolling_pe = calculate_historical_pe(facts, price_history)
     snapshot = build_snapshot(facts, metrics, prices, rolling_pe)
     snapshot = add_staleness_fields(snapshot, facts, load_latest_filed_periods(TICKERS))
+   
 
    
 
     for cutoff in SNAPSHOT_AS_OF_DATES:
         hist_snapshot = build_snapshot_as_of(cutoff, facts, metrics, price_history, rolling_pe)
+        hist_snapshot = filter_hidden_rows(hist_snapshot)
 
         print(f"\n--- Snapshot as of {cutoff} ---")
         print(price_summary(hist_snapshot))
         print(f"\n-------------------------------")
+
+        hist_snapshot.to_csv(os.path.join(DATA_DIR, f"snapshot_as_of_{cutoff}.csv"), index=False)
+
+
 
     metrics_long = filter_hidden_rows(metrics_long)
     valuation_history = filter_hidden_rows(valuation_history)
@@ -873,6 +872,11 @@ def main():
     snapshot = filter_hidden_rows(snapshot)
 
     facts = add_growth_column(facts)
+
+    snapshot.sort_values(by=["ticker", "concept"], inplace=True)
+    valuation_history.sort_values(by=["ticker", "concept"], inplace=True)
+    metrics_long.sort_values(by=["ticker", "concept"], inplace=True)
+    facts.sort_values(by=["ticker", "concept"], inplace=True)
 
     facts.to_csv(os.path.join(DATA_DIR, f"{PERIOD}_facts.csv"), index=False)
     metrics_long.to_csv(os.path.join(DATA_DIR, "metrics_long.csv"), index=False)
