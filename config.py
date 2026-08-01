@@ -1,4 +1,4 @@
-TICKERS = ["AMD", "MU"]
+TICKERS = ["RDDT"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
@@ -122,6 +122,53 @@ CONCEPT_CANDIDATES = {
             "mode": "fallback",
         },
 
+    # Cash-flow-statement stock-based compensation. Surveyed across all 498 active tickers
+    # before adding: 98.2% have at least one of these tags (87.8% the plain
+    # ShareBasedCompensation), and every profile is >=75% covered -- broad enough to build
+    # owner_fcf/pfcf_ex_sbc on top of.
+    "ShareBasedCompensation": {
+        "tags": [
+            "ShareBasedCompensation",
+            "AllocatedShareBasedCompensationExpense",
+        ],
+        "point_in_time": False,
+        "mode": "fallback",
+    },
+
+    # Effective-tax-rate inputs. Surveyed first: IncomeTaxExpenseBenefit is present for 99.4%
+    # of active tickers and some pretax-income tag for 99.0%, so the ratio is broadly
+    # computable. The pretax candidates are ordered widest-scope first -- the
+    # "...MinorityInterestAndIncomeLossFromEquityMethodInvestments" variant is the one most
+    # filers use post-2009, with the older/narrower variants as fallbacks.
+    "IncomeTaxExpense": {
+        "tags": ["IncomeTaxExpenseBenefit"],
+        "point_in_time": False,
+        "mode": "fallback",
+    },
+    "PretaxIncome": {
+        "tags": [
+            "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+            "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
+            "IncomeLossFromContinuingOperationsBeforeIncomeTaxesDomestic",
+        ],
+        "point_in_time": False,
+        "mode": "fallback",
+    },
+
+    # Corroborating equity flows for the share-count QoQ guard (Part 3.3): a large QoQ change
+    # in SharesOutstanding is only suspicious if neither a buyback nor an issuance of
+    # comparable size explains it. Coverage measured first: 96.2% and 54.6% respectively --
+    # the issuance gap is real and is handled explicitly by the guard (see main.py).
+    "StockRepurchased": {
+        "tags": ["PaymentsForRepurchaseOfCommonStock"],
+        "point_in_time": False,
+        "mode": "fallback",
+    },
+    "StockIssued": {
+        "tags": ["ProceedsFromIssuanceOfCommonStock"],
+        "point_in_time": False,
+        "mode": "fallback",
+    },
 }
 
 TTM_CONCEPTS = [
@@ -143,8 +190,13 @@ TTM_CONCEPTS = [
     "RealizedInvestmentGains",
     "CostOfRevenue",
     "ResearchAndDevelopment",
-    "RealEstateDepreciation", 
+    "RealEstateDepreciation",
     "GainLossOnSaleOfProperties",
+    "ShareBasedCompensation",
+    "IncomeTaxExpense",
+    "PretaxIncome",
+    "StockRepurchased",
+    "StockIssued",
 ]
 
 SEARCH_HINTS = {
@@ -556,7 +608,7 @@ PROFILE_HIDDEN = {
     },
     "financial": {
         "pfcf_ttm", "ev_ebitda", "ev_sales",
-        "pfcf_ratio", "ev_fcf", "net_debt_to_ebitda", "fcf_margin",
+        "pfcf_ratio", "ev_fcf", "pfcf_ex_sbc", "net_debt_to_ebitda", "fcf_margin",
         "debt_to_equity", "operating_margin", "rule_of_40",
         "pb_ratio",
         "combined_ratio",
@@ -576,6 +628,7 @@ PROFILE_HIDDEN = {
         "ev_sales",
         "pfcf_ratio",
         "ev_fcf",
+        "pfcf_ex_sbc",
         "net_debt_to_ebitda",
         "fcf_margin",
         "debt_to_equity", 
@@ -598,6 +651,7 @@ PROFILE_HIDDEN = {
         "ev_sales",
         "pfcf_ratio",
         "ev_fcf",
+        "pfcf_ex_sbc",
         "net_debt_to_ebitda",
         "fcf_margin",
         "debt_to_equity", 
@@ -699,7 +753,7 @@ PROFILE_HIDDEN = {
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
         "rd_intensity",
         "operating_leverage", "operating_income_yoy_growth",
-        "rule_of_40", "pfcf_ratio", "ev_fcf", "ffo_margin", "p_ffo",
+        "rule_of_40", "pfcf_ratio", "ev_fcf", "pfcf_ex_sbc", "ffo_margin", "p_ffo",
     },
         "telecom_cable": {
         "net_interest_margin", "efficiency_ratio", "p_tbv", "roa",
@@ -773,7 +827,8 @@ PROFILE_HIDDEN = {
         "payout_ratio",        
         "income_yoy_growth",   
         "operating_margin", "net_debt_to_ebitda", "ev_ebitda",
-        "pfcf_ratio",   
+        "pfcf_ratio",
+        "pfcf_ex_sbc",
         "fcf_margin",
     },
         "marketplace": {
@@ -1762,7 +1817,23 @@ _DERIVED_CONCEPT_CONSUMERS = {
     "PPNR": ["p_ppnr"],
     "CoreOperatingEarnings": ["p_core_earnings"],
     "FFO_TTM": ["p_ffo", "ffo_margin"],
-    "FCF_TTM": ["pfcf_ratio", "fcf_margin", "ev_fcf"],
+    "FCF_TTM": ["pfcf_ratio", "fcf_margin", "ev_fcf", "pfcf_ex_sbc"],
+    # SBC-derived: hidden exactly when its only consumers are hidden, same rule as every
+    # other derived input. owner_fcf/sbc_ttm exist only to feed pfcf_ex_sbc.
+    "ShareBasedCompensation": ["pfcf_ex_sbc"],
+    "ShareBasedCompensation_TTM": ["pfcf_ex_sbc"],
+    "owner_fcf": ["pfcf_ex_sbc"],
+    # tax-rate inputs: only consumer is effective_tax_rate / its flag
+    "IncomeTaxExpense": ["effective_tax_rate"],
+    "IncomeTaxExpense_TTM": ["effective_tax_rate"],
+    "PretaxIncome": ["effective_tax_rate"],
+    "PretaxIncome_TTM": ["effective_tax_rate"],
+    "low_tax_rate_flag": ["effective_tax_rate"],
+    # equity-flow corroboration inputs: only consumer is the share-count jump guard
+    "StockRepurchased": ["share_count_jump_flag"],
+    "StockRepurchased_TTM": ["share_count_jump_flag"],
+    "StockIssued": ["share_count_jump_flag"],
+    "StockIssued_TTM": ["share_count_jump_flag"],
     "EBITDA_TTM": ["ev_ebitda", "net_debt_to_ebitda"],
     "eps_ttm": ["pe_ratio"],
     "pe_ttm": ["pe_ratio"],
@@ -1771,24 +1842,38 @@ _DERIVED_CONCEPT_CONSUMERS = {
     "avg_pe_5y": ["pe_ratio"],
     "avg_pe_5y_median": ["pe_ratio"],
     "avg_pe_5y_diverges": ["pe_ratio"],
+    "avg_pe_5y_n": ["pe_ratio"],
+    "avg_pe_5y_history_too_short": ["pe_ratio"],
     "avg_pfcf_5y": ["pfcf_ratio"],
     "avg_pfcf_5y_median": ["pfcf_ratio"],
     "avg_pfcf_5y_diverges": ["pfcf_ratio"],
+    "avg_pfcf_5y_n": ["pfcf_ratio"],
+    "avg_pfcf_5y_history_too_short": ["pfcf_ratio"],
     "avg_ev_ebitda_5y": ["ev_ebitda"],
     "avg_ev_ebitda_5y_median": ["ev_ebitda"],
     "avg_ev_ebitda_5y_diverges": ["ev_ebitda"],
+    "avg_ev_ebitda_5y_n": ["ev_ebitda"],
+    "avg_ev_ebitda_5y_history_too_short": ["ev_ebitda"],
     "avg_p_tbv_5y": ["p_tbv"],
     "avg_p_tbv_5y_median": ["p_tbv"],
     "avg_p_tbv_5y_diverges": ["p_tbv"],
+    "avg_p_tbv_5y_n": ["p_tbv"],
+    "avg_p_tbv_5y_history_too_short": ["p_tbv"],
     "avg_p_ppnr_5y": ["p_ppnr"],
     "avg_p_ppnr_5y_median": ["p_ppnr"],
     "avg_p_ppnr_5y_diverges": ["p_ppnr"],
+    "avg_p_ppnr_5y_n": ["p_ppnr"],
+    "avg_p_ppnr_5y_history_too_short": ["p_ppnr"],
     "avg_p_core_earnings_5y": ["p_core_earnings"],
     "avg_p_core_earnings_5y_median": ["p_core_earnings"],
     "avg_p_core_earnings_5y_diverges": ["p_core_earnings"],
+    "avg_p_core_earnings_5y_n": ["p_core_earnings"],
+    "avg_p_core_earnings_5y_history_too_short": ["p_core_earnings"],
     "avg_p_ffo_5y": ["p_ffo"],
     "avg_p_ffo_5y_median": ["p_ffo"],
     "avg_p_ffo_5y_diverges": ["p_ffo"],
+    "avg_p_ffo_5y_n": ["p_ffo"],
+    "avg_p_ffo_5y_history_too_short": ["p_ffo"],
     "tangible_equity": ["p_tbv"],
     "ppnr_ttm": ["p_ppnr"],
     "core_earnings_ttm": ["p_core_earnings"],
@@ -1946,6 +2031,7 @@ VALUATIONS_TO_PLOT = [
     ("pb_ratio", "P/B", None, False),
     ("pfcf_ratio", "P/FCF (TTM)", None, False),
     ("ev_fcf", "EV/FCF (TTM)", None, False),
+    ("pfcf_ex_sbc", "P/FCF ex-SBC (TTM)", None, False),
     ("ev_ebitda", "EV/EBITDA", None, False),
     ("ev_sales", "EV/Sales", None, False),
     ("dividend_yield", "dividend yield", None, True),
@@ -1956,14 +2042,7 @@ VALUATIONS_TO_PLOT = [
     ("peg_ratio", "PEG Ratio Revenue", None, False),
 ]
 
-# Multiples where the denominator can plausibly approach zero (thin earnings/FCF/EBITDA),
-# so the arithmetic mean of the ratio gets distorted by near-infinite spikes -- the harmonic
-# mean (mean of the reciprocal "yield", inverted back) is used instead for the chart reference
-# line and the rolling 5y snapshot average. Scope calibrated from real cached valuation_history
-# data (median divergence 4-12% across these seven, materially larger than ev_sales' ~3% or
-# dividend_yield's noise-dominated near-zero comparisons); ev_sales (revenue is never
-# realistically near zero) and pe_to_revenue_growth (a ratio-of-ratios with its own dedicated
-# guards, not a simple price/flow multiple) were checked and excluded.
+
 HARMONIC_MEAN_CONCEPTS = {
     "pe_ratio", "pfcf_ratio", "ev_ebitda", "p_tbv", "p_ppnr", "p_core_earnings", "p_ffo",
 }

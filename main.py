@@ -194,19 +194,7 @@ BUYBACK_QOQ_GAP_DAYS = (60, 120)
 
 
 def calculate_buyback_distortion_flag(facts: pd.DataFrame) -> pd.DataFrame:
-    """Flags (ticker, end) where StockholdersEquity fell more than
-    MIN_BUYBACK_EQUITY_QOQ_DECLINE quarter-over-quarter while the company stayed profitable on
-    a TTM basis -- the ORLY/MCD/HD/LOW pattern of a profitable company shrinking its own equity
-    base via buybacks. Restricted to periods where equity was positive both quarters: an
-    already-negative or near-zero equity base is the existing scale guards' territory (a
-    different, already-understood story), not this one -- AZO, whose equity has been
-    continuously negative since 2009, correctly never qualifies here.
 
-    0.15 was calibrated from real cached data, not guessed: the general population's QoQ
-    decline (profitable, both-quarters-positive periods) sits at p97=13.3%/p99=28.3%, so >15%
-    is already a rare tail event universe-wide, while still catching the upper tail of all
-    five confirmed buyback names' own history (MCD's own p90=17.4%, just above the threshold).
-    """
     se = facts[facts["concept"] == "StockholdersEquity"][["ticker", "end", "value"]].rename(columns={"value": "equity"})
     ni = facts[facts["concept"] == "NetIncomeLoss_TTM"][["ticker", "end", "value"]].rename(columns={"value": "ni_ttm"})
 
@@ -228,10 +216,139 @@ def calculate_buyback_distortion_flag(facts: pd.DataFrame) -> pd.DataFrame:
     return merged[["ticker", "end", "buyback_distortion_flag"]].dropna(subset=["buyback_distortion_flag"])
 
 
+def _qoq_change(facts: pd.DataFrame, concept: str, value_name: str) -> pd.DataFrame:
+    """Consecutive-quarter change in `concept`, with the same gap-days sanity restriction
+    calculate_buyback_distortion_flag() uses -- shared so the two guards can't disagree about
+    what "quarter over quarter" means. Change columns live on the frame (not free-standing
+    Series) so they survive a later merge row-for-row; see the buyback flag for why."""
+    sub = facts[facts["concept"] == concept][["ticker", "end", "value"]].rename(columns={"value": value_name})
+    sub = sub.sort_values(["ticker", "end"])
+    sub[f"prev_{value_name}"] = sub.groupby("ticker")[value_name].shift(1)
+    prev_end = sub.groupby("ticker")["end"].shift(1)
+    sub["_gap_ok"] = (sub["end"] - prev_end).dt.days.between(*BUYBACK_QOQ_GAP_DAYS)
+    return sub
+
+
+MIN_GOODWILL_QOQ_GROWTH = 0.20
+
+
+def calculate_inorganic_flag(facts: pd.DataFrame) -> pd.DataFrame:
+    """Flags periods where Goodwill jumped >MIN_GOODWILL_QOQ_GROWTH quarter-over-quarter --
+    i.e. an acquisition closed, so growth rates spanning that period are inorganic (M&A-driven)
+    rather than organic. Mirrors calculate_buyback_distortion_flag()'s mechanism exactly.
+
+    Requires a positive prior Goodwill base: a company going 0 -> anything is an infinite
+    percentage change, and "first ever acquisition" is already visible as the goodwill line
+    appearing at all. Threshold calibrated in the report -- 20% sits far out in the tail of the
+    real QoQ goodwill-change distribution, which is overwhelmingly ~0 (goodwill is static
+    between deals, moving only on impairment or FX).
+    """
+    gw = _qoq_change(facts, "Goodwill", "goodwill")
+    gw["_applicable"] = gw["_gap_ok"] & (gw["prev_goodwill"] > 0)
+    growth = gw["goodwill"] / gw["prev_goodwill"] - 1
+    gw["inorganic_contaminated"] = (growth > MIN_GOODWILL_QOQ_GROWTH).astype(float).where(gw["_applicable"])
+    return gw[["ticker", "end", "inorganic_contaminated"]].dropna(subset=["inorganic_contaminated"])
+
+
+MIN_SHARE_COUNT_QOQ_CHANGE = 0.15
+MIN_CORROBORATING_EQUITY_FLOW_RATIO = 0.5
+
+
+def calculate_share_count_jump_flag(facts: pd.DataFrame) -> pd.DataFrame:
+    """Flags periods where SharesOutstanding moved >MIN_SHARE_COUNT_QOQ_CHANGE QoQ with no
+    buyback or issuance of comparable size to explain it -- i.e. the share count itself is
+    suspect (tag switch, split not caught by normalize_split_adjusted, class-mix change),
+    not a real corporate action. Informational, like buyback_distortion_flag: it does not mask.
+
+    "Comparable size" is deliberately loose (>=50% of the implied value of the share change at
+    that quarter's own implied price): buyback/issuance cash flows and share-count deltas never
+    reconcile exactly (options exercise, RSU vesting, ASR timing), so demanding tight agreement
+    would flag everything.
+
+    Note on coverage, measured before building this: PaymentsForRepurchaseOfCommonStock exists
+    for 96.2% of active tickers but ProceedsFromIssuanceOfCommonStock only 54.6%. A missing
+    issuance tag is therefore treated as "no corroboration available" rather than "no issuance
+    happened" -- which makes the flag conservative in the *reporting* direction (it can flag a
+    real issuance whose tag is absent) rather than silently missing suspect share counts.
+    """
+    shares = _qoq_change(facts, "SharesOutstanding", "shares")
+    shares["_applicable"] = shares["_gap_ok"] & (shares["prev_shares"] > 0)
+    shares["_abs_change"] = (shares["shares"] / shares["prev_shares"] - 1).abs()
+    shares["_share_delta"] = (shares["shares"] - shares["prev_shares"]).abs()
+
+    flows = facts[facts["concept"].isin(["StockRepurchased", "StockIssued"])]
+    flows = flows.pivot_table(index=["ticker", "end"], columns="concept", values="value").reset_index()
+    for col in ("StockRepurchased", "StockIssued"):
+        if col not in flows.columns:
+            flows[col] = float("nan")
+
+    merged = shares.merge(flows, on=["ticker", "end"], how="left")
+
+    # implied price for this ticker/quarter, from EDGAR fundamentals only (no yfinance
+    # dependency -- this runs inside calculate_all_metrics(), before prices are joined):
+    # equity per share is a crude but scale-correct proxy for converting a cash flow into
+    # a share count, which is all the "comparable magnitude" test needs.
+    equity = facts[facts["concept"] == "StockholdersEquity"][["ticker", "end", "value"]].rename(columns={"value": "equity"})
+    merged = merged.merge(equity, on=["ticker", "end"], how="left")
+    implied_price = (merged["equity"] / merged["shares"]).abs()
+
+    flow_cash = merged[["StockRepurchased", "StockIssued"]].abs().max(axis=1)
+    implied_flow_shares = flow_cash / implied_price.where(implied_price > 0)
+    corroborated = implied_flow_shares >= MIN_CORROBORATING_EQUITY_FLOW_RATIO * merged["_share_delta"]
+
+    raw = (merged["_abs_change"] > MIN_SHARE_COUNT_QOQ_CHANGE) & ~corroborated.fillna(False)
+    merged["share_count_jump_flag"] = raw.astype(float).where(merged["_applicable"])
+    return merged[["ticker", "end", "share_count_jump_flag"]].dropna(subset=["share_count_jump_flag"])
+
+
+def calculate_fcf_exceeds_ebitda_flag(fcf_df: pd.DataFrame, ebitda_df: pd.DataFrame) -> pd.DataFrame:
+    """Flags periods where trailing FCF > trailing EBITDA. Deliberately named for the
+    *observation*, not a presumed cause: investigation (see the report) found the driver
+    differs by ticker -- stock-based compensation for some, working-capital/deferred-revenue
+    builds for others -- so a flag asserting "SBC-driven" would be wrong for a meaningful share
+    of cases. Both sides must be positive: when EBITDA is negative the comparison is trivially
+    true and says nothing about cash-conversion quality.
+
+    Takes the already-computed fcf/ebitda frames rather than reading FCF_TTM/EBITDA_TTM out of
+    `facts`, because those concepts are only injected into facts (via add_as_concept) *after*
+    calculate_all_metrics() returns -- reading them here would silently produce nothing.
+    """
+    merged = fcf_df.merge(ebitda_df, on=["ticker", "end"])
+    applicable = (merged["fcf"] > 0) & (merged["ebitda"] > 0)
+    merged["fcf_exceeds_ebitda"] = (merged["fcf"] > merged["ebitda"]).astype(float).where(applicable)
+    return merged[["ticker", "end", "fcf_exceeds_ebitda"]].dropna(subset=["fcf_exceeds_ebitda"])
+
+
+MAX_NOL_EFFECTIVE_TAX_RATE = 0.10
+
+
+def calculate_tax_metrics(facts: pd.DataFrame) -> tuple:
+    """effective_tax_rate = IncomeTaxExpense_TTM / PretaxIncome_TTM, plus a low-rate flag.
+
+    Only meaningful for profitable periods, so a positive pretax denominator is required
+    (`require_positive_denominator`): a loss-making quarter produces a tax *benefit* over
+    negative pretax income, whose ratio is arithmetically positive but means the opposite of
+    a low tax burden. The same MIN_DENOMINATOR_SCALE_RATIO guard used for roe protects against
+    a near-break-even pretax base exploding the rate.
+    """
+    rate = calculate_ratio(
+        facts, "IncomeTaxExpense_TTM", "PretaxIncome_TTM", "effective_tax_rate",
+        require_positive_denominator=True,
+        min_denominator_scale_ref="Revenue_TTM",
+        min_denominator_scale_ratio=MIN_DENOMINATOR_SCALE_RATIO,
+    )
+    flag = rate.dropna(subset=["effective_tax_rate"]).copy()
+    flag["low_tax_rate_flag"] = (flag["effective_tax_rate"] < MAX_NOL_EFFECTIVE_TAX_RATE).astype(float)
+    return rate, flag[["ticker", "end", "low_tax_rate_flag"]]
+
+
 def calculate_all_metrics(facts: pd.DataFrame) -> dict:
     m = {}
 
     m["buyback_distortion_flag"] = calculate_buyback_distortion_flag(facts)
+    m["inorganic_contaminated"] = calculate_inorganic_flag(facts)
+    m["share_count_jump_flag"] = calculate_share_count_jump_flag(facts)
+    m["effective_tax_rate"], m["low_tax_rate_flag"] = calculate_tax_metrics(facts)
 
     m["revenue_growth"] = calculate_growth(facts, "Revenue_TTM", 4, "yoy_growth")
     m["income_growth"] = calculate_growth(facts, "NetIncomeLoss_TTM", 4, "yoy_growth")
@@ -265,6 +382,19 @@ def calculate_all_metrics(facts: pd.DataFrame) -> dict:
     )
     m["ebitda"] = calculate_difference(
         facts, "OperatingIncomeLoss_TTM", "DepreciationAndAmortization_TTM", "ebitda", "+"
+    )
+    m["fcf_exceeds_ebitda"] = calculate_fcf_exceeds_ebitda_flag(m["fcf"], m["ebitda"])
+
+    # owner_fcf: FCF with stock-based compensation treated as the real economic cost it is,
+    # rather than an add-back. Inner-joins on SBC availability by construction, so a ticker
+    # missing the tag gets no owner_fcf rather than a silently SBC-free (= overstated) one.
+    # Built from m["fcf"] rather than a facts lookup for the same reason as
+    # calculate_fcf_exceeds_ebitda_flag(): FCF_TTM isn't in facts yet at this point.
+    sbc_ttm_rows = facts[facts["concept"] == "ShareBasedCompensation_TTM"][["ticker", "end", "value"]].rename(
+        columns={"value": "sbc_ttm"}
+    )
+    m["owner_fcf"] = calculate_difference_from_dfs(
+        m["fcf"], sbc_ttm_rows, "fcf", "sbc_ttm", "owner_fcf"
     )
 
     revenue_ttm_rows = facts[facts["concept"] == "Revenue_TTM"][["ticker", "end", "value"]].rename(
@@ -472,6 +602,11 @@ def add_growth_column(facts: pd.DataFrame) -> pd.DataFrame:
 def build_metrics_long(metrics: dict, quarterly_metrics: dict = None) -> pd.DataFrame:
     spec = [
         (metrics["buyback_distortion_flag"], "buyback_distortion_flag", "buyback_distortion_flag"),
+        (metrics["inorganic_contaminated"], "inorganic_contaminated", "inorganic_contaminated"),
+        (metrics["share_count_jump_flag"], "share_count_jump_flag", "share_count_jump_flag"),
+        (metrics["fcf_exceeds_ebitda"], "fcf_exceeds_ebitda", "fcf_exceeds_ebitda"),
+        (metrics["effective_tax_rate"], "effective_tax_rate", "effective_tax_rate"),
+        (metrics["low_tax_rate_flag"], "low_tax_rate_flag", "low_tax_rate_flag"),
         (metrics["revenue_growth"], "yoy_growth", "revenue_yoy_growth"),
         (metrics["income_growth"], "yoy_growth", "income_yoy_growth"),
         (metrics["operating_margin"], "operating_margin", "operating_margin"),
@@ -527,6 +662,7 @@ MIN_VALUATION_DENOMINATOR_SCALE_RATIO = 0.001
 
 AVG_5Y_WINDOW = 20
 MIN_AVG_5Y_DIVERGENCE = 0.20   # calibrated below, in build_snapshot()'s divergence flag
+MIN_AVG_5Y_OBSERVATIONS = 12   # 3 of the 5 nominal years; see build_snapshot()'s history_too_short
 
 # Naming for each in-scope multiple's rolling 5y reference field, generalizing the original
 # PE-only "avg_pe_5y" (built by the now-removed calculate_historical_pe()) to every multiple in
@@ -565,6 +701,64 @@ def calculate_rolling_multiple_averages(valuation_history: pd.DataFrame) -> pd.D
     return wide if wide is not None else pd.DataFrame(columns=["ticker", "end"])
 
 
+MIN_PEER_GROUP_SIZE = 5
+PEER_BAND_WINDOW_YEARS = 5
+
+
+def calculate_peer_band_flags(valuation_history: pd.DataFrame) -> pd.DataFrame:
+    """historical_band_elevated: a ticker sitting near its OWN 5-year low for a multiple, while
+    that low is still above the median of what its peers trade at today.
+
+    Design choices, both real and worth stating:
+
+    1. "Peer" = profile-mate (TICKER_PROFILES). That assignment already encodes this project's
+       structural view of which companies are economically comparable -- it is what drives which
+       metrics are even shown per sector -- so reusing it keeps one definition of comparability
+       instead of inventing a second one. Profiles smaller than MIN_PEER_GROUP_SIZE are skipped
+       entirely: a "median" over 1-2 peers (alt_asset_manager, homebuilder, airline) is not a
+       sector level, it's noise, and flagging against it would be worse than not flagging.
+
+    2. The peer median is taken over each peer's OWN most recent value, not a strict same-date
+       cross-section. Fiscal calendars differ across a profile, so a same-date cross-section
+       would silently drop most peers on most dates; "what do comparable companies trade at
+       right now" is also the question an investor actually asks. The cost is that peers are
+       aligned to within a quarter of each other rather than exactly -- acceptable for a
+       median, and stated rather than hidden.
+
+    Only the multiples already in HARMONIC_MEAN_CONCEPTS are covered: those are the price/flow
+    multiples where "cheap vs expensive" is directionally meaningful in the first place.
+    """
+    profiles = valuation_history["ticker"].map(lambda t: TICKER_PROFILES.get(t, DEFAULT_PROFILE))
+    vh = valuation_history.assign(profile=profiles)
+    cutoff = pd.Timestamp.today() - pd.DateOffset(years=PEER_BAND_WINDOW_YEARS)
+    window = vh[(vh["end"] >= cutoff) & (vh["value"] > 0)]
+
+    out = []
+    for concept in sorted(HARMONIC_MEAN_CONCEPTS):
+        sub = window[window["concept"] == concept]
+        if sub.empty:
+            continue
+        own_low = sub.groupby(["ticker", "profile"])["value"].min().rename("own_5y_low").reset_index()
+        latest = sub.loc[sub.groupby("ticker")["end"].idxmax(), ["ticker", "value"]].rename(
+            columns={"value": "latest"}
+        )
+        own_low = own_low.merge(latest, on="ticker", how="left")
+
+        sizes = own_low.groupby("profile")["ticker"].transform("size")
+        peer_median = own_low.groupby("profile")["latest"].transform("median")
+        eligible = sizes >= MIN_PEER_GROUP_SIZE
+
+        flag = (own_low["own_5y_low"] > peer_median).astype(float).where(eligible)
+        res = own_low[["ticker"]].copy()
+        res["concept"] = f"{concept}_band_elevated"
+        res["value"] = flag
+        out.append(res.dropna(subset=["value"]))
+
+    if not out:
+        return pd.DataFrame(columns=["ticker", "concept", "value"])
+    return pd.concat(out, ignore_index=True)
+
+
 def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame, prices: pd.DataFrame) -> pd.DataFrame:
     needed = [
         "EPS_TTM_CALC",
@@ -577,9 +771,10 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame, pr
         "FCF_TTM",
         "EBITDA_TTM",
         "TangibleEquity",
-        "PPNR", 
+        "PPNR",
         "CoreOperatingEarnings",
-        "FFO_TTM"
+        "FFO_TTM",
+        "ShareBasedCompensation_TTM",
     ]
 
     wide = (
@@ -615,6 +810,10 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame, pr
     wide["pb_ratio"] = wide["market_cap"] / wide["StockholdersEquity"].where(wide["StockholdersEquity"] > 0)
     wide["pfcf_ratio"] = wide["market_cap"] / wide["FCF_TTM"].where(wide["FCF_TTM"] > 0)
     wide["ev_fcf"] = wide["ev"] / wide["FCF_TTM"].where(wide["FCF_TTM"] > 0)
+    # owner FCF = FCF net of stock-based compensation; NaN wherever SBC isn't tagged, so a
+    # ticker without the tag gets no pfcf_ex_sbc rather than one silently equal to pfcf_ratio.
+    wide["owner_fcf"] = wide["FCF_TTM"] - wide["ShareBasedCompensation_TTM"]
+    wide["pfcf_ex_sbc"] = wide["market_cap"] / wide["owner_fcf"].where(wide["owner_fcf"] > 0)
     wide["ev_ebitda"] = wide["ev"] / wide["EBITDA_TTM"].where(wide["EBITDA_TTM"] > 0)
     wide["ev_sales"] = wide["ev"] / wide["Revenue_TTM"].where(wide["Revenue_TTM"] > 0)
     wide["dividend_yield"] = (wide["DividendsPerShare_TTM"].where(wide["DividendsPerShare_TTM"] >= 0) / wide["close"])
@@ -638,6 +837,7 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame, pr
         ("pb_ratio", wide["StockholdersEquity"]),
         ("pfcf_ratio", wide["FCF_TTM"]),
         ("ev_fcf", wide["FCF_TTM"]),
+        ("pfcf_ex_sbc", wide["owner_fcf"]),
         ("ev_ebitda", wide["EBITDA_TTM"]),
         ("p_tbv", wide["TangibleEquity"]),
         ("p_ppnr", wide["PPNR"]),
@@ -656,7 +856,7 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame, pr
     # calculate_buyback_distortion_flag() for the calibration reasoning.
     wide = wide.merge(calculate_buyback_distortion_flag(facts), on=["ticker", "end"], how="left")
 
-    value_cols = ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_fcf", "ev_ebitda", "ev_sales", "dividend_yield", "p_tbv", "p_ppnr", "p_core_earnings", "pe_to_revenue_growth", "p_ffo", "buyback_distortion_flag"]
+    value_cols = ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_fcf", "pfcf_ex_sbc", "ev_ebitda", "ev_sales", "dividend_yield", "p_tbv", "p_ppnr", "p_core_earnings", "pe_to_revenue_growth", "p_ffo", "buyback_distortion_flag"]
 
     long = wide.melt(
         id_vars=["ticker", "end"],
@@ -668,6 +868,8 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame, pr
     return long.dropna(subset=["value"])
 
 MIN_SHARE_COUNT_DISAGREEMENT = 0.10
+MIN_YF_SHARE_OVERSTATEMENT = 1.50
+MAX_EDGAR_SHARE_LAG_DAYS = 200   # ~two quarters: one missed filing is tolerable, five years isn't
 
 
 def _resolve_share_sources(facts: pd.DataFrame, prices: pd.DataFrame) -> tuple:
@@ -676,15 +878,37 @@ def _resolve_share_sources(facts: pd.DataFrame, prices: pd.DataFrame) -> tuple:
     shares_source_is_edgar/shares_delta_pct columns are built from, so the two can't drift."""
     yf_shares = prices["shares_outstanding"]
 
-    edgar = get_latest_value(facts, "SharesOutstanding")[["ticker", "value"]]
-    edgar_shares = prices["ticker"].map(edgar.set_index("ticker")["value"])
+    edgar_latest = get_latest_value(facts, "SharesOutstanding")[["ticker", "value", "end"]]
+    edgar_shares = prices["ticker"].map(edgar_latest.set_index("ticker")["value"])
 
-    prefer_edgar = (
-        edgar_shares.notna()
-        & yf_shares.notna()
-        & (yf_shares > 0)
-        & (edgar_shares / yf_shares > 1 + MIN_SHARE_COUNT_DISAGREEMENT)
-    )
+    # EDGAR-larger: the original dual-class/stale-yfinance case.
+    edgar_larger = (edgar_shares / yf_shares > 1 + MIN_SHARE_COUNT_DISAGREEMENT)
+
+    # yfinance-larger by a gross factor: the opposite failure (KLAC/CRWD/DVN, where yfinance
+    # overstates by ~9.9x/3.9x/1.9x). Deliberately NOT the 1.10 rule inverted -- the real
+    # negative-delta distribution doesn't separate at 1.10. Measured across all 495 tickers
+    # with both sources, the yfinance/edgar ratios above 1.0 run
+    # 9.91, 3.95, 1.87 | 1.23, 1.12, 1.09, 1.06, 1.06, 1.05 ... continuously down to 1.0;
+    # the only wide gap sits between 1.87 and 1.12 once BKR (1.23) is excluded as stale below.
+    # MIN_YF_SHARE_OVERSTATEMENT sits in that gap: the three above it are off by near-integer
+    # factors (a units/split error on yfinance's side), while everything below is ordinary
+    # definitional drift that switching source would not improve.
+    yf_grossly_larger = (yf_shares / edgar_shares > MIN_YF_SHARE_OVERSTATEMENT)
+
+    # ...but only when EDGAR's own share count is current. BKR's newest SharesOutstanding fact
+    # is 2021-06-30 while its newest fact of any kind is 2026-06-30 -- there, yfinance is right
+    # and EDGAR is five years stale, so preferring EDGAR would make market_cap worse, not
+    # better. Staleness is measured against the ticker's own newest fact rather than today's
+    # date, so a ticker whose whole payload lags (the SEC-aggregation case handled elsewhere)
+    # isn't punished twice.
+    newest_any = facts.groupby("ticker")["end"].max()
+    shares_end = prices["ticker"].map(edgar_latest.set_index("ticker")["end"])
+    shares_lag_days = (prices["ticker"].map(newest_any) - shares_end).dt.days
+    edgar_shares_current = shares_lag_days <= MAX_EDGAR_SHARE_LAG_DAYS
+
+    usable = edgar_shares.notna() & yf_shares.notna() & (yf_shares > 0) & (edgar_shares > 0)
+    prefer_edgar = usable & (edgar_larger | (yf_grossly_larger & edgar_shares_current))
+
     delta_pct = (edgar_shares - yf_shares) / yf_shares * 100
     return edgar_shares, yf_shares, prefer_edgar, delta_pct
 
@@ -701,15 +925,20 @@ def build_snapshot(
     prices: pd.DataFrame,
     rolling_multiples: pd.DataFrame,
     as_of: "str | pd.Timestamp | None" = None,
+    peer_band_flags: "pd.DataFrame | None" = None,
 ) -> pd.DataFrame:
 
     as_of_date = pd.Timestamp(as_of) if as_of is not None else pd.Timestamp(date.today())
 
     snap = prices.copy()
-    snap["shares_outstanding"] = resolve_snapshot_share_count(facts, snap)
+    # Resolved ONCE, off the untouched `prices`, and reused for both the share count and the
+    # two audit columns. Calling _resolve_share_sources() again against `snap` after
+    # overwriting snap["shares_outstanding"] would compare EDGAR to the already-resolved
+    # count instead of to yfinance's original -- reporting a 0% delta and source="yfinance"
+    # for exactly the tickers that did switch.
+    edgar_shares, yf_shares, prefer_edgar, shares_delta_pct = _resolve_share_sources(facts, prices)
+    snap["shares_outstanding"] = edgar_shares.where(prefer_edgar, yf_shares)
     snap["market_cap"] = snap["price"] * snap["shares_outstanding"]
-
-    _, _, prefer_edgar, shares_delta_pct = _resolve_share_sources(facts, snap)
     snap["shares_source_is_edgar"] = prefer_edgar.astype(float)
     snap["shares_delta_pct"] = shares_delta_pct
 
@@ -792,15 +1021,24 @@ def build_snapshot(
     for concept in HARMONIC_MEAN_CONCEPTS:
         field = AVG_5Y_FIELD_NAMES[concept]
         median_field = f"{field}_median"
-        cols = ["ticker", "end", field, median_field]
+        count_field = f"{field}_n"
+        cols = ["ticker", "end", field, median_field, count_field]
         sub = rolling_multiples[cols].dropna(subset=[field]) if field in rolling_multiples.columns else pd.DataFrame(columns=cols)
         if sub.empty:
             continue
         latest = get_latest_row(sub)
         diverges = (latest[field] - latest[median_field]).abs() / latest[median_field]
         latest[f"{field}_diverges"] = (diverges > MIN_AVG_5Y_DIVERGENCE).astype(float)
+        # A "5-year average" built from a handful of quarters is formally valid and
+        # substantively meaningless -- calculate_rolling_harmonic_stats() uses min_periods=1,
+        # so a just-IPO'd ticker gets a number from as little as one observation. This marks
+        # those, without masking (a short-history average is still the best available anchor,
+        # it just shouldn't be read as a 5-year norm).
+        latest[f"{field}_history_too_short"] = (latest[count_field] < MIN_AVG_5Y_OBSERVATIONS).astype(float)
         snap = pd.merge(
-            snap, latest[["ticker", field, median_field, f"{field}_diverges"]],
+            snap,
+            latest[["ticker", field, median_field, f"{field}_diverges",
+                    f"{field}_history_too_short"]],
             on="ticker", how="left",
         )
 
@@ -833,6 +1071,12 @@ def build_snapshot(
     long = snap.melt(id_vars=["ticker"], value_vars=value_cols, var_name="concept", value_name="value")
     long = long.dropna(subset=["value"])
     long["end"] = as_of_date
+
+    if peer_band_flags is not None and not peer_band_flags.empty:
+        bands = peer_band_flags.copy()
+        bands["end"] = as_of_date
+        long = pd.concat([long, bands[["ticker", "end", "concept", "value"]]], ignore_index=True)
+
     return long[["ticker", "end", "concept", "value"]]
 
 
@@ -960,7 +1204,8 @@ def main():
 
     valuation_history = build_valuation_history(facts, price_history, prices)
     rolling_multiples = calculate_rolling_multiple_averages(valuation_history)
-    snapshot = build_snapshot(facts, metrics, prices, rolling_multiples)
+    peer_bands = calculate_peer_band_flags(valuation_history)
+    snapshot = build_snapshot(facts, metrics, prices, rolling_multiples, peer_band_flags=peer_bands)
     snapshot = add_staleness_fields(snapshot, facts, load_latest_filed_periods(TICKERS))
 
 
@@ -1188,7 +1433,8 @@ def run_full_refresh():
     metrics_long = build_metrics_long(metrics, quarterly_metrics)
     valuation_history = build_valuation_history(facts, price_history, prices)
     rolling_multiples = calculate_rolling_multiple_averages(valuation_history)
-    snapshot = build_snapshot(facts, metrics, prices, rolling_multiples)
+    peer_bands = calculate_peer_band_flags(valuation_history)
+    snapshot = build_snapshot(facts, metrics, prices, rolling_multiples, peer_band_flags=peer_bands)
     snapshot = add_staleness_fields(snapshot, facts, load_latest_filed_periods(active_tickers))
     calc_time = time.perf_counter() - t0
 

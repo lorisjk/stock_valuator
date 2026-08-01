@@ -1,209 +1,274 @@
-# Task: Buyback-Distortion Flag + Harmonic-Mean P/E Average + Share-Count Transparency + `ev_fcf`
+# Task: Nine Data-Quality/Metric Improvements from External Review
 
-Four independent improvements to valuation quality. Each gets its own investigation, fix, and
-non-regression check. **Standing requirement as always: nothing may regress.**
+Nine independent items, each investigated against real cached data before implementing.
+**Explicit permission and instruction, per the project owner's own framing: implement what
+works cleanly with this project's real data; for anything that doesn't, report exactly why
+and leave it undone rather than forcing an approximation.** This is not a soft suggestion —
+treat "confirmed infeasible, here's why" as a fully successful outcome for that item, the same
+way REIT's AFFO/NAV or Same-Store-Sales were correctly left unbuilt elsewhere in this project.
 
----
-
-## PART 1 — Buyback-distortion flag + tangible book value
-
-### Context
-
-A company running aggressive buybacks can shrink `StockholdersEquity` sharply quarter over
-quarter while remaining profitable — `pb_ratio` and `roe` become distorted in exactly the way
-already documented for ORLY/AZO/MCD (a small-but-positive or negative equity base against a
-normal numerator). The existing equity guards catch the extreme (near-zero/negative) cases;
-this adds a softer, earlier signal: flag it before the guard has to mask anything outright.
-
-### Step 1.1 — Detect the pattern
-
-Add a check: `StockholdersEquity` QoQ decline of more than ~15-20% **combined with** positive
-`NetIncomeLoss_TTM` in the same period (the combination matters — a declining equity base
-alongside real losses is a different, already-understood story; this flag is specifically for
-"profitable company shrinking its own equity base via buybacks"). Calibrate the exact
-threshold from real data (the same marginal-return method used for every prior guard in this
-project) rather than shipping 15% or 20% as a guess — check where confirmed buyback-heavy
-names (ORLY, AZO, MCD, HD, LOW) actually sit and where the threshold cleanly separates them
-from normal QoQ equity noise.
-
-### Step 1.2 — Suppress or asterisk `pb_ratio`/`roe` when flagged
-
-Decide between suppression (mask to NaN, consistent with how every other guard in this
-project works) and an asterisk/flag column (keep the value visible but marked). Recommend
-one, with reasoning — note that this project's established convention has consistently been
-to mask rather than annotate (every guard so far hides the number rather than showing a
-flagged version of it), so deviating from that here should be a deliberate, justified choice,
-not a default.
-
-### Step 1.3 — `tangible_book` field, and hide `pb_ratio` when negative
-
-**Before implementing, check whether a usable "intangible assets" concept already exists** in
-this project's extracted concepts (something like `IntangibleAssetsNetExcludingGoodwill` or
-similar) — don't assume one is available. If a clean, broadly-available tag exists, build
-`tangible_book = StockholdersEquity - Goodwill - Intangibles`. If no reliable intangibles
-concept exists project-wide (check directly, the same tag-research discipline used
-throughout this project — a spot-check across a handful of profiles, not just one ticker), a
-documented simplification of `tangible_book = StockholdersEquity - Goodwill` (Goodwill alone,
-already a base concept) is an acceptable fallback — this project already made an analogous
-simplification for FFO (reusing generic `DepreciationAndAmortization` instead of building a
-real-estate-specific tag). State clearly which version was built and why.
-
-When `tangible_book` is negative, hide `pb_ratio` entirely for that ticker/period (a negative
-tangible book value makes P/B on a tangible basis undefined, not just distorted) —
-data-triggered visibility, the same class of mechanism as `PROFILE_HIDDEN` but triggered by a
-computed value rather than a sector assignment. Note: `p_tbv` (price/tangible book value)
-already exists in this codebase — check its current formula and confirm this new
-`tangible_book` field is consistent with (or replaces) whatever `p_tbv` already computes,
-rather than building a second, parallel, possibly-inconsistent version of the same idea.
-
-### Step 1.4 — Non-regression for Part 1
-
-Full-universe before/after. Report every newly-flagged/masked `(ticker, end)` pair for the
-buyback-distortion signal and for the negative-`tangible_book` `pb_ratio` hide, separately.
-Confirm no other value changes.
+**Standing requirement as always: nothing may regress. Non-regression after each part.**
 
 ---
 
-## PART 2 — `avg_pe_5y` should be a harmonic mean, not an arithmetic mean
+## PART 1 — Extend the share-count resolution to catch large *negative* deltas (KLAC/CRWD/DVN)
 
 ### Context
 
-The 5-year average reference line shown on valuation charts (`show_mean=True` in
-`plot_metric`, currently `filtered["value"].mean()`) arithmetically averages the ratio itself.
-For P/E specifically, this overweights periods where earnings approached zero (a near-zero
-denominator inflates P/E toward infinity, and an arithmetic mean of the ratio is dominated by
-those spikes). The statistically correct construction is the mean of the **earnings yield**
-(1/P/E) across the window, inverted back to a P/E — the harmonic mean of the P/E series.
+The existing dual-class/stale-share resolution only switches to EDGAR when
+`edgar/yfinance > 1.10` (EDGAR larger). KLAC, CRWD, and DVN show the opposite: yfinance
+overstates by 9.9x, 4.0x, and 1.9x respectively (confirmed in the prior task's `shares_delta_pct`
+scan) — `market_cap` and everything derived from it is very likely wrong for these three right
+now.
 
-### Step 2.1 — Confirm scope
+### Step 1.1 — Scope-check before fixing
 
-Find every place this project computes and displays an average-of-a-ratio reference line
-(`show_mean=True` calls in `figures.py`, and any other place an average valuation multiple is
-computed, e.g. a snapshot-level "5-year average P/E" field if one exists separately). Report
-the full list — this may be broader than just the `pe_ratio` chart.
+Using the already-built `shares_delta_pct` field, check the full distribution of *negative*
+deltas (yfinance larger than EDGAR) across all 498 active tickers, not just the three named.
+Report the full list of tickers beyond some reasonable cutoff — don't assume KLAC/CRWD/DVN are
+the only ones.
 
-### Step 2.2 — Decide which multiples need the harmonic-mean fix
+### Step 1.2 — Design and implement the symmetric extension
 
-The user's report specifically names P/E; the same distortion is plausible for any multiple
-whose denominator can approach zero (`pfcf_ratio` when FCF is thin, `ev_ebitda` when EBITDA
-is thin). Check whether the same skew shows up materially for these too using real cached
-data (compare the arithmetic vs. harmonic mean for a sample of tickers per multiple, look at
-how much they diverge) before deciding scope — don't assume it generalizes, and don't assume
-it's P/E-only either. Report the evidence either way.
+Extend the resolution rule to also prefer EDGAR when `yfinance/edgar` exceeds a threshold in
+the same spirit as the existing `1.10`, calibrated from where the real negative-delta
+distribution actually separates "real dual-class disagreement" from "normal small drift" —
+don't just reuse `1.10` inverted without checking it fits this direction too.
 
-### Step 2.3 — Implement
+### Step 1.3 — Verify and non-regress
 
-For each multiple in scope: compute the harmonic mean (`n / sum(1/x)`, excluding non-positive
-values from the sum the same way the existing guards already exclude them elsewhere) instead
-of the arithmetic mean, as the reference line value. **Also compute and emit the median**
-alongside the harmonic mean (e.g. `avg_pe_5y_median` or the equivalent naming per multiple),
-and flag when the mean and median diverge meaningfully (calibrate what counts as meaningful
-from real data, don't guess a percentage).
-
-### Step 2.4 — Verify against real cases
-
-Confirm the fix changes the reference line sensibly for at least one ticker with a
-known thin-earnings period in its 5-year window (check the actual before/after reference
-value) and confirm a "normal", stable-earnings ticker's reference line barely moves (harmonic
-and arithmetic mean should be close when the series doesn't have extreme low points).
-
-### Step 2.5 — Non-regression for Part 2
-
-Confirm every other chart/metric is unaffected — this only touches the reference-line
-calculation for the multiples in scope. Report before/after reference values for every active
-ticker for the affected multiple(s).
+Confirm KLAC/CRWD/DVN's `market_cap`-derived metrics are now sane (compare before/after
+`pe_ratio`/`pb_ratio`/`ev_ebitda` against each company's real known scale). Full-universe
+non-regression: only tickers flagged in 1.1 should change.
 
 ---
 
-## PART 3 — Share-count consistency: explicit source tracking
+## PART 2 — `debt_inferred_zero`: infer zero debt only where the evidence actually supports it
 
 ### Context
 
-The recent dual-class share-count fix (Part 2 of the META task) resolved *which* share count
-`build_snapshot()`/`build_valuation_history()` use for `market_cap` versus `EPS_TTM_CALC`, but
-did so silently — there's no visibility into which source won for a given ticker, or how far
-apart the two sources actually sit even in already-resolved cases. This is the same failure
-mode, applied more broadly: pick one count per snapshot for both `market_cap` and EPS, or make
-the discrepancy visible if not.
+A ticker with `Liabilities`/`StockholdersEquity` present but no `LongTermDebt` tag at all
+currently blocks the entire EV family. Some of these are genuinely debt-free (this project has
+already independently confirmed real zero-debt cases: GRMN, LULU, DECK — each verified through
+tag-level investigation, not assumed). The request is to generalize this into an automatic
+"debt = 0, flagged" inference — but this must not be done blindly, since "no debt tag" can also
+just mean "untagged," not "actually zero."
 
-### Step 3.1 — Add a `shares_source` column
+### Step 2.1 — Investigate before generalizing
 
-For every ticker in the snapshot, record which source actually supplied the share count used
-for `market_cap` (`edgar` or `yfinance`, matching whatever the Part 2 fix's resolution logic
-actually decides) — a simple, auditable label, not a new resolution mechanism (that already
-exists from the META task).
+For every currently-active ticker with 0% `LongTermDebt` coverage, check for corroborating
+evidence of genuine zero debt — e.g. a `Liabilities` breakdown that doesn't leave room for debt,
+or a debt-adjacent flow tag (`RepaymentsOfDebt`, `ProceedsFromIssuanceOfDebt`) that's also
+completely absent (consistent with never having debt, versus present-but-the-balance-tag-missing,
+which would suggest a real balance exists but isn't tagged). Report, per ticker, which case
+applies.
 
-### Step 3.2 — Add a `shares_delta_pct` guard/field
+### Step 2.2 — Implement only where safe
 
-Compute the percentage difference between the EDGAR share count (used for `EPS_TTM_CALC`) and
-the yfinance share count (used for `market_cap` when they differ), for every ticker, not just
-the ones already flagged as dual-class. Report the full distribution — this may surface
-tickers with a real, meaningful discrepancy that weren't caught by the dual-class-specific
-check, the same "scope-check broader than the named examples" discipline used throughout this
-project.
+If a reasonably reliable evidentiary pattern emerges (e.g. "no debt tag AND no debt-flow tags
+at all" reliably means real zero, verified against the already-confirmed GRMN/LULU/DECK cases
+as a sanity check), implement `debt_inferred_zero` as a flagged, zero-valued `LongTermDebt`
+for tickers matching that pattern. If the evidence is mixed or unreliable for a meaningful
+share of candidates, **do not implement a blanket rule** — report the findings and, if useful,
+suggest which specific tickers could get a `TICKER_CONCEPT_OVERRIDES`-style individual
+treatment instead (the same targeted-over-generic principle used for `_KNOWN_BAD_FACTS`
+throughout this project).
 
-Decide whether this should also drive a visibility decision (e.g. hide/flag `pe_ratio` or
-`market_cap`-derived metrics when the delta exceeds some threshold) or remain purely
-informational for now — report the evidence and recommend, consistent with how every other
-structural finding in this project has been handled (report and let the project owner decide
-if it's a bigger call).
+### Step 2.3 — Non-regression
 
-### Step 3.3 — Non-regression for Part 3
-
-Purely additive (new columns) — confirm no existing value changes.
+If implemented: confirm only tickers matching the verified pattern change, and confirm the
+already-known-debt-free tickers (GRMN, LULU, DECK) are handled consistently with how they're
+already documented.
 
 ---
 
-## PART 4 — `ev_fcf`: a leverage-aware FCF multiple alongside `pfcf_ratio`
+## PART 3 — Dual-class share count: sum across classes instead of picking one
 
 ### Context
 
-`pfcf_ratio` (price ÷ FCF) ignores capital structure — for a ticker whose net debt changes
-sign or whose ND/EBITDA crosses a meaningful threshold, price-to-FCF alone can be misleading
-in the same way P/E alone is misleading without also looking at EV/EBITDA. `ev_fcf` (Enterprise
-Value ÷ FCF) is the capital-structure-aware counterpart, and it's cheap to add — `ev` and `fcf`
-already exist as intermediate values in this codebase.
+The current `SharesOutstanding` resolution picks one tag/class rather than summing all
+outstanding share classes (`CommonStockSharesOutstanding` reported per-class for companies
+like META, GOOGL, BRK, FOX). This is a different failure mode from Parts 1/2 — not a wrong
+source, but an incomplete one.
+
+### Step 3.1 — Investigate the real tag structure
+
+For META, GOOGL, BRK, FOX/FOXA, and RDDT specifically, pull the raw share-count tags and
+determine whether each class is tagged separately (e.g. `CommonClassACommonStockSharesOutstanding`,
+`CommonClassBCommonStockSharesOutstanding`) in a way that can be reliably summed, or whether the
+tagging is inconsistent enough (missing classes in some periods, dimensional facts that don't
+resolve cleanly) that summing would itself introduce error. Report per ticker.
+
+### Step 3.2 — Implement where the tags support it cleanly
+
+Where summing is reliable, implement it (a `PROFILE_CONCEPT_OVERRIDES`/base-concept change
+depending on how broad the pattern turns out to be — decide from Step 3.1's evidence, not
+before it). Where it isn't reliable for a given ticker, leave that ticker on the existing
+single-source resolution and say so explicitly.
+
+### Step 3.3 — The QoQ share-count guard (>15% without a corroborating event)
+
+Add a check: flag (don't necessarily mask, this is informational the same way
+`buyback_distortion_flag` is) any ticker/period where `SharesOutstanding` changes >15%
+quarter-over-quarter with no corroborating buyback (`PaymentsForRepurchaseOfCommonStock`) or
+issuance (`ProceedsFromIssuanceOfCommonStock`) event of comparable magnitude in the same
+period. Calibrate the 15% threshold against real data the same way every other guard in this
+project has been calibrated — check whether RDDT, META, GOOGL, BRK actually clear this bar,
+rather than assuming they do because the report claimed it.
+
+### Step 3.4 — Non-regression
+
+Full-universe check for both 3.2 and 3.3's changes.
+
+---
+
+## PART 4 — `history_too_short` flag
+
+### Context
+
+The rolling 5-year average fields (`avg_pe_5y` and its six siblings, from the recent harmonic-
+mean task) compute a formally valid number even when a ticker has very few actual quarters of
+history (e.g. RDDT, recently IPO'd) — the number exists but isn't meaningful.
 
 ### Step 4.1 — Implement
 
-Add `ev_fcf = ev / fcf` (or `wide["ev"] / wide["fcf"]`, matching however `ev_ebitda`/`ev_sales`
-are already built) to `build_valuation_history()`. Apply the same denominator scale guard
-already wired in for the other EV-based multiples in the recent valuation-guard fix — use
-`fcf`'s own scale-sanity check the same way `ev_ebitda` guards against thin `EBITDA_TTM`.
+Flag any `avg_X_5y`/`_median` field where the underlying window had fewer than ~12 valid
+(non-masked) quarters — calibrate the exact cutoff if the evidence suggests 12 isn't quite
+right, but it's a reasonable starting hypothesis. Verify RDDT is correctly flagged.
 
-### Step 4.2 — Hiding consistency
+### Step 4.2 — Non-regression
 
-Some profiles already hide `pfcf_ratio` because FCF is structurally negative for that sector
-(e.g. `utilities`, per the earlier profile work). Decide whether `ev_fcf` should be hidden
-alongside `pfcf_ratio` in those same profiles for the same reason, or whether it behaves
-differently enough (EV changes with net debt, FCF's sign issue is independent of that) to
-warrant separate treatment. Check a couple of the affected profiles' real data before
-deciding — don't assume the hide list should just be copied over mechanically.
-
-### Step 4.3 — Add to plotting
-
-Wire `ev_fcf` into `plot_valuation()`'s `concepts_to_plot`, next to `pfcf_ratio`, following the
-existing tuple format.
-
-### Step 4.4 — Verify against a real leverage-change case
-
-Confirm `ev_fcf` and `pfcf_ratio` genuinely diverge (tell a different story) for a ticker whose
-net debt has changed meaningfully over its cached history — report both series side by side
-for at least one such ticker as proof the new metric adds real information, not a redundant
-copy of `pfcf_ratio` scaled by a near-constant factor.
-
-### Step 4.5 — Non-regression for Part 4
-
-Confirm `pfcf_ratio` and every other existing multiple are completely unchanged; `ev_fcf` is a
-pure addition.
+Purely additive (new flag field per existing `avg_X_5y` field) — confirm no existing value
+changes.
 
 ---
 
+## PART 5 — `FCF_TTM > EBITDA_TTM` flag
+
+### Context
+
+When trailing FCF exceeds EBITDA, that's a signal worth surfacing — it usually means non-cash
+add-backs (stock-based compensation being the most common) or working-capital swings are
+inflating cash generation beyond what the operating result alone would suggest.
+
+### Step 5.1 — Investigate before asserting a cause
+
+Check NOW specifically (named in the report) and a handful of other tickers where this
+condition holds. **Don't assume the cause is stock-based compensation without checking** —
+verify whether SBC add-backs, working-capital changes, or something else is actually driving
+the gap in each case, since a flag that always says "SBC-driven" would be wrong whenever the
+real driver is something else (e.g. a large deferred-revenue build in a subscription business).
+
+### Step 5.2 — Implement as a flag, named accurately
+
+Based on 5.1's findings, implement the flag with a name/description that matches what's
+actually verified, not a presumed cause — e.g. a neutral `fcf_exceeds_ebitda` flag, with the
+SBC hypothesis only asserted where it's actually confirmed to be the driver for that ticker
+(if that's feasible to check cheaply; if not, keep the flag purely descriptive).
+
+### Step 5.3 — Non-regression
+
+Purely additive.
+
+---
+
+## PART 6 — `sbc_ttm`, `owner_fcf`, `pfcf_ex_sbc`
+
+### Step 6.1 — Check tag availability before building anything
+
+Search for a usable `ShareBasedCompensation`-style cash-flow-statement tag across a sample of
+tickers spanning several profiles (not just software names) — confirm how broadly and
+reliably it's tagged before committing to build derived metrics on top of it.
+
+### Step 6.2 — Implement if the evidence supports it
+
+If broadly available: add `sbc_ttm` as a TTM concept, `owner_fcf = FCF_TTM - sbc_ttm`, and
+`pfcf_ex_sbc = market_cap / owner_fcf` (guarded the same way `pfcf_ratio` already is). If
+coverage is patchy, report exactly how patchy and let that inform whether it's worth shipping
+as-is (with real gaps) or holding for a future task.
+
+### Step 6.3 — Verify and non-regress
+
+Verify against a real software ticker (NOW, CRM, or similar) that `pfcf_ex_sbc` tells a
+meaningfully different story than `pfcf_ratio` — report both side by side.
+
+---
+
+## PART 7 — `historical_band_elevated`: percentile context relative to peers
+
+### Context
+
+This is the most architecturally novel item — nothing in this project currently computes a
+cross-sectional peer comparison (every existing guard/flag is about a single ticker's own
+history). This needs a design step before implementation.
+
+### Step 7.1 — Design
+
+Propose how "peer" is defined (the existing `PROFILE_HIDDEN`/`TICKER_PROFILES` assignment is
+the natural candidate — a ticker's peers are its profile-mates) and how the sector median is
+computed (same-period cross-sectional median across the profile, or each peer's own 5-year
+average, aggregated). State the reasoning, since this is a real design choice, not a detail.
+
+### Step 7.2 — Implement, or report why not
+
+If a clean, low-risk implementation path exists within this task's scope, build it as a flag:
+when a ticker's own 5-year minimum for a multiple is still above the profile's cross-sectional
+median for that multiple, flag that "near its own historical low" isn't a value signal for
+this ticker right now. If this turns out to need more architecture than fits cleanly here
+(e.g. because cross-sectional data isn't readily available in the right shape), report that
+clearly rather than forcing a partial version.
+
+### Step 7.3 — Non-regression
+
+If implemented: purely additive, confirm no existing value changes.
+
+---
+
+## PART 8 — Goodwill-delta flag (`inorganic_contaminated`)
+
+### Step 8.1 — Implement
+
+Mirror the `buyback_distortion_flag` mechanism: flag periods where `Goodwill` grows >20%
+quarter-over-quarter (calibrate if the evidence suggests otherwise), marking growth-rate
+metrics computed across that period as potentially inorganic-contaminated (M&A-driven rather
+than organic). Verify NOW and CRM (named in the report) both get flagged where expected.
+
+### Step 8.2 — Non-regression
+
+Purely additive, same discipline as Part 1 of the buyback-flag task.
+
+---
+
+## PART 9 — Effective tax rate + NOL flag
+
+### Step 9.1 — Implement
+
+`effective_tax_rate = IncomeTaxExpenseBenefit_TTM / IncomeLossBeforeIncomeTaxes_TTM` (confirm
+both tags' actual availability before assuming — check coverage across a sample of profiles).
+Flag when the rate is below ~10% (calibrate if evidence suggests a different cutoff), as a
+signal of NOL-driven or otherwise abnormally low tax expense, common for recently-profitable
+young companies.
+
+### Step 9.2 — Verify and non-regress
+
+Verify against at least one recently-profitable young company (a `marketplace` or `standard`
+tech name, if a good real example exists in the cache). Purely additive.
+
+---
+
+## Final combined non-regression
+
+After all nine parts (or however many end up implemented — some may be correctly left as
+"investigated, not safely implementable"), run one full-universe before/after diff across
+`metrics_long`, `valuation_history`, and `snapshot`. Confirm every change/addition traces to a
+specific part, and nothing implemented in an earlier part was disturbed by a later one.
+
 ## Output
 
-One file, `valuation_quality_improvements_report.md`, in four parts, each with its
-investigation, implementation, verification against a real case, and non-regression results.
+One file, `nine_improvements_report.md`, one section per part, each stating clearly:
+investigated, implemented (with verification), or **confirmed not safely implementable with
+this project's real data (with the specific evidence for why)**. Treat the third outcome as a
+complete, successful answer for that part — do not force any of the nine to a lower-quality
+implementation just to have shipped something.
 
-No scratch scripts left behind. Do not implement any project-wide visibility-threshold
-decision that Part 3 identifies as needing a bigger call — report and recommend, per this
-project's standing practice for structural questions.
+No scratch scripts left behind.
