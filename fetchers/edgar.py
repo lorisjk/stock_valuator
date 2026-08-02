@@ -5,13 +5,7 @@ from datetime import date, datetime
 
 
 def fetch_or_cache(url: str, cache_path: str, headers: dict, max_age_days: int | None = None) -> dict:
-    """Return the cached payload if present, otherwise fetch and cache it.
 
-    `max_age_days` is opt-in and defaults to None, which preserves the original
-    cache-forever behaviour for every existing caller. It is used only for the small
-    submissions index, whose freshness is what makes the companyfacts staleness check
-    meaningful -- see get_company_info().
-    """
     if os.path.exists(cache_path):
         fresh_enough = True
         if max_age_days is not None:
@@ -45,33 +39,7 @@ def get_cik(ticker: str, cik_mapping: dict) -> str:
     return cik_mapping[ticker]
 
 
-# --- staleness-aware refetch -------------------------------------------------------------
-#
-# fetch_or_cache() had no expiry, so once {ticker}_company_info.json existed it was returned
-# forever; 152 of 498 active tickers were holding a cache that predated an already-published
-# quarter. A naive "refetch if the file is older than N days" cannot fix that: 311 tickers
-# sit at exactly the same data age, split roughly evenly between genuinely stale and
-# legitimately mid-cycle, so age alone does not separate them (measured in the prior task).
-#
-# Instead the decision is made from what the company has actually PUBLISHED. Three artifacts,
-# each with a different expiry policy, chosen from their relative cost -- the submissions
-# index is 0.18 MB at the median against 4.18 MB for companyfacts, i.e. ~4% of the payload:
-#
-#   {ticker}_submissions.json   cheap index      expires daily; this is the staleness probe
-#   {ticker}_company_info.json  expensive facts  never expires on age; refetched only when
-#                                                the probe shows the cache is behind
-#   {ticker}_cache_meta.json    tiny sidecar     newest cached period + last refetch attempt
-#
-# The sidecar exists so the probe can run WITHOUT loading the 4 MB payload: if the cached
-# newest period already matches what has been published, the big file is read once and
-# returned, and nothing is fetched at all.
-#
-# The daily retry limit is the third requirement. When SEC has ingested a filing into the
-# submissions index but not yet into companyfacts (the META case -- a genuine aggregation lag
-# of up to 8 days, not fixable from this side), the probe keeps reporting "behind" while a
-# refetch would keep pulling the same stale multi-MB payload. Capping refetch ATTEMPTS at one
-# per ticker per calendar day bounds that to one wasted request per day instead of one per
-# run, while leaving the cheap probe free to run as often as it likes.
+
 SUBMISSIONS_MAX_AGE_DAYS = 1
 
 
@@ -98,13 +66,7 @@ def _write_cache_meta(ticker: str, meta: dict) -> None:
 
 
 def newest_reported_period(company_info: dict) -> str | None:
-    """Newest period end present in the payload, counted over 10-Q/10-K facts only.
 
-    Restricted to periodic-report forms deliberately: it makes this directly comparable to
-    get_latest_filed_period(), which reads the same two form types out of the submissions
-    index, and it ignores 8-K/S-1 and forward-dated disclosure ends that would otherwise
-    make a stale cache look current.
-    """
     newest = ""
     for concept in company_info.get("facts", {}).get("us-gaap", {}).values():
         for items in concept.get("units", {}).values():
@@ -140,11 +102,7 @@ def _fetch_company_info(ticker: str, cik: str, user_agent: str) -> dict:
 
 
 def get_company_info(ticker: str, cik: str, user_agent: str, check_staleness: bool = True) -> dict:
-    """Cached companyfacts, refetched when the company has published a newer period.
 
-    Both call paths (main()'s ad-hoc usage and run_full_refresh()) go through this one
-    function, so there is a single implementation of the policy.
-    """
     cache_path = f"cache/{ticker}_company_info.json"
     today = date.today().isoformat()
 

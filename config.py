@@ -1,4 +1,4 @@
-TICKERS = ["RDDT"]
+TICKERS = ["NVDA"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 
@@ -121,11 +121,6 @@ CONCEPT_CANDIDATES = {
             "point_in_time": True,
             "mode": "fallback",
         },
-
-    # Cash-flow-statement stock-based compensation. Surveyed across all 498 active tickers
-    # before adding: 98.2% have at least one of these tags (87.8% the plain
-    # ShareBasedCompensation), and every profile is >=75% covered -- broad enough to build
-    # owner_fcf/pfcf_ex_sbc on top of.
     "ShareBasedCompensation": {
         "tags": [
             "ShareBasedCompensation",
@@ -135,11 +130,6 @@ CONCEPT_CANDIDATES = {
         "mode": "fallback",
     },
 
-    # Effective-tax-rate inputs. Surveyed first: IncomeTaxExpenseBenefit is present for 99.4%
-    # of active tickers and some pretax-income tag for 99.0%, so the ratio is broadly
-    # computable. The pretax candidates are ordered widest-scope first -- the
-    # "...MinorityInterestAndIncomeLossFromEquityMethodInvestments" variant is the one most
-    # filers use post-2009, with the older/narrower variants as fallbacks.
     "IncomeTaxExpense": {
         "tags": ["IncomeTaxExpenseBenefit"],
         "point_in_time": False,
@@ -155,10 +145,6 @@ CONCEPT_CANDIDATES = {
         "mode": "fallback",
     },
 
-    # Corroborating equity flows for the share-count QoQ guard (Part 3.3): a large QoQ change
-    # in SharesOutstanding is only suspicious if neither a buyback nor an issuance of
-    # comparable size explains it. Coverage measured first: 96.2% and 54.6% respectively --
-    # the issuance gap is real and is handled explicitly by the guard (see main.py).
     "StockRepurchased": {
         "tags": ["PaymentsForRepurchaseOfCommonStock"],
         "point_in_time": False,
@@ -512,7 +498,7 @@ TICKER_PROFILES = {
     "XOM": "energy_integrated",
     "CVX": "energy_integrated",
     "EOG": "energy", "COP": "energy_integrated", "OXY": "energy_integrated", "DVN": "energy_integrated",
-    "FANG": "energy", ""
+    "FANG": "energy", 
     #"APA": "energy", HAS NO REVENUE
     "EQT": "energy", "EXE": "energy",
     "WMB": "energy", "OKE": "energy", "KMI": "energy", "TRGP": "energy",
@@ -1668,7 +1654,6 @@ TICKER_CONCEPT_OVERRIDES = {
             "mode": "priority_merge",
         }
     },
-    # --- full flag sweep task ---
     "PRU": {
         "RealizedInvestmentGains": {
             "sources": [

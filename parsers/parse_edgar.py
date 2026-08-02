@@ -369,20 +369,6 @@ _KNOWN_BAD_FACTS = {
     ("AMT", "Revenues"): [
         {"end": "2022-12-31", "filed": "2025-02-25", "val": 9645400000},
     ],
-
-    # --- valuation guard + ticker data-bug task ---
-    # Each entry below was diagnosed individually against the raw cached EDGAR facts;
-    # the three groups have three genuinely different root causes despite all surfacing
-    # as "implausible valuation multiple". See valuation_guard_and_ticker_fixes_report.md.
-
-    # WAT: a single 2026-05-12 10-Q reports the weighted-average share count 1000x too
-    # large (59,711,000,000 where the same period filed elsewhere reads 59,711,000).
-    # Listed for BOTH share tags: the SharesOutstanding config is mode="fallback" with
-    # Diluted first and Basic second, so dropping only Diluted would let the equally-bad
-    # Basic value take over for the same period. These two facts are also what poisons
-    # normalize_split_adjusted()'s values.iloc[-1] anchor and rescales WAT's ENTIRE
-    # 2007-2026 share history by ~50x -- so this drop-list fixes the whole series, not
-    # just the two quarters.
     ("WAT", "WeightedAverageNumberOfDilutedSharesOutstanding"): [
         {"end": "2025-03-29", "filed": "2026-05-12", "val": 59711000000},
         {"end": "2026-04-04", "filed": "2026-05-12", "val": 82139000000},
@@ -391,11 +377,6 @@ _KNOWN_BAD_FACTS = {
         {"end": "2025-03-29", "filed": "2026-05-12", "val": 59439000000},
         {"end": "2026-04-04", "filed": "2026-05-12", "val": 82139000000},
     ],
-
-    # NTRS: the 2011-02-25 10-K reports weighted-average shares ~1e6x too large
-    # (224,053,430,000,000 where the real count is ~224,053,430). Same both-tags
-    # reasoning as WAT. Only the 2008-12-31 fact currently survives extraction, but all
-    # three years are listed since they are equally wrong and equally could win later.
     ("NTRS", "WeightedAverageNumberOfDilutedSharesOutstanding"): [
         {"end": "2008-12-31", "filed": "2011-02-25", "val": 224053430000000},
         {"end": "2009-12-31", "filed": "2011-02-25", "val": 236416029000000},
@@ -406,18 +387,6 @@ _KNOWN_BAD_FACTS = {
         {"end": "2009-12-31", "filed": "2011-02-25", "val": 235511879000000},
         {"end": "2010-12-31", "filed": "2011-02-25", "val": 242028776000000},
     ],
-
-    # ANET, SCHW, ED: their DEF 14A proxy statements restate full-year NetIncomeLoss in
-    # $-millions (ANET) or $-thousands (SCHW, ED) while the 10-K reports full dollars.
-    # extract_period_values() keeps the LATEST-filed fact per (end, days) key, and the
-    # proxy is filed after the 10-K, so the scaled value wins. Decumulation then computes
-    # Q4 = annual - (Q1+Q2+Q3), producing a large NEGATIVE Q4 that cancels the year's real
-    # earnings and drives NetIncomeLoss_TTM (and so EPS_TTM_CALC, pe_ratio, payout_ratio,
-    # CoreOperatingEarnings, FFO) to ~0 for four quarters after every fiscal year end.
-    # Checked universe-wide before choosing this fix: 141 active tickers have DEF 14A
-    # facts overlapping a 10-K period and only these 3 are units-mismatched (15 facts
-    # total), so a blanket "ignore DEF 14A" rule would alter 141 tickers to repair 3 --
-    # the targeted, zero-inference drop-list is the correct scope.
     ("ANET", "NetIncomeLoss"): [
         {"end": "2021-12-31", "filed": "2026-04-16", "val": 841},
         {"end": "2022-12-31", "filed": "2026-04-16", "val": 1352},
@@ -440,17 +409,6 @@ _KNOWN_BAD_FACTS = {
         {"end": "2025-12-31", "filed": "2026-04-08", "val": 2023000},
     ],
 
-    # ICE, SW, AMCR: StockholdersEquity reported in literal dollars in specific filings
-    # ($10, $107-$14,462, $96-$130) against $13-22B market caps. In all three the
-    # fallback tag StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest
-    # carries the correct full-unit value for the same periods, so dropping the bad facts
-    # lets the existing mode="fallback" chain recover the right number by itself -- no
-    # new tag configuration needed. Deliberately NOT solved by adding StockholdersEquity
-    # to _SCALE_CORRECTED_CONCEPTS: that mechanism infers a scale factor from
-    # neighbouring magnitudes, and for a dollar-magnitude balance item a real large jump
-    # (a merger -- AMCR/Berry 2025, SW/WestRock 2024, both present in this very data) is
-    # indistinguishable from an artifact, which is why the prior generalization attempt
-    # of that mechanism failed. Targeted drop-list only.
     ("ICE", "StockholdersEquity"): [
         {"end": "2013-06-30", "filed": "2013-08-07", "val": 10},
         {"end": "2013-09-30", "filed": "2013-11-05", "val": 10},

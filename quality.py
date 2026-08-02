@@ -35,11 +35,7 @@ def print_data_quality(
     threshold: float = 0.5,
     collect_flags: list = None,
 ) -> None:
-    """Normal (ad-hoc) use: leave collect_flags as None -- flags print to the
-    terminal exactly as before. Full-refresh mode: pass a list, and each flag is
-    appended to it (as a dict, one per below-threshold concept) instead of being
-    printed, so hundreds of tickers' worth of flags don't spam the terminal --
-    the caller collects them into a report instead."""
+ 
     problems = check_data_quality(df, expected_concepts, threshold)
 
     if collect_flags is not None:

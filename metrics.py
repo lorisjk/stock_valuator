@@ -250,10 +250,7 @@ def calculate_rolling_harmonic_stats(
     df[f"{result_prefix}_median"] = positive.groupby(df["ticker"]).transform(
         lambda s: s.rolling(window=window, min_periods=1).median()
     )
-    # How many valid (positive, non-masked) observations the mean/median at this row was
-    # actually built from. min_periods=1 means both are computed from as little as a single
-    # quarter, so this count is what tells a consumer whether the number means anything --
-    # see main.py's history_too_short flag.
+
     df[f"{result_prefix}_n"] = positive.groupby(df["ticker"]).transform(
         lambda s: s.rolling(window=window, min_periods=1).count()
     )
