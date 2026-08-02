@@ -1803,18 +1803,14 @@ _DERIVED_CONCEPT_CONSUMERS = {
     "CoreOperatingEarnings": ["p_core_earnings"],
     "FFO_TTM": ["p_ffo", "ffo_margin"],
     "FCF_TTM": ["pfcf_ratio", "fcf_margin", "ev_fcf", "pfcf_ex_sbc"],
-    # SBC-derived: hidden exactly when its only consumers are hidden, same rule as every
-    # other derived input. owner_fcf/sbc_ttm exist only to feed pfcf_ex_sbc.
     "ShareBasedCompensation": ["pfcf_ex_sbc"],
     "ShareBasedCompensation_TTM": ["pfcf_ex_sbc"],
     "owner_fcf": ["pfcf_ex_sbc"],
-    # tax-rate inputs: only consumer is effective_tax_rate / its flag
     "IncomeTaxExpense": ["effective_tax_rate"],
     "IncomeTaxExpense_TTM": ["effective_tax_rate"],
     "PretaxIncome": ["effective_tax_rate"],
     "PretaxIncome_TTM": ["effective_tax_rate"],
     "low_tax_rate_flag": ["effective_tax_rate"],
-    # equity-flow corroboration inputs: only consumer is the share-count jump guard
     "StockRepurchased": ["share_count_jump_flag"],
     "StockRepurchased_TTM": ["share_count_jump_flag"],
     "StockIssued": ["share_count_jump_flag"],
@@ -1822,8 +1818,6 @@ _DERIVED_CONCEPT_CONSUMERS = {
     "EBITDA_TTM": ["ev_ebitda", "net_debt_to_ebitda"],
     "eps_ttm": ["pe_ratio"],
     "pe_ttm": ["pe_ratio"],
-    # avg_X_5y / _median / _diverges names must stay in sync with main.py's AVG_5Y_FIELD_NAMES --
-    # otherwise a hidden multiple's rolling reference fields leak visible for that profile.
     "avg_pe_5y": ["pe_ratio"],
     "avg_pe_5y_median": ["pe_ratio"],
     "avg_pe_5y_diverges": ["pe_ratio"],
@@ -1867,9 +1861,6 @@ _DERIVED_CONCEPT_CONSUMERS = {
     "ebitda_ttm": ["ev_ebitda", "net_debt_to_ebitda"],
     "net_debt": ["net_debt_to_ebitda"],
     "ev": ["ev_ebitda", "ev_sales"],
-    # quarterly (non-TTM) counterparts of the derived concepts above -- hidden under
-    # exactly the same condition as their TTM sibling, so a profile that hides e.g.
-    # PPNR-derived output also hides the new PPNR_QUARTERLY reporting-view concept.
     "EPS_QUARTERLY_CALC": ["pe_ratio", "payout_ratio"],
     "PPNR_QUARTERLY": ["p_ppnr"],
     "CoreOperatingEarnings_QUARTERLY": ["p_core_earnings"],
@@ -2024,7 +2015,7 @@ VALUATIONS_TO_PLOT = [
     ("p_ppnr", "P/PPNR", None, False),
     ("p_core_earnings", "P/Core Earnings", None, False),
     ("p_ffo", "P/FFO (TTM)", None, False),
-    ("peg_ratio", "PEG Ratio Revenue", None, False),
+    ("pe_to_revenue_growth", "PE to Revenue Growth", None, False),
 ]
 
 

@@ -6,6 +6,406 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-08-02 — Nine external-review improvements: seven built, one refused on evidence, one premise disproven — plus a share-count audit bug the work exposed
+
+A nine-item batch from an external review. Seven implemented, one deliberately not
+implemented, one found unnecessary because its premise did not survive the raw
+data. Every item was checked against real cached facts before any code was written.
+
+**Symmetric share-count resolution (implemented).** The existing rule only switched
+to EDGAR when `edgar/yfinance > 1.10`; three tickers had the opposite failure, with
+yfinance overstating by near-integer factors: KLAC **9.91x** (131.75M vs 1,306.3M),
+CRWD **3.95x**, DVN **1.87x**. The negative-delta distribution has **no separation
+at 1.10** — ratios run 9.91, 3.95, 1.87 | 1.23, 1.12, 1.09, 1.06 ... continuously
+down to 1.0 — so `MIN_YF_SHARE_OVERSTATEMENT = 1.50` was placed in the only wide
+gap rather than reusing 1.10 inverted. A second condition was forced by the data:
+**BKR's newest `SharesOutstanding` fact is 2021-06-30 while its newest fact of any
+kind is 2026-06-30, a 1,826-day lag** — there yfinance is right and EDGAR is five
+years stale, so preferring EDGAR would have made `market_cap` worse.
+`MAX_EDGAR_SHARE_LAG_DAYS = 200` (measured against the ticker's own newest fact,
+not today's date, so a wholly SEC-lagged payload isn't punished twice). Result:
+KLAC's market cap corrected from a nonsensical **$238.8B to $24.1B**, `pb_ratio`
+40.96 -> 4.13, `ev_ebitda` 340.00 -> 39.45; CRWD $194.3B -> $49.2B; DVN $52.1B ->
+$27.9B. TSLA (1.12x, not near an integer factor) and BKR correctly left on yfinance.
+
+**A pre-existing bug the switch exposed.** `build_snapshot()` called
+`_resolve_share_sources()` a second time against `snap` *after* overwriting
+`snap["shares_outstanding"]` with the resolved count — so for any ticker that
+actually switched, the audit columns compared EDGAR against EDGAR. This means the
+previous task's reported finding "0 tickers cross the 10% switch threshold" was an
+artifact: **35 tickers were already resolving to EDGAR** via the original
+dual-class rule (ABNB, AOS, APP, BF-B, C, COIN, DD, DDOG, DELL, EL, FOX, FOXA, GOOG,
+GOOGL, HOOD, HSY, LEN, LITE, META, NKE, NWS, NWSA, PLTR, RDDT, RL, SATS, TAP, TKO,
+TSN, TTD, UHS, UPS, WDAY, WDC, XYZ) with true deltas of 10.2-15.7% misreported as
+0.0%. Fixed by resolving once off the untouched `prices` and reusing the result.
+
+**`debt_inferred_zero`: not implemented, on evidence.** 15 of 498 tickers have no
+resolvable `LongTermDebt` balance tag. The proposed rule ("no debt tag AND no
+debt-flow tags ⇒ real zero") was to be validated against the already-confirmed
+GRMN/LULU/DECK cases — **all three fail it**: GRMN has `RepaymentsOfLongTermDebt`,
+LULU has `ShortTermBorrowings`/`OtherBorrowings`/`LineOfCreditFacilityAmountOutstanding`,
+and DECK has four such tags and isn't even a candidate (it resolves a balance). A
+looser rule that admitted them would sweep in **GM ($219B total liabilities, six
+`LongTermDebtMaturitiesRepaymentsOfPrincipal` tags)** and TXT — a catastrophic
+false "zero debt". Only 3 of 15 (VEEV, ISRG, MPWR) have clean evidence; recommended
+as targeted `TICKER_CONCEPT_OVERRIDES`, not shipped as a blanket rule.
+
+**Dual-class share summing: unnecessary, premise disproven.** The review assumed
+per-class tags (`CommonClassACommonStockSharesOutstanding`) needing summation.
+**No class-specific share tag exists in any cached payload** — the SEC
+`companyfacts` endpoint returns only consolidated, non-dimensional facts; per-class
+values live in XBRL dimensions it does not expose. The resolved values are already
+all-class totals (GOOGL `CommonStockSharesOutstanding` = 12,230,000,000 ≈ A+B+C;
+META basic weighted-average = 2,534,000,000 ≈ A+B). BRK is not in the active
+universe at all. Separately noted, not fixed: **FOX/FOXA are two tickers on one CIK
+with identical payloads, and their only `dei:EntityCommonStockSharesOutstanding`
+fact is a garbage value of `1`** from a 2019 10-Q.
+
+**Six flags/metrics added**, each threshold calibrated against the real
+distribution rather than assumed:
+
+- `share_count_jump_flag` (>15% QoQ share change with no buyback/issuance of
+  comparable size). |QoQ change| runs median 0.48%, p90 3.3%, p95 6.6%, **p97
+  12.7%** — 15% sits just above p97, 763 of 30,706 periods flagged. Checked rather
+  than assumed whether the named tickers clear it: RDDT 6 (IPO window), META 3
+  (2012-13 IPO era), FOX/FOXA 1 each, **GOOGL 0** — the review's implication that
+  GOOGL would was wrong. Coverage caveat handled explicitly:
+  `PaymentsForRepurchaseOfCommonStock` covers 96.2% of tickers but
+  `ProceedsFromIssuanceOfCommonStock` only **54.6%**, so a missing issuance tag is
+  treated as "no corroboration available" rather than "no issuance happened".
+- `avg_X_5y_history_too_short` (<12 valid observations in the rolling window).
+  `calculate_rolling_harmonic_stats` now also emits `_n`, necessary because
+  `min_periods=1` lets a "5-year average" come from a single quarter. Cutoff 12
+  confirmed against real data: valid `pe_ratio` quarters run median 19, p10 13,
+  p5 10 — 12 sits just below p10. 18 of 493 tickers flagged, every one genuinely
+  young or newly separated (RDDT 6 quarters, CRWD 4, GEV/SOLV/SW/VLTO spin-offs,
+  Q/PSKY/SNDK 1 each). Scope noted honestly: it catches short history, **not**
+  "long history with sparse recent data" (BA has 3 valid P/E quarters in 5 years
+  because loss quarters are masked, yet its window still fills from older rows).
+- `fcf_exceeds_ebitda` — named for the observation, not a cause, **because the
+  presumed cause was checked and disproven**. SBC covers anywhere from **54%**
+  (FTNT) to **674%** (CSCO) of the FCF−EBITDA gap: 104% NOW, 153% CRM, 118% ADSK,
+  326% FFIV, 443% ADBE, 68% EA. For FTNT/EA it is insufficient (working capital
+  does the rest); for CSCO/ADBE/FFIV it massively exceeds the gap, meaning the gap
+  is a small net residual of large offsetting effects. The population isn't even
+  purely software — CNC, MCK, CAH (negative-working-capital distributors) are among
+  the most frequent. A flag asserting "SBC-driven" would have been wrong.
+- `sbc_ttm` / `owner_fcf` / `pfcf_ex_sbc`. Tag coverage checked first: **98.2%** of
+  tickers have a usable SBC tag (87.8% plain `ShareBasedCompensation`); weakest
+  profiles `energy_integrated` 75%, `materials_integrated` 87.5%. Realised coverage
+  415 tickers vs 457 for `pfcf_ratio`. Tells a genuinely different story — DDOG
+  40.6 -> **155.0 (3.82x)**, NOW 22.4 -> 42.9 (1.91x), PANW 1.78x — while KO
+  (1.02x) confirms it collapses to `pfcf_ratio` where SBC is immaterial.
+- `<multiple>_band_elevated` — the project's **first cross-sectional (peer)
+  comparison**; every prior guard was about a single ticker's own history. Peer =
+  profile-mate, reusing `TICKER_PROFILES` rather than inventing a second notion of
+  comparability; profiles under `MIN_PEER_GROUP_SIZE = 5` are skipped entirely
+  (`alt_asset_manager` has 1, `homebuilder` 2, `airline` 3 — a "median" there is
+  noise). The peer median is over each peer's own latest value, not a strict
+  same-date cross-section, because fiscal calendars differ within every profile.
+- `inorganic_contaminated` (Goodwill >20% QoQ). Goodwill QoQ change is median
+  **exactly 0.000** (static between deals), p90 4.6%, p95 14.5%, p97 30.7% — 20%
+  sits between p95 and p97, 1,006 of 24,919 periods across 361 tickers. NOW (10
+  periods) and CRM (9) both flagged as expected.
+- `effective_tax_rate` + `low_tax_rate_flag`. Tags checked first:
+  `IncomeTaxExpenseBenefit` 99.4%, some pretax tag 99.0%. Requires a **positive**
+  pretax denominator (a loss quarter's tax benefit over negative pretax income
+  gives an arithmetically positive ratio meaning the opposite of a low burden).
+  Correctness check: observed median **22.5%** against a 21% US statutory rate.
+  60 tickers currently below 10%, the extreme end exactly the intended NOL
+  population — AXON −86%, UBER −76%, AES −71% (valuation-allowance releases).
+
+Non-regression, all 498 tickers: `metrics_long` **0 changed / 0 removed**
+(+128,227 added), `valuation_history` **0 changed / 0 removed** (+19,711
+`pfcf_ex_sbc`), `snapshot` 97 changed / 0 removed / +4,419. All 97 reconcile
+exactly: 38 `shares_source_is_edgar` + 35 `shares_delta_pct` (the audit bug fix
+above) + 8 concepts x KLAC/CRWD/DVN. The baseline for this diff had to be produced
+by **reconstructing the pre-task sources into a separate package** (an early
+background run had picked up half-finished edits); each reverted hunk was asserted
+to apply exactly once, and the reconstruction was validated by reproducing the
+prior task's known-good `metrics_long` row count of 535,874 exactly.
+
+---
+
+## 2026-08-01 — Valuation quality: buyback-distortion flag, tangible-book P/B hide, harmonic-mean 5y averages, share-count transparency, and ev_fcf
+
+Four independent improvements, each calibrated against real data first.
+
+**Buyback-distortion flag.** `pb_ratio`/`roe` distort when a profitable company
+shrinks its own equity base via buybacks, before the existing near-zero/negative
+guards have to mask anything. `MIN_BUYBACK_EQUITY_QOQ_DECLINE = 0.15` calibrated
+from the real distribution (profitable, both-quarters-positive periods: p97 13.3%,
+p99 28.3%) against the named names' own history (ORLY p90 33.4%, MCD 17.4%, HD
+27.7%, LOW 19.8%). **AZO correctly never qualifies** — its equity has been
+continuously negative since 2009, so it never has two positive quarters to compare.
+641 flagged `(ticker, end)` pairs across 221 tickers; ORLY 7 periods, MCD 4, HD 10,
+LOW 5.
+
+This one **deliberately flags rather than masks**, breaking the project's
+otherwise-universal convention, and the departure is the point: unlike the
+near-zero-equity cases the existing guards hide, a buyback-driven decline produces
+a mathematically valid and *informative* ratio for exactly the high-quality
+compounders where an investor most wants to see it. Precedent already in the
+codebase: `fundamentals_stale` is a value-triggered flag alongside its data, not a
+mask of it. Verified the flag does not suppress: ORLY's flagged 2017-06-30 still
+shows `pb_ratio = 15.3`.
+
+**`tangible_book` turned out to already exist.** Checked project-wide before
+building: **no intangibles-net-of-goodwill concept exists anywhere** in
+`CONCEPT_CANDIDATES` — every "Intangible" hit is an amortization *expense* tag, not
+a balance-sheet stock. So the documented fallback applies, and it is exactly the
+existing `TangibleEquity` (= `StockholdersEquity − Goodwill`) already feeding
+`p_tbv`. No second, parallel field was built. What *was* missing: `p_tbv` masks on
+non-positive tangible equity but the ordinary `pb_ratio` had no equivalent guard,
+so a negative tangible book silently produced an undefined P/B. Now masked in both
+`build_valuation_history()` and `build_snapshot()`. All five named tickers
+currently have negative tangible equity and lose their `pb_ratio` — **HD is the
+clearest argument for the fix: −$8.6B tangible equity was producing a
+plausible-looking `pb_ratio = 23.9`** that gave no hint anything was wrong.
+
+**Harmonic-mean 5-year averages.** `plot_metric`'s `show_mean` arithmetically
+averaged the ratio itself, which overweights near-zero-denominator spikes. Scope
+was measured, not assumed, across 10 candidate multiples: in scope are `pe_ratio`
+(median divergence 9.9%), `pfcf_ratio` (11.6%), `p_tbv` (9.9%), `p_ffo` (6.3%),
+`ev_ebitda` (4.0%), `p_ppnr`, `p_core_earnings`. Excluded with evidence:
+`ev_sales` (3.2% — revenue never approaches zero), `dividend_yield` (already a
+yield; its large figures are float noise from comparing two near-zero numbers for
+non-payers like NVDA), and `pe_to_revenue_growth` (a ratio-of-ratios with its own
+guards, where 1/x isn't a meaningful yield).
+
+`calculate_historical_pe()` was **replaced** by
+`calculate_rolling_multiple_averages()`, which sources each series from
+`build_valuation_history()`'s already-guarded output instead of recomputing raw
+ratios — the old function had its own ad-hoc `pe_ratio` recompute with **no
+positive-denominator guard at all**, which is why BKR's `avg_pe_5y` was **−215.6**,
+a negative "average P/E". `avg_pe_5y` generalized to seven fields via
+`AVG_5Y_FIELD_NAMES`, each with a `_median` sibling and a `_diverges` flag
+(`MIN_AVG_5Y_DIVERGENCE = 0.20`, ~p90 of the observed |harmonic−median|/median
+distribution). Verified on real cases: MCHP (thin earnings, P/E 15.9-152.4)
+arithmetic 41.6 vs harmonic **26.6**; KO (stable, 20.8-28.4) 23.86 vs 23.71, a
+0.6% difference confirming the two agree where there's nothing to correct.
+
+**Share-count source transparency.** `shares_source_is_edgar` and
+`shares_delta_pct` added, both built from a single shared `_resolve_share_sources()`
+so the audit columns cannot drift from the resolution itself. Emitted as 1.0/0.0
+rather than a string because the long format's single numeric `value` column would
+otherwise become `object` dtype on reload and break every downstream consumer —
+the same encoding `fundamentals_stale` already uses. (The reported distribution
+from this task was later found to be corrupted by a second-call bug; see the
+2026-08-02 entry.)
+
+**`ev_fcf`** added alongside `pfcf_ratio`, guarded on `FCF_TTM`'s own scale exactly
+as `ev_ebitda` is on `EBITDA_TTM`. Hiding was decided per profile from real FCF
+signs rather than copying `pfcf_ratio`'s hide list: `utilities` FCF is negative in
+**61.4%** of quarters (hidden), `financial`/`insurance_*` already hide every
+EV-based multiple (hidden), but **`reit` is a deliberate exception — REIT FCF is
+usually positive (median 0% negative quarters per ticker, 11 of 17 never
+negative)**, so the sign-based justification simply doesn't hold there. Adding
+`ev_fcf` as a third, unhidden consumer of `FCF_TTM` correctly flips `FCF_TTM` back
+to visible for `reit` (644 rows across 17 tickers that `filter_hidden_rows()`
+previously dropped) — a deliberate, verified side effect, with
+`is_hidden("JPM", "FCF_TTM")` unchanged at `True`.
+
+Non-regression, all 498 tickers: `metrics_long` 507,044 unchanged / 0 changed;
+`valuation_history` 204,262 unchanged / 0 changed, 4,756 `pb_ratio` rows removed
+(all the negative-tangible-book hide); `snapshot` 11,865 unchanged, 491 changed
+(all `avg_pe_5y`, the arithmetic->harmonic fix), 112 removed (111 `pb_ratio` + BKR's
+bogus negative average). **0 unexpected changes anywhere.** A bug in this task's
+own first implementation was caught by its verification and fixed before shipping:
+`calculate_buyback_distortion_flag()` combined a fresh boolean mask with a column
+from a `pd.merge()` result using `&`, and pandas' index-based alignment against the
+merge's fresh RangeIndex silently zeroed it (ORLY showed 0 flagged instead of 7).
+
+---
+
+## 2026-08-01 — Full-universe validation of the staleness-aware refetch: 148 tickers behind, 81 fixed, 64 confirmed SEC-lagging
+
+The mechanism built the previous day, run for the first time across all 498 active
+tickers rather than a 9-ticker subset.
+
+**Results.** 148 tickers were behind their published period; **81 fixed by
+refetch** (73 moving 2026-03-31 -> 2026-06-30), 64 refetched but confirmed the
+SEC's aggregated payload still lacks the newest published period, 3 (META, NEE,
+WFC) correctly skipped by the daily retry cap having already been attempted that
+day. 350 untouched tickers: **0 changed payloads, 0 changed periods**, confirmed
+by MD5, not inferred.
+
+**Cross-checked directly** rather than assumed from shared inputs: the 67
+still-behind tickers are flagged by `add_staleness_fields()`'s own
+`fundamentals_stale` in **67/67** cases, the 81 fixed in **0/81**, the 350 never
+behind in **0/350** — exact agreement.
+
+**Retry cap at full scale.** A second full pass over all 498 immediately after
+produced **0 additional `companyfacts` calls** in 88.8s — the cap holds
+universe-wide, not just for the 3 tickers checked in the subset.
+
+**Cost.** 145 calls / 557.6 MB / 86.9 min, against 2,117.1 MB for an unconditional
+refresh of all 498 (measured two independent ways: the full on-disk sum, and a
+10-ticker direct sample at 4.17 MB/call that left no side effects) — a **73.7% data
+and 70.9% request saving**. The two per-call latency figures disagree by ~36x
+(36 s/call sustained vs 987 ms/call in a short burst); reported rather than papered
+over, and attributed to network/SEC-side behaviour since the mechanism contains no
+rate-limiting or backoff of its own.
+
+**One anomaly reported, not smoothed over**: 8 of the 64 still-lagging tickers (BG,
+C, CNP, CTAS, GLW, HUM, PFG, PPG) had their cached payload change byte-for-byte on
+refetch despite reporting the same newest period — consistent with EDGAR revising
+earlier-period facts, and harmless to the period-based staleness classification,
+but surfaced because the check was run directly rather than assumed.
+
+---
+
+## 2026-07-31 — `fetch_or_cache` had no TTL at all: a staleness-aware refetch built on the submissions index, not a date threshold
+
+`fetch_or_cache()` was a pure `os.path.exists` check — once a `companyfacts`
+payload was cached it was **never** refetched, so 152 tickers sat on stale
+fundamentals indefinitely. A naive date-based TTL was explicitly rejected and
+proven impossible on this data: 311 tickers sit at exactly 123 days since their
+last filing, of which 133 are genuinely stale and 178 merely mid-cycle — **the same
+number on both sides of any threshold**, so no date cutoff separates them.
+
+**Design: cheap probe, content-based decision.** Three artifacts with three
+policies. The expensive payload (`companyfacts`, median 4.18 MB) never expires on
+age. The cheap probe (`submissions`, median 0.18 MB — **4.2%** of the payload)
+carries the only time-based expiry, `SUBMISSIONS_MAX_AGE_DAYS = 1`, via a new
+opt-in `max_age_days` parameter that defaults to `None` so every existing caller
+keeps its original behaviour. A tiny sidecar (`{ticker}_cache_meta.json`) holds the
+derived `newest_period` plus a `last_refetch_attempt` ledger, so the freshness
+check never has to load the 4 MB payload. The refetch decision is therefore
+**content-based** (has the company published a period newer than what's cached?),
+never age-based; the 1-day expiry sits only on the probe.
+
+The retry attempt is recorded **before** the request, so a failure still counts
+against the daily cap — bounding the SEC-aggregation-lag case to one wasted request
+per ticker per day instead of one per run. The probe is an optimisation, never a
+hard dependency: if it throws, the cache is served.
+
+Measured cost of the new check in the common (already-current) case: **median −0.1
+ms added latency, worst case +4.7 ms, 0 network calls**. When the probe's daily
+cache has expired it costs ~941 ms for one 0.20 MB round-trip — real, not zero, and
+reported as such.
+
+Subset validation was run **before** any full-universe run: AMZN/AON/APH/MA moved
+2026-03-31 -> 2026-06-30 (fixed), META/NEE/WFC correctly stayed behind rather than
+being falsely marked fixed, MSFT/GOOGL were untouched with no attempt recorded, and
+an immediate second run made **0 `companyfacts` calls**. `delete_cached_facts()`
+extended so a full refresh removes all three artifacts.
+
+---
+
+## 2026-07-31 — META's missing quarter was never a code bug: SEC-side aggregation lag, plus a share-count source conflict and a PEG rename
+
+**META.** The missing 2026-06-30 quarter was proven **not** to be a fetch or parse
+defect: refetching via stdlib `urllib`, bypassing the project's `requests` client
+entirely, returned a payload **byte-identical** to the cache. The 10-Q had been
+accepted by EDGAR but not yet aggregated into `companyfacts` — and ingestion is not
+time-ordered (AMZN filed later than META yet was aggregated first), with observed
+lag up to ≥8 days. Nothing to fix in this project's code.
+
+**Staleness guard.** Since no date threshold can separate stale from mid-cycle (see
+the TTL entry), a `fundamentals_stale` flag was built on the authoritative
+submissions index instead: `get_submissions()` / `get_latest_filed_period()` read
+the newest `reportDate` across 10-Q/10-K forms, and a ticker is stale when its
+published period exceeds its newest cached fact. `STALENESS_DAYS_FALLBACK = 135`
+covers tickers with no submissions entry, so the date-based answer remains as a
+fallback rather than the primary signal.
+
+**Share-count source conflict.** EDGAR and yfinance disagreed for 40 tickers.
+Rejected the obvious "always prefer EDGAR" fix after finding **three distinct
+causes**, including genuine splits proven by `dei/yf` ratios of exactly `0.100` and
+`0.250`. The shipped rule is deliberately asymmetric —
+`MIN_SHARE_COUNT_DISAGREEMENT = 0.10`, EDGAR preferred only when materially
+*larger* — because the failure being corrected is a stale pre-split EDGAR count.
+(The opposite direction went unhandled until 2026-08-02.)
+
+**`peg_ratio` renamed to `pe_to_revenue_growth`.** The metric divides P/E by
+*revenue* growth, not earnings growth, so the name was simply wrong. Recomputing it
+against earnings growth was tested and rejected on measurement: it is strictly
+worse (38.4% vs 21.9% negative denominators, and `std = nan` from infinities).
+Renamed in `build_valuation_history()`, `build_snapshot()`, and the encyclopedia.
+**Known gap, still open:** `VALUATIONS_TO_PLOT` in `config.py` was missed and still
+lists `("peg_ratio", "PEG Ratio Revenue", ...)`, a concept the pipeline no longer
+produces — so that valuation panel renders "keine Daten" for every ticker. Found
+during the 2026-08-02 documentation audit; not fixed there because that task was
+documentation-only.
+
+---
+
+## 2026-07-30 — Denominator guard wired into `build_valuation_history`, six ticker data bugs, and `MAX_MULTIPLE` removed
+
+**The guard was never wired in.** `apply_denominator_scale_guard` protected
+`roe`/`debt_to_equity`/`build_snapshot`'s ratios but **not**
+`build_valuation_history()`, so the historical valuation multiples had no
+scale-sanity protection at all. Now applied to `pe_ratio`, `pb_ratio`,
+`pfcf_ratio`, `ev_ebitda`, `p_tbv`, `p_ppnr`, `p_core_earnings`, `p_ffo`.
+
+**Threshold recalibrated, and a proposed value rejected on measurement.**
+`MIN_VALUATION_DENOMINATOR_SCALE_RATIO = 0.001`, far below the 0.01 used for
+`roe`. A 0.01 threshold was measured and rejected: it would delete **1,031 real,
+ordinary multiples** belonging to thin-margin distributors, because market cap
+tracks earnings rather than revenue, so a legitimately small earnings-to-revenue
+ratio is normal there rather than a data defect. (An earlier draft of the code
+comment asserted a different figure before the measurement was run; it was
+corrected to the measured 1,031 rather than left as written.)
+
+**`MAX_MULTIPLE` removed.** The blunt absolute cap became redundant once the
+scale guard was wired in, and was removed rather than kept as a second, unrelated
+mechanism doing overlapping work.
+
+**Six ticker data bugs**, all fixed via the existing targeted `_KNOWN_BAD_FACTS`
+drop-list rather than any generic rule — 39 facts across 10 `(ticker, tag)` keys:
+
+- **WAT** (partial): a units-mismatched share-count fact anchored
+  `normalize_split_adjusted()`, which keys off `values.iloc[-1]`, rescaling the
+  whole series by **50x**. Dropping the bad facts fixes the 50x error; a residual
+  **2x** remains and was deliberately left, because it is a real merger-driven
+  share issuance that the split-detection logic misreads as a split — fixing that
+  would require reworking `normalize_split_adjusted()` generically, out of scope.
+- **NTRS**: the same pattern on both share tags (3 facts each).
+- **ANET / SCHW / ED**: `NetIncomeLoss` values reported in $-millions/thousands in
+  **DEF 14A proxy statements**, which beat the 10-K because `extract_period_values`
+  keeps the latest-filed fact per `(end, days)` key. Root cause diagnosed on ANET,
+  then checked universe-wide before choosing a fix: **141 tickers have DEF 14A
+  facts and only 3 are units-mismatched**, which is what justified a targeted
+  15-fact drop-list over a blanket "ignore DEF 14A" rule.
+- **ICE / SW / AMCR**: bad `StockholdersEquity` facts (14 total).
+
+---
+
+## 2026-07-30 — `build_valuation_history` used one current share count for all of history
+
+`build_valuation_history()` computed `market_cap` from a single share count
+applied across every historical period, so every historical valuation multiple was
+priced with today's share count. Fixed to use each period's own `SharesOutstanding`,
+falling back to the current count only for tickers with no historical share data at
+all (`shares_outstanding_count > 0` deciding per ticker, not per row).
+
+---
+
+## 2026-07-30 — Quarterly values alongside TTM, and growth columns on every non-TTM concept
+
+**Quarterly counterparts.** Every TTM-only concept hid single-quarter inflections
+until they had worked through a trailing-twelve-month sum.
+`add_quarterly_derived_concepts()` and `calculate_quarterly_metrics()` mirror the
+existing TTM derivation chain exactly, built from the already-quarterly base
+concepts instead of their `_TTM` versions. Purely additive: every concept added
+carries a `_QUARTERLY` name and nothing touches or replaces a TTM concept.
+`plot_metric_dual()` renders TTM and quarterly on one axis, wired via
+`QUARTERLY_COUNTERPART`, and quarterly concepts inherit their TTM sibling's
+visibility through `_DERIVED_CONCEPT_CONSUMERS` so a hidden metric cannot leak back
+in through its new quarterly twin.
+
+**Broad growth.** `add_growth_column()` / `growth_concepts()` attach a
+`yoy_growth` column (`GROWTH_COLUMN`) to every non-TTM, non-derived concept in
+`facts`, rather than the four hand-picked series that had growth before.
+`GROWTH_MIN_BASE_RATIO_OVERRIDES` loosens the base-ratio guard to 0.05 for seven
+genuinely lumpy balance-sheet concepts (`Capex`, `Goodwill`, `CashAndEquivalents`,
+`Inventory`, `LongTermDebt`, `ProvisionForCreditLosses`, `TangibleEquity`) where the
+default 0.33 would suppress real movement. Three universal panels
+(`GROWTH_PANELS`) are rendered by `plot_growth()`.
+
+---
+
 ## 2026-07-29 — Hidden-metric TTM leaks project-wide (facts.csv + snapshot columns), and a peg_ratio ordering bug that let a 13.6-million P/E through
 
 Two-part task. Part A: a hidden ratio (e.g. `pe_ratio` for `reit`) doesn't stop its

@@ -9,7 +9,8 @@ from fetchers.edgar import (
     get_latest_filed_period,
 )
 from fetchers.yfinance_fetcher import get_current_price_and_shares, get_price_history
-from parsers.parse_edgar import build_dataframe
+from parsers.parse_edgar import build_dataframe, _drop_known_bad_facts
+from fetchers.edgar import extract_quarterly_values
 from config import (
     EDGAR_USER_AGENT,
     TICKERS,
@@ -62,6 +63,7 @@ from figures import (plot_fundamentals, plot_valuation, plot_growth)
 from quality import print_data_quality
 
 import os
+import json
 import time
 import pandas as pd
 
@@ -216,8 +218,10 @@ def _qoq_change(facts: pd.DataFrame, concept: str, value_name: str) -> pd.DataFr
     sub = facts[facts["concept"] == concept][["ticker", "end", "value"]].rename(columns={"value": value_name})
     sub = sub.sort_values(["ticker", "end"])
     sub[f"prev_{value_name}"] = sub.groupby("ticker")[value_name].shift(1)
-    prev_end = sub.groupby("ticker")["end"].shift(1)
-    sub["_gap_ok"] = (sub["end"] - prev_end).dt.days.between(*BUYBACK_QOQ_GAP_DAYS)
+    # kept as a column, not a local: callers that need to attribute a jump back to the earlier
+    # quarter (share_count_jump_flag) need the paired end-date to survive downstream merges.
+    sub["prev_end"] = sub.groupby("ticker")["end"].shift(1)
+    sub["_gap_ok"] = (sub["end"] - sub["prev_end"]).dt.days.between(*BUYBACK_QOQ_GAP_DAYS)
     return sub
 
 
@@ -262,7 +266,23 @@ def calculate_share_count_jump_flag(facts: pd.DataFrame) -> pd.DataFrame:
 
     raw = (merged["_abs_change"] > MIN_SHARE_COUNT_QOQ_CHANGE) & ~corroborated.fillna(False)
     merged["share_count_jump_flag"] = raw.astype(float).where(merged["_applicable"])
-    return merged[["ticker", "end", "share_count_jump_flag"]].dropna(subset=["share_count_jump_flag"])
+
+    # A jump is a discontinuity *between* two quarters, not a property of one of them: the QoQ
+    # test can only say the transition is unexplained, never which side carries the bad count.
+    # So both bracketing quarters are marked. Without this the earlier quarter stays unflagged
+    # and keeps feeding rolling averages -- SOFI's 2023-12-31 count of 1.89bn (vs ~1.1bn from
+    # 2024-03-31 onward) is exactly that case.
+    out = merged[["ticker", "end", "share_count_jump_flag"]].dropna(subset=["share_count_jump_flag"])
+    prior = merged.loc[merged["share_count_jump_flag"] == 1.0, ["ticker", "prev_end"]].rename(
+        columns={"prev_end": "end"}
+    ).dropna()
+    prior["share_count_jump_flag"] = 1.0
+    combined = pd.concat([out, prior], ignore_index=True)
+    # a quarter flagged from either side counts once, and "flagged" wins over "not flagged"
+    return (combined.sort_values("share_count_jump_flag")
+                    .drop_duplicates(subset=["ticker", "end"], keep="last")
+                    .sort_values(["ticker", "end"])
+                    .reset_index(drop=True))
 
 
 def calculate_fcf_exceeds_ebitda_flag(fcf_df: pd.DataFrame, ebitda_df: pd.DataFrame) -> pd.DataFrame:
@@ -305,6 +325,18 @@ def calculate_all_metrics(facts: pd.DataFrame) -> dict:
     )
     m["roe"] = calculate_ratio(
         facts, "NetIncomeLoss_TTM", "StockholdersEquity", "roe",
+        require_positive_denominator=True,
+        min_denominator_scale_ref="Revenue_TTM",
+        min_denominator_scale_ratio=MIN_DENOMINATOR_SCALE_RATIO,
+    )
+    # Return on tangible common equity -- the natural partner to p_tbv wherever goodwill is
+    # material enough that plain roe understates returns on the tangible capital base. Guarded
+    # exactly as roe is, with TangibleEquity substituted for StockholdersEquity. Scope follows
+    # p_tbv's own visibility (financial / insurance_pc / insurance_life) rather than
+    # financial-only: measured median Goodwill/StockholdersEquity is 19.5% for `financial`,
+    # 10.7% for `insurance_life` and 7.7% for `insurance_pc` -- material in all three.
+    m["rotce"] = calculate_ratio(
+        facts, "NetIncomeLoss_TTM", "TangibleEquity", "rotce",
         require_positive_denominator=True,
         min_denominator_scale_ref="Revenue_TTM",
         min_denominator_scale_ratio=MIN_DENOMINATOR_SCALE_RATIO,
@@ -554,6 +586,7 @@ def build_metrics_long(metrics: dict, quarterly_metrics: dict = None) -> pd.Data
         (metrics["income_growth"], "yoy_growth", "income_yoy_growth"),
         (metrics["operating_margin"], "operating_margin", "operating_margin"),
         (metrics["roe"], "roe", "roe"),
+        (metrics["rotce"], "rotce", "rotce"),
         (metrics["debt_to_equity"], "debt_to_equity", "debt_to_equity"),
         (metrics["payout_ratio"], "payout_ratio", "payout_ratio"),
         (metrics["fcf_margin"], "fcf_margin", "fcf_margin"),
@@ -618,12 +651,33 @@ AVG_5Y_FIELD_NAMES = {
 }
 
 
-def calculate_rolling_multiple_averages(valuation_history: pd.DataFrame) -> pd.DataFrame:
+def _drop_suspect_share_periods(series: pd.DataFrame, suspect: "pd.DataFrame | None") -> pd.DataFrame:
+    """Remove (ticker, end) rows bracketing an unexplained share-count jump.
+
+    Every multiple in HARMONIC_MEAN_CONCEPTS is share-count-derived -- directly through
+    market_cap, or through EPS_TTM_CALC for pe_ratio -- so a suspect share count contaminates
+    all of them equally. Excluding the pair here (rather than only displaying the flag) is the
+    point of the fix: one bad observation otherwise biases a multi-year summary statistic that
+    is supposed to describe a norm.
+    """
+    if suspect is None or suspect.empty:
+        return series
+    flagged = suspect[suspect["share_count_jump_flag"] == 1.0][["ticker", "end"]]
+    if flagged.empty:
+        return series
+    merged = series.merge(flagged.assign(_suspect=True), on=["ticker", "end"], how="left")
+    return merged[merged["_suspect"].isna()].drop(columns="_suspect")
+
+
+def calculate_rolling_multiple_averages(
+    valuation_history: pd.DataFrame, share_count_jump_flags: "pd.DataFrame | None" = None
+) -> pd.DataFrame:
 
     wide = None
     for concept in sorted(HARMONIC_MEAN_CONCEPTS):
         field = AVG_5Y_FIELD_NAMES[concept]
         series = valuation_history[valuation_history["concept"] == concept][["ticker", "end", "value"]]
+        series = _drop_suspect_share_periods(series, share_count_jump_flags)
         if series.empty:
             continue
         stats = calculate_rolling_harmonic_stats(series, "value", AVG_5Y_WINDOW, field)
@@ -635,7 +689,9 @@ MIN_PEER_GROUP_SIZE = 5
 PEER_BAND_WINDOW_YEARS = 5
 
 
-def calculate_peer_band_flags(valuation_history: pd.DataFrame) -> pd.DataFrame:
+def calculate_peer_band_flags(
+    valuation_history: pd.DataFrame, share_count_jump_flags: "pd.DataFrame | None" = None
+) -> pd.DataFrame:
 
     profiles = valuation_history["ticker"].map(lambda t: TICKER_PROFILES.get(t, DEFAULT_PROFILE))
     vh = valuation_history.assign(profile=profiles)
@@ -645,6 +701,9 @@ def calculate_peer_band_flags(valuation_history: pd.DataFrame) -> pd.DataFrame:
     out = []
     for concept in sorted(HARMONIC_MEAN_CONCEPTS):
         sub = window[window["concept"] == concept]
+        # own_5y_low is a min over the window -- a single suspect quarter can define it
+        # outright, which is precisely the bias this exclusion removes.
+        sub = _drop_suspect_share_periods(sub, share_count_jump_flags)
         if sub.empty:
             continue
         own_low = sub.groupby(["ticker", "profile"])["value"].min().rename("own_5y_low").reset_index()
@@ -767,6 +826,47 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame, pr
 
     return long.dropna(subset=["value"])
 
+# Which kind of share count a tag reports. yfinance reports a current period-end count, so a
+# diluted weighted-average EDGAR value is not directly comparable to it -- shares_delta_pct is
+# only interpretable once you know which basis is behind the EDGAR side.
+_PERIOD_END_SHARE_TAGS = {
+    "CommonStockSharesOutstanding", "EntityCommonStockSharesOutstanding", "CommonStockSharesIssued",
+}
+_WAVG_SHARE_TAGS = {
+    "WeightedAverageNumberOfDilutedSharesOutstanding",
+    "WeightedAverageNumberOfSharesOutstandingBasic",
+    "WeightedAverageNumberOfSharesOutstanding",
+}
+SHARES_BASIS_CODES = {"diluted_wavg": 0.0, "period_end": 1.0}
+
+
+def resolve_shares_basis(ticker: str, us_gaap_data: dict) -> "str | None":
+    """Which basis supplied this ticker's most recent SharesOutstanding value.
+
+    Mirrors extract_merged_values()'s per-end-date fallback rather than assuming the first
+    configured tag wins outright: tags are tried in order and the first with a value for a
+    given end-date supplies it, so a ticker's basis can differ period to period (99 of 495
+    active tickers are mixed across their history).
+    """
+    tags = get_concept_candidates(ticker).get("SharesOutstanding", {}).get("tags", [])
+    cleaned = _drop_known_bad_facts(ticker, us_gaap_data)
+    owner = {}
+    for tag in tags:
+        concept_data = cleaned.get(tag)
+        if concept_data is None:
+            continue
+        for v in extract_quarterly_values(concept_data, is_point_in_time=True):
+            owner.setdefault(v["end"], tag)
+    if not owner:
+        return None
+    newest_tag = owner[max(owner)]
+    if newest_tag in _WAVG_SHARE_TAGS:
+        return "diluted_wavg"
+    if newest_tag in _PERIOD_END_SHARE_TAGS:
+        return "period_end"
+    return None
+
+
 MIN_SHARE_COUNT_DISAGREEMENT = 0.10
 MIN_YF_SHARE_OVERSTATEMENT = 1.50
 MAX_EDGAR_SHARE_LAG_DAYS = 200   
@@ -809,6 +909,7 @@ def build_snapshot(
     rolling_multiples: pd.DataFrame,
     as_of: "str | pd.Timestamp | None" = None,
     peer_band_flags: "pd.DataFrame | None" = None,
+    shares_basis: "dict | None" = None,
 ) -> pd.DataFrame:
 
     as_of_date = pd.Timestamp(as_of) if as_of is not None else pd.Timestamp(date.today())
@@ -820,6 +921,10 @@ def build_snapshot(
     snap["market_cap"] = snap["price"] * snap["shares_outstanding"]
     snap["shares_source_is_edgar"] = prefer_edgar.astype(float)
     snap["shares_delta_pct"] = shares_delta_pct
+    if shares_basis is not None:
+        # numeric, per SHARES_BASIS_CODES: the long format shares one `value` column across all
+        # concepts, so a string here would force the whole column to object dtype on reload.
+        snap["shares_basis"] = snap["ticker"].map(shares_basis).map(SHARES_BASIS_CODES)
 
     eps = get_latest_value(facts, "EPS_TTM_CALC").rename(columns={"value": "eps_ttm"})
     revenue = get_latest_value(facts, "Revenue_TTM").rename(columns={"value": "revenue_ttm"})
@@ -986,6 +1091,124 @@ def add_staleness_fields(
     return pd.concat([snapshot, extra[["ticker", "end", "concept", "value"]]], ignore_index=True)
 
 
+FILING_LAG_BUFFER_DAYS = 7
+QUARTER_SPACING_DAYS = 91
+
+
+def filing_cadence(submissions: dict) -> dict:
+    """A ticker's own median filing lag per form, plus its fiscal-year-end month.
+
+    Lag is measured per form, not pooled: 10-K lag (median 52 days universe-wide) and 10-Q lag
+    (32 days) are structurally different, and pooling them is what makes a ticker's "own
+    variance" look large. Splitting by form collapses the within-ticker p90-minus-median
+    spread from 17.8 days to 3.0 -- which is what makes a small, calibrated buffer possible.
+    """
+    recent = submissions.get("filings", {}).get("recent", {})
+    lags, fy_months = {}, []
+    for form, report, filed in zip(recent.get("form", []), recent.get("reportDate", []),
+                                   recent.get("filingDate", [])):
+        if form not in ("10-Q", "10-K") or not report or not filed:
+            continue
+        lag = (pd.Timestamp(filed) - pd.Timestamp(report)).days
+        if not 0 < lag < 200:
+            continue
+        lags.setdefault(form, []).append(lag)
+        if form == "10-K":
+            fy_months.append(pd.Timestamp(report).month)
+    if not lags:
+        return {}
+    return {
+        "median_lag": {form: float(pd.Series(v).median()) for form, v in lags.items()},
+        "fy_end_month": max(set(fy_months), key=fy_months.count) if fy_months else None,
+    }
+
+
+def calculate_filing_overdue_flags(
+    facts: pd.DataFrame,
+    cadences: dict,
+    latest_filed_periods: dict | None = None,
+    as_of: "str | pd.Timestamp | None" = None,
+) -> pd.DataFrame:
+    """`filing_likely_overdue`: predicts from a ticker's own cadence that its next report is
+    late, *before* any external signal confirms it.
+
+    Distinct from `fundamentals_stale`, which is reactive -- it fires only once the submissions
+    index already shows a newer filing than what is cached. This one fires when nothing new has
+    appeared anywhere yet but, on this company's own historical schedule, something should have.
+
+    The brief's literal formula (most recent *known* period end + lag + buffer) would fire
+    perpetually: the most recent known period end is by definition one that was already filed,
+    so its own due date is always in the past. Projecting one quarter forward to the next
+    *expected* period end is what actually expresses "a filing is overdue" -- consecutive
+    period-end spacing is a tight median 91 days (p10 90, p90 92), so the projection is safe.
+    """
+    as_of_date = pd.Timestamp(as_of) if as_of is not None else pd.Timestamp(date.today())
+    newest = facts.groupby("ticker")["end"].max()
+
+    rows = []
+    for ticker, last_end in newest.items():
+        cadence = cadences.get(ticker) or {}
+        median_lag = cadence.get("median_lag") or {}
+        if not median_lag:
+            continue
+
+        next_end = last_end + pd.Timedelta(days=QUARTER_SPACING_DAYS)
+        fy_month = cadence.get("fy_end_month")
+        form = "10-K" if fy_month and next_end.month == fy_month else "10-Q"
+        lag = median_lag.get(form, median_lag.get("10-Q", median_lag.get("10-K")))
+
+        due = next_end + pd.Timedelta(days=lag + FILING_LAG_BUFFER_DAYS)
+
+        published = (latest_filed_periods or {}).get(ticker)
+        already_published = bool(published) and pd.Timestamp(published) >= next_end
+        overdue = (as_of_date > due) and not already_published
+
+        rows.append({"ticker": ticker, "end": as_of_date,
+                     "concept": "filing_likely_overdue", "value": float(overdue)})
+        rows.append({"ticker": ticker, "end": as_of_date,
+                     "concept": "days_past_expected_filing",
+                     "value": float((as_of_date - due).days)})
+    return pd.DataFrame(rows, columns=["ticker", "end", "concept", "value"])
+
+
+def load_shares_basis(tickers: list[str]) -> dict:
+    """{ticker: 'diluted_wavg' | 'period_end'} for each ticker's newest share count.
+
+    Reads the cached companyfacts payloads directly (no network): this is a property of the
+    already-fetched data, so it must not trigger refetches of its own.
+    """
+    out = {}
+    for ticker in tickers:
+        path = os.path.join(CACHE_DIR, f"{ticker}_company_info.json")
+        try:
+            with open(path) as f:
+                us_gaap = json.load(f).get("facts", {}).get("us-gaap", {})
+        except (OSError, ValueError):
+            continue
+        basis = resolve_shares_basis(ticker, us_gaap)
+        if basis:
+            out[ticker] = basis
+    return out
+
+
+def load_filing_cadences(tickers: list[str]) -> dict:
+    mapping = fetch_or_cache(
+        url="https://www.sec.gov/files/company_tickers.json",
+        cache_path="cache/ticker_mapping.json",
+        headers={"User-Agent": EDGAR_USER_AGENT},
+    )
+    cik_mapping = build_ticker_to_cik(mapping)
+    out = {}
+    for ticker in tickers:
+        try:
+            out[ticker] = filing_cadence(
+                get_submissions(ticker, get_cik(ticker, cik_mapping), EDGAR_USER_AGENT)
+            )
+        except Exception:
+            out[ticker] = {}
+    return out
+
+
 def load_latest_filed_periods(tickers: list[str]) -> dict:
     mapping = fetch_or_cache(
         url="https://www.sec.gov/files/company_tickers.json",
@@ -1071,10 +1294,16 @@ def main():
     prices = load_current_prices()
 
     valuation_history = build_valuation_history(facts, price_history, prices)
-    rolling_multiples = calculate_rolling_multiple_averages(valuation_history)
-    peer_bands = calculate_peer_band_flags(valuation_history)
-    snapshot = build_snapshot(facts, metrics, prices, rolling_multiples, peer_band_flags=peer_bands)
-    snapshot = add_staleness_fields(snapshot, facts, load_latest_filed_periods(TICKERS))
+    jump_flags = metrics["share_count_jump_flag"]
+    rolling_multiples = calculate_rolling_multiple_averages(valuation_history, jump_flags)
+    peer_bands = calculate_peer_band_flags(valuation_history, jump_flags)
+    shares_basis = load_shares_basis(TICKERS)
+    snapshot = build_snapshot(facts, metrics, prices, rolling_multiples,
+                              peer_band_flags=peer_bands, shares_basis=shares_basis)
+    latest_filed = load_latest_filed_periods(TICKERS)
+    snapshot = add_staleness_fields(snapshot, facts, latest_filed)
+    snapshot = pd.concat([snapshot, calculate_filing_overdue_flags(
+        facts, load_filing_cadences(TICKERS), latest_filed)], ignore_index=True)
 
 
 
@@ -1300,10 +1529,16 @@ def run_full_refresh():
 
     metrics_long = build_metrics_long(metrics, quarterly_metrics)
     valuation_history = build_valuation_history(facts, price_history, prices)
-    rolling_multiples = calculate_rolling_multiple_averages(valuation_history)
-    peer_bands = calculate_peer_band_flags(valuation_history)
-    snapshot = build_snapshot(facts, metrics, prices, rolling_multiples, peer_band_flags=peer_bands)
-    snapshot = add_staleness_fields(snapshot, facts, load_latest_filed_periods(active_tickers))
+    jump_flags = metrics["share_count_jump_flag"]
+    rolling_multiples = calculate_rolling_multiple_averages(valuation_history, jump_flags)
+    peer_bands = calculate_peer_band_flags(valuation_history, jump_flags)
+    shares_basis = load_shares_basis(active_tickers)
+    snapshot = build_snapshot(facts, metrics, prices, rolling_multiples,
+                              peer_band_flags=peer_bands, shares_basis=shares_basis)
+    latest_filed = load_latest_filed_periods(active_tickers)
+    snapshot = add_staleness_fields(snapshot, facts, latest_filed)
+    snapshot = pd.concat([snapshot, calculate_filing_overdue_flags(
+        facts, load_filing_cadences(active_tickers), latest_filed)], ignore_index=True)
     calc_time = time.perf_counter() - t0
 
     metrics_long = filter_hidden_rows(metrics_long)
