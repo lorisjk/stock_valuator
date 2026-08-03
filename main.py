@@ -329,12 +329,6 @@ def calculate_all_metrics(facts: pd.DataFrame) -> dict:
         min_denominator_scale_ref="Revenue_TTM",
         min_denominator_scale_ratio=MIN_DENOMINATOR_SCALE_RATIO,
     )
-    # Return on tangible common equity -- the natural partner to p_tbv wherever goodwill is
-    # material enough that plain roe understates returns on the tangible capital base. Guarded
-    # exactly as roe is, with TangibleEquity substituted for StockholdersEquity. Scope follows
-    # p_tbv's own visibility (financial / insurance_pc / insurance_life) rather than
-    # financial-only: measured median Goodwill/StockholdersEquity is 19.5% for `financial`,
-    # 10.7% for `insurance_life` and 7.7% for `insurance_pc` -- material in all three.
     m["rotce"] = calculate_ratio(
         facts, "NetIncomeLoss_TTM", "TangibleEquity", "rotce",
         require_positive_denominator=True,
