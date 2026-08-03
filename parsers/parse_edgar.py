@@ -221,6 +221,20 @@ _KNOWN_BAD_FACTS = {
     ("BAC", "Assets"): [
         {"end": "2008-12-31", "filed": "2011-02-25", "val": 0},
     ],
+    ("ARES", "PartnersCapital"): [
+        {"end": "2013-12-31", "filed": "2014-06-10", "val": 1000},
+        {"end": "2014-03-31", "filed": "2014-06-10", "val": 1000},
+    ],
+    ("ARES", "LimitedPartnersCapitalAccount"): [
+        {"end": "2018-12-31", "filed": "2019-02-26", "val": 0},
+    ],
+    ("ARES", "CommonStockSharesOutstanding"): [
+        {"end": "2017-12-31", "filed": "2019-02-26", "val": 0},
+    ],
+    ("ARES", "StockholdersEquity"): [
+        {"end": "2017-12-31", "filed": "2020-02-28", "val": 1460292000},
+        {"end": "2017-12-31", "filed": "2019-02-26", "val": 573618000},
+    ],
     ("ROK", "CommonStockDividendsPerShareDeclared"): [
         {"end": "2017-12-31", "filed": "2019-01-31", "val": 835000},
         {"end": "2018-03-31", "filed": "2019-04-25", "val": 1670000},

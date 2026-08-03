@@ -796,6 +796,18 @@ track closely) suggests realized gains/losses are a minor, non-distorting factor
 
 ---
 
+## P/E Ratio — Note for Alternative Asset Managers (BX, KKR, ARES, APO)
+
+**What's different here:** For most companies, GAAP net income is a reasonable, if imperfect, stand-in for economic earnings. For alternative asset managers, it isn't — GAAP earnings are heavily shaped by two non-operating swings that have little to do with how the underlying fee business is actually doing: mark-to-market revaluation of carried interest (the firm's share of fund profits, revalued every quarter whether or not any cash has actually been realized) and equity-based compensation tied to the firm's own unit price. Both can push net income sharply positive or negative in a quarter with no change to the durable, fee-generating part of the business.
+
+**Why it matters:** This shows up directly in how often P/E is even computable. Across this tool's own data, one of these four names shows a negative-earnings quarter in roughly one out of every five — high enough that a reader scanning the P/E chart and seeing gaps or a recent negative-earnings period shouldn't assume something is operationally wrong. It's a structural feature of how these firms report, not a red flag on its own.
+
+**How to read it:** Look at the trend and the surrounding quarters rather than any single reading. A P/E chart for this group will naturally look noisier than one for a stable industrial or consumer company — that's expected, not a data problem. If you want a steadier read on the underlying business, this tool's `revenue_yoy_growth` and `roe`/`rotce` hold up well for this group (existing safeguards already filter out the extreme, uninformative readings), and are a more stable complement to P/E here than they might need to be elsewhere.
+
+**Where it lies:** This tool's existing near-zero/negative-denominator guard already prevents P/E from showing a meaningless value when earnings are negative — it masks rather than showing a nonsensical negative multiple. What it can't do is smooth out the underlying earnings volatility itself; a real, wide swing in GAAP earnings will still produce a real, wide swing in P/E from one quarter to the next. That's not a bug to fix — it's the honest reflection of how this business model reports.
+
+---
+
 # Part 3: How to actually use this
 
 **Start with the fundamentals chart.** Ignore the price entirely. Is revenue growing? Are margins stable or improving? Is the debt manageable? Is free cash flow real? If the answer to any of these is a clear no, the valuation doesn't matter — you can stop.

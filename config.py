@@ -146,12 +146,23 @@ CONCEPT_CANDIDATES = {
     },
 
     "StockRepurchased": {
-        "tags": ["PaymentsForRepurchaseOfCommonStock"],
+        "tags": [
+            "PaymentsForRepurchaseOfCommonStock",
+            "PaymentsForRepurchaseOfEquity",
+            "StockRepurchasedDuringPeriodValue",
+            "StockRepurchasedAndRetiredDuringPeriodValue",
+            "TreasuryStockValueAcquiredCostMethod",
+            "PartnersCapitalAccountTreasuryUnitsPurchases",
+        ],
         "point_in_time": False,
         "mode": "fallback",
     },
     "StockIssued": {
-        "tags": ["ProceedsFromIssuanceOfCommonStock"],
+        "tags": [
+            "ProceedsFromIssuanceOfCommonStock",
+            "StockIssuedDuringPeriodValueNewIssues",
+            "ProceedsFromIssuanceOrSaleOfEquity",
+        ],
         "point_in_time": False,
         "mode": "fallback",
     },
@@ -196,6 +207,8 @@ SEARCH_HINTS = {
     "CashAndEquivalents": ["cashandcash"],
     "StockholdersEquity": ["stockholdersequity"],
     "SharesOutstanding": ["sharesoutstanding"],
+    "StockRepurchased": ["repurchase", "treasurystock", "buyback"],
+    "StockIssued": ["issuanceofcommon", "stockissuedduringperiodvalue", "saleofequity"],
     "DividendsPerShare": ["dividendspershare"],
     # bank concepts:
     "Assets": ["assets"],
@@ -570,6 +583,9 @@ TICKER_PROFILES = {
     "APP": "standard", "NOW": "standard",
 
     "BX": "alt_asset_manager",
+    "KKR": "alt_asset_manager",
+    "ARES": "alt_asset_manager",
+    "APO": "alt_asset_manager",
 }
 
 PROFILE_HIDDEN = {
@@ -856,11 +872,24 @@ PROFILE_HIDDEN = {
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
         "rd_intensity", "operating_leverage", "operating_income_yoy_growth",
         "ffo_margin", "p_ffo",
+        "operating_margin", "net_debt_to_ebitda", "ev_ebitda",
+        "fcf_margin", "pfcf_ratio", "ev_fcf", "pfcf_ex_sbc", "rule_of_40", "capex_intensity",
     },
 }
 
 
 PROFILE_CONCEPT_OVERRIDES = {
+    "alt_asset_manager": {
+        "StockholdersEquity": {
+            "tags": [
+                "StockholdersEquity",
+                "LimitedPartnersCapitalAccount",
+                "PartnersCapital",
+            ],
+            "point_in_time": True,
+            "mode": "fallback",
+        },
+    },
     "financial": {
         "Revenue": {
             "sources": [
@@ -1385,6 +1414,12 @@ PROFILE_CONCEPT_OVERRIDES = {
 
 
 PROFILE_EXCLUDED_CONCEPTS = {
+    "alt_asset_manager": {
+        # Confirmed absent, not merely unmapped: BX reports no discrete operating-income
+        # subtotal under any tag. Excluding it stops the coverage warning from reporting a
+        # gap that no tag can close.
+        "OperatingIncomeLoss",
+    },
     "standard": {
         "IncurredLosses",
         "ClaimsReserve",
