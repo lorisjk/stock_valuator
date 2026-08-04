@@ -1,4 +1,4 @@
-TICKERS = ["BX"]
+TICKERS = ["NWS"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
 

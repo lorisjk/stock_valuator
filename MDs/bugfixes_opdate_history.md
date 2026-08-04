@@ -6,6 +6,31 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-08-03 — Plotly migration Phase 1: rendering backend swapped, selection logic untouched
+
+`figures.py` rewritten from matplotlib to Plotly. Same five functions (`plot_metric`,
+`plot_metric_dual`, `plot_fundamentals`, `plot_growth`, `plot_valuation`), same
+config-driven panel selection (`is_hidden`, `FUNDAMENTALS_TO_PLOT`,
+`VALUATIONS_TO_PLOT`, `GROWTH_PANELS` — `config.py` untouched), but each chart now
+writes a self-contained interactive `.html` plus a `.json` figure spec (for the
+future web app) instead of a `.png`. `output_path` is treated as a stem; the six
+call sites in `main.py` now pass extension-less stems, and a legacy `.png`/`.html`/
+`.json` extension is stripped defensively. The dead `symlog` parameter was dropped
+(no metric sets the flag; the 5th `FUNDAMENTALS_TO_PLOT` tuple element is unpacked
+and discarded). Global pyplot state (`plt.subplots`/`plt.close`) is gone — the
+functions build plain `go.Figure` objects and are thread-safe. Degenerate cases now
+defined: missing growth column or zero visible panels → warning, **neither** output
+file written (verified no active ticker of 501 hits zero panels). One Plotly 6.9
+trap found: `add_hline(annotation_text=..., row=, col=)` is a silent no-op — mean
+lines are drawn as `add_hline` + separate domain-coordinate annotation instead.
+Verified programmatically for AAPL (standard), JPM (financial), O (reit): panel
+sets identical to the matplotlib-era selection, trace values byte-identical to the
+source dataframes, harmonic/arithmetic mean labels reproduce `metrics.harmonic_mean`
+/`Series.mean` exactly. `matplotlib` removed from `requirements.txt` in favor of
+`plotly>=6.0`. Full details in `plotly_migration_phase1_report.md`.
+
+---
+
 ## 2026-08-02 — Nine external-review improvements: seven built, one refused on evidence, one premise disproven — plus a share-count audit bug the work exposed
 
 A nine-item batch from an external review. Seven implemented, one deliberately not

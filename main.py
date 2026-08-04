@@ -1334,9 +1334,9 @@ def main():
     print(price_summary(snapshot))
 
     for ticker in TICKERS:
-        plot_fundamentals(ticker, metrics_long, os.path.join(FIGURE_DIR, f"{ticker}_fundamentals.png"))
-        plot_valuation(ticker, valuation_history, os.path.join(FIGURE_DIR, f"{ticker}_valuation.png"))
-        plot_growth(ticker, facts, os.path.join(FIGURE_DIR, f"{ticker}_growth.png"))
+        plot_fundamentals(ticker, metrics_long, os.path.join(FIGURE_DIR, f"{ticker}_fundamentals"))
+        plot_valuation(ticker, valuation_history, os.path.join(FIGURE_DIR, f"{ticker}_valuation"))
+        plot_growth(ticker, facts, os.path.join(FIGURE_DIR, f"{ticker}_growth"))
 
 
 def delete_cached_facts(tickers: list[str]) -> list[str]:
@@ -1550,9 +1550,9 @@ def run_full_refresh():
     plot_times = {}
     for ticker in active_tickers:
         t0 = time.perf_counter()
-        plot_fundamentals(ticker, metrics_long, os.path.join(FIGURE_DIR, f"{ticker}_fundamentals.png"))
-        plot_valuation(ticker, valuation_history, os.path.join(FIGURE_DIR, f"{ticker}_valuation.png"))
-        plot_growth(ticker, facts_out, os.path.join(FIGURE_DIR, f"{ticker}_growth.png"))
+        plot_fundamentals(ticker, metrics_long, os.path.join(FIGURE_DIR, f"{ticker}_fundamentals"))
+        plot_valuation(ticker, valuation_history, os.path.join(FIGURE_DIR, f"{ticker}_valuation"))
+        plot_growth(ticker, facts_out, os.path.join(FIGURE_DIR, f"{ticker}_growth"))
         plot_times[ticker] = time.perf_counter() - t0
     print(f"Calculate + plot done: {calc_time + sum(plot_times.values()):.1f}s total.")
 
