@@ -818,7 +818,7 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame, pr
         value_name="value",
     )
 
-    return long.dropna(subset=["value"])
+    return long
 
 # Which kind of share count a tag reports. yfinance reports a current period-end count, so a
 # diluted weighted-average EDGAR value is not directly comparable to it -- shares_delta_pct is
@@ -835,13 +835,7 @@ SHARES_BASIS_CODES = {"diluted_wavg": 0.0, "period_end": 1.0}
 
 
 def resolve_shares_basis(ticker: str, us_gaap_data: dict) -> "str | None":
-    """Which basis supplied this ticker's most recent SharesOutstanding value.
 
-    Mirrors extract_merged_values()'s per-end-date fallback rather than assuming the first
-    configured tag wins outright: tags are tried in order and the first with a value for a
-    given end-date supplies it, so a ticker's basis can differ period to period (99 of 495
-    active tickers are mixed across their history).
-    """
     tags = get_concept_candidates(ticker).get("SharesOutstanding", {}).get("tags", [])
     cleaned = _drop_known_bad_facts(ticker, us_gaap_data)
     owner = {}
@@ -1123,19 +1117,7 @@ def calculate_filing_overdue_flags(
     latest_filed_periods: dict | None = None,
     as_of: "str | pd.Timestamp | None" = None,
 ) -> pd.DataFrame:
-    """`filing_likely_overdue`: predicts from a ticker's own cadence that its next report is
-    late, *before* any external signal confirms it.
 
-    Distinct from `fundamentals_stale`, which is reactive -- it fires only once the submissions
-    index already shows a newer filing than what is cached. This one fires when nothing new has
-    appeared anywhere yet but, on this company's own historical schedule, something should have.
-
-    The brief's literal formula (most recent *known* period end + lag + buffer) would fire
-    perpetually: the most recent known period end is by definition one that was already filed,
-    so its own due date is always in the past. Projecting one quarter forward to the next
-    *expected* period end is what actually expresses "a filing is overdue" -- consecutive
-    period-end spacing is a tight median 91 days (p10 90, p90 92), so the projection is safe.
-    """
     as_of_date = pd.Timestamp(as_of) if as_of is not None else pd.Timestamp(date.today())
     newest = facts.groupby("ticker")["end"].max()
 
@@ -1326,9 +1308,11 @@ def main():
     metrics_long.sort_values(by=["ticker", "concept"], inplace=True)
     facts.sort_values(by=["ticker", "concept"], inplace=True)
 
+    valuation_history_no_na = valuation_history.dropna(subset=["value"])
+
     facts.to_csv(os.path.join(DATA_DIR, f"{PERIOD}_facts.csv"), index=False)
     metrics_long.to_csv(os.path.join(DATA_DIR, "metrics_long.csv"), index=False)
-    valuation_history.to_csv(os.path.join(DATA_DIR, "valuation_history.csv"), index=False)
+    valuation_history_no_na.to_csv(os.path.join(DATA_DIR, "valuation_history.csv"), index=False)
     snapshot.to_csv(os.path.join(DATA_DIR, "current_snapshot.csv"), index=False)
 
     print(price_summary(snapshot))

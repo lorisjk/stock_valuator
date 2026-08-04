@@ -11,6 +11,8 @@ from config import (
 )
 from metrics import harmonic_mean
 
+from datetime import datetime
+
 # Colors pinned so every subplot looks like the matplotlib version did
 # (each mpl axes restarted its color cycle; one Plotly figure would not).
 _PRIMARY_COLOR = "#1f77b4"
@@ -127,9 +129,11 @@ def plot_metric(
         go.Scatter(
             x=filtered["end"],
             y=filtered["value"],
-            mode="lines",
+            mode="lines + markers",
             name=concept,
             line=dict(color=_PRIMARY_COLOR),
+            connectgaps=True,
+            hovertemplate=("Date: %{x|%d.%m.%Y}""<br>Value: %{y}""<extra></extra>")
         ),
         row=row,
         col=col,
@@ -222,12 +226,14 @@ def plot_metric_dual(
         go.Scatter(
             x=ttm["end"],
             y=ttm["value"],
-            mode="lines",
+            mode="lines + markers",
             name=f"{concept} · TTM",
             line=dict(
                 color=_PRIMARY_COLOR,
                 width=1.5,
             ),
+            connectgaps=True,
+            hovertemplate=("Date: %{x|%d.%m.%Y}""<br>Value: %{y}""<extra></extra>")
         ),
         row=row,
         col=col,
@@ -248,6 +254,7 @@ def plot_metric_dual(
                     width=0.8,
                 ),
                 opacity=0.6,
+                hovertemplate=("Date: %{x|%d.%m.%Y}""<br>Value: %{y}""<extra></extra>")
             ),
             row=row,
             col=col,
@@ -319,16 +326,18 @@ def plot_growth(ticker: str, facts: pd.DataFrame, output_path: str, growth_colum
         col = idx + 1
         series = facts[
             (facts["ticker"] == ticker) & (facts["concept"] == concept)
-        ].dropna(subset=[growth_column]).sort_values("end")
+        ].sort_values("end")
 
-        if series.empty:
+        series_values = series.dropna(subset=[growth_column])
+
+        if series_values.empty:
             _annotate_no_data(fig, 1, col)
             continue
 
         fig.add_trace(
             go.Scatter(
-                x=series["end"], y=series[growth_column], mode="lines",
-                name=concept, line=dict(color=_PRIMARY_COLOR),
+                x=series["end"], y=series[growth_column], mode="lines + markers",
+                name=concept, line=dict(color=_PRIMARY_COLOR), connectgaps=True, hovertemplate=("Date: %{x|%d.%m.%Y}""<br>Value: %{y}""<extra></extra>")
             ),
             row=1, col=col,
         )
