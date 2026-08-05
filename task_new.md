@@ -1,145 +1,130 @@
-# Task: Plotly Migration — Phase 1 (Core Per-Ticker Chart Migration) — REV 2
+# Task: Parametrize the Figure Builders for an Interactive Caller
 
-## Goal
+**Depends on the comparison-cleanup task being complete and shipped** — `figures.py` already has
+the `build_*` / `plot_*` split (`build_fundamentals`, `build_growth`, `build_valuation`,
+`build_ticker_comparison` plus their file-writing wrappers). Read `comparison_cleanup_report.md`
+and the current `figures.py` in full before changing anything.
 
-Replace matplotlib with Plotly for this project's three chart-producing functions
-(`plot_fundamentals`, `plot_growth`, `plot_valuation`, and the `plot_metric`/`plot_metric_dual`
-helpers they use) — same data, same per-ticker scope as today, but interactive (native
-Plotly zoom/pan/hover, and legend-click-to-toggle a trace), and outputting **both** a
-standalone self-contained HTML file and a JSON representation per chart (the JSON is for the
-future web app to render client-side with `plotly.js`; the HTML is for viewing today without
-one).
+## Context — why this task exists
 
-**This phase changes only the rendering backend. It must not change what gets plotted or
-why.** Every existing config-driven selection/hiding decision
-(`is_hidden`, `FUNDAMENTALS_TO_PLOT`, `VALUATIONS_TO_PLOT`, `GROWTH_PANELS`,
-`QUARTERLY_COUNTERPART`, `HARMONIC_MEAN_CONCEPTS`) stays exactly as it is in `config.py` —
-this task reads that config, it does not modify it.
+The builders return figure objects now, but they still make three decisions internally that an
+interactive caller needs to make from the outside: **which panels to draw**, **how wide the
+figure is**, and **what "today" means for the valuation window**. Each of these blocks a
+concretely planned feature:
 
-**Secondary motivation (state it, honor it):** the current `figures.py` uses global pyplot
-state (`plt.subplots(...)` / `plt.close(fig)`), which is not thread-safe and blocks the web
-migration. The Plotly version must construct plain figure objects with **no module-level or
-global mutable state**, so the functions are safe to call from multiple threads/requests.
+| internal decision today | blocked feature |
+|---|---|
+| panel list computed from `is_hidden` + config only | user unchecks metrics in the UI and the grid re-tiles to use the freed space |
+| `width=500*cols` hardcoded in `update_layout` | responsive rendering via `st.plotly_chart(fig, use_container_width=True)` |
+| `pd.Timestamp.today()` as the valuation cutoff anchor | user-selectable as-of date (`build_snapshot_as_of`), where the window must run from the chosen date, not from today |
 
-**Standing requirement as always: nothing may regress** in the sense of "what gets shown" —
-verify that programmatically (compare the set of concepts/panels rendered against what the
-current matplotlib version would render for the same ticker/data), not by eyeballing images.
+This task makes those three parameters, and does nothing else of substance.
 
-## Step 1 — Read the current implementation fully before changing anything
+**Explicitly NOT in this task:** no Streamlit code, no Streamlit import in `figures.py`, no Phase 4
+(cross-sectional/peer plots), no change to `config.py`'s selection logic, no fix for the
+`V`/`STZ` missing-`SharesOutstanding` finding. `figures.py` stays a pure rendering module.
 
-Read `figures.py` in full and `config.py`'s relevant sections in full
-(`FUNDAMENTALS_TO_PLOT`, `VALUATIONS_TO_PLOT`, `GROWTH_PANELS`, `QUARTERLY_COUNTERPART`,
-`HARMONIC_MEAN_CONCEPTS`, `is_hidden`). Also grep every caller of
-`plot_fundamentals`/`plot_growth`/`plot_valuation` in `main.py` (both the ad-hoc path and
-`run_full_refresh()`) to confirm exactly how `output_path` is currently constructed and used,
-since this task needs to produce two files per chart instead of one.
+**Standing requirement:** default behaviour must not change. Every existing caller passes none of
+the new parameters, and must produce byte-identical output to what it produces today. Prove that,
+don't assert it (Step 4).
 
-**Known fact — do not get this wrong:** `plot_growth` is driven by the **static
-`GROWTH_PANELS` list** (three concept-level panels: `"Revenue"`, `"NetIncomeLoss"`,
-`"SharesOutstanding"`, plotted from the `facts` dataframe's `yoy_growth` column).
-`get_growth_panels()` / `GROWTH_BASE_PANELS` / `GROWTH_PROFILE_EXTRA` are **not imported by
-`figures.py` at all**. Grep for their actual consumer(s) elsewhere in the project so you know
-what they drive — but do not verify `plot_growth`'s panel set against `get_growth_panels()`;
-that would be verifying against the wrong list.
+## Step 1 — Explicit panel selection
 
-**Known fact — `is_hidden` namespaces:** `is_hidden(ticker, name)` is called with two
-different kinds of names: metric names like `"roe"`/`"fcf_margin"` (fundamentals/valuation
-paths) and capitalized concept names like `"Revenue"` (growth path). It also internally
-strips a `_quarterly` suffix and applies derived-concept-consumer logic. The migration must
-pass through the **exact same strings** the current code passes — no normalization, no
-lowercasing, no renaming.
+Add an optional parameter to `build_fundamentals`, `build_growth` and `build_valuation` letting
+the caller restrict which panels are drawn — e.g. `concepts: list[str] | None = None`, where
+`None` means "everything the config says is visible" (today's behaviour, unchanged).
 
-## Step 2 — Design decisions to make explicit before implementing
+Design points to decide and state:
 
-State your approach for each of these (they're real design choices, not implementation
-details to skip past):
+1. **`is_hidden` stays authoritative.** An explicit list is a *narrowing* filter applied on top of
+   the existing visibility rule, never a way around it: a caller asking for a concept that
+   `is_hidden` hides for that ticker must not get it. State how you enforce this and make sure the
+   same rule holds in all three builders.
+2. **Unknown or already-hidden entries in the caller's list.** Decide the behaviour (ignore
+   silently, ignore with a printed note, or refuse the call) and apply it consistently. Note that
+   a UI-driven caller will routinely pass concepts that are fine for one ticker and hidden for
+   another — so refusing outright is probably wrong; say what you chose and why.
+3. **Ordering.** Decide whether the rendered order follows the config list order (recommended —
+   it keeps a chart's panel order stable no matter what order the UI hands over) or the caller's
+   list order. State the choice.
+4. **Empty result.** A caller narrowing down to nothing (or to only hidden concepts) must hit the
+   existing "nothing to build" path and get `None`, with the wrapper still writing neither file.
 
-1. **File naming for the dual output.** Given the current single `output_path` parameter,
-   decide how the HTML and JSON outputs are named/organized (e.g. same stem, `.html`/`.json`
-   extensions) and whether the function signature needs to change to reflect this, or whether
-   a single `output_path` (treated as a stem) is cleaner. Note that current callers likely
-   pass a `.png` path — decide and document how that's handled at the call sites.
-2. **Subplot grid equivalent.** Match `_make_grid`'s row/column logic using Plotly's
-   `make_subplots`, preserving the same layout behavior. Plotly has no `ax.axis("off")` for
-   unused trailing grid cells — prefer simply not creating trailing empty subplots over
-   creating-then-hiding them.
-3. **`symlog`.** Confirmed current state: **no metric in `FUNDAMENTALS_TO_PLOT` sets the
-   symlog flag** (every 5th tuple element is `False`), and `plot_valuation` never passes it.
-   The decision therefore reduces to: (a) drop the `symlog` parameter entirely (simpler,
-   honest — nothing uses it), or (b) keep the parameter for signature parity with a
-   documented plan (e.g. log-modulus transform) should it ever be enabled. Pick one, state
-   it in the report, and do not spend effort implementing a symlog rendering path that
-   nothing exercises.
-4. **"Keine Daten" placeholder.** Plotly equivalent of the current `ax.text(...)` box — a
-   Plotly annotation on an otherwise-empty subplot, styled consistently with the current red
-   "keine Daten" treatment.
-5. **Percent formatting, reference lines (`axhline`), and the harmonic/arithmetic mean
-   legend label.** Map each to its Plotly equivalent (`tickformat`, `add_hline` or shapes,
-   and a legend entry or annotation for the mean line) — confirm the mean-line calculation
-   itself (`harmonic_mean` from `metrics.py`) is reused unchanged, not reimplemented. Note:
-   `add_hline`/shapes don't produce legend entries by default — if the current mean-line
-   label (e.g. `Ø (harm.) 23.4`) is conveyed via legend today, decide how it's conveyed in
-   Plotly (legend-carrying line trace vs. annotation) and keep the displayed number
-   identical.
-6. **`plot_metric_dual`'s TTM+quarterly overlay.** For Phase 1, preserve the current behavior
-   (both series always visible, distinguished by line weight/opacity) as two Plotly traces on
-   the same subplot — the button-based toggle between them is explicitly Phase 2's job, not
-   this one.
-7. **`plot_growth`'s degenerate cases (currently underspecified in the code — define them
-   explicitly):**
-   - If `growth_column not in facts.columns`, the current code silently `return`s and
-     **produces no file at all**. In the dual-output world, decide the behavior (skip both
-     files consistently and log a warning is acceptable; producing one of the two files is
-     not) and document it — callers and the future web app must be able to rely on
-     "either both files exist or neither does".
-   - `plot_growth` does **not** use `_make_grid`; if every panel were hidden for a ticker,
-     `plt.subplots(1, 0)` would crash today. Define the zero-panel behavior for the Plotly
-     version (skip-with-warning or placeholder figure — pick one, apply it consistently
-     across all three plot functions).
+The grid must re-tile automatically: `_make_grid` already derives rows/cols from the panel count,
+so a reduced list should produce a tighter grid with no extra work. Confirm that it does.
 
-## Step 3 — Implement
+`build_ticker_comparison` is out of scope here — it already takes its concept explicitly.
 
-Build the Plotly versions of `plot_metric`, `plot_metric_dual`, `plot_fundamentals`,
-`plot_growth`, and `plot_valuation`, following the design decisions from Step 2. Keep the same
-function names and call signatures where reasonably possible so `main.py`'s callers need
-minimal changes — but do change what's necessary for the dual-output requirement, and update
-every caller found in Step 1 accordingly.
+## Step 2 — Make figure sizing controllable
 
-No global state: no module-level figure registries, no reliance on any Plotly/pyplot global —
-each function builds, writes, and returns/discards its own figure object.
+All three per-ticker builders currently hardcode `width=500*cols` and a per-chart row height;
+`build_ticker_comparison` hardcodes `width=900, height=520`. A fixed `width` in the layout fights
+`use_container_width=True` in a web frontend.
 
-Remove the matplotlib import and usage from `figures.py` once the migration is complete —
-confirm no other file in the project still depends on the matplotlib-based versions before
-removing them (grep, don't assume).
+Make width and height controllable, defaulting to exactly today's values so file output is
+unchanged. Decide and state the shape: explicit `width`/`height` parameters, or a single flag
+meaning "let the container decide the width" that omits `width` from the layout. Whichever you
+pick, it must be possible for a caller to get a figure with **no** `width` set in
+`layout` — that is the case the web frontend needs — and the report should show the produced
+layout for both the default and the responsive call.
 
-## Step 4 — Verify programmatically, not visually
+## Step 3 — Anchor the valuation window to a caller-supplied date
 
-For at least three tickers spanning different profiles (pick ones with meaningfully different
-hidden-metric sets, e.g. one `standard`, one `financial` or `insurance_pc` with many standard
-metrics hidden, and one `reit`), confirm:
-- The set of panels/concepts actually rendered in the new Plotly output matches exactly what
-  `is_hidden()` + `FUNDAMENTALS_TO_PLOT` / `VALUATIONS_TO_PLOT` / **`GROWTH_PANELS`** (not
-  `get_growth_panels()`) says should be shown — compare programmatically (e.g. inspect
-  `fig.data`/subplot titles against the expected list), not by looking at a picture.
-- Both the HTML and JSON outputs are actually produced, are non-empty, and the JSON is valid
-  and parses back into a structure describing the same figure (e.g. via
-  `plotly.io.from_json` and re-checking the trace/subplot count).
-- Reference lines, percent formatting, and mean-line labels appear with the correct values
-  (spot-check actual numbers against the source dataframe for a couple of panels — including
-  at least one harmonic-mean multiple from `HARMONIC_MEAN_CONCEPTS` and one arithmetic-mean
-  one, since both paths exist).
-- The `plot_growth` degenerate-case behavior from Step 2.7 behaves as designed (test it,
-  e.g. by passing a dataframe without the growth column).
+`build_valuation` and `build_ticker_comparison` both compute
+`pd.Timestamp.today() - pd.DateOffset(years=years)`. Add an `as_of: pd.Timestamp | None = None`
+parameter to both: `None` keeps today's behaviour (anchor on `pd.Timestamp.today()`), a supplied
+date anchors the window on that date instead.
 
-There is no symlog verification case — no current metric uses it (see Step 2.3).
+Two things to get right:
+
+1. **The cutoff and the upper bound.** Today the filter is one-sided (`end >= cutoff`), which is
+   fine when the anchor is today because no data lies in the future. With a historical `as_of`,
+   a one-sided filter would still show data *after* the chosen date, which defeats the purpose.
+   Decide whether supplying `as_of` should also bound the window above (`end <= as_of`) —
+   recommended: yes — and state the reasoning, since this is the difference between "the last 5
+   years as of that date" and "everything since that date".
+2. **One expression, two call sites.** `build_valuation` and `build_ticker_comparison` must use
+   the same windowing logic, not two copies that can drift. Factor it into a small helper if that
+   is the clean way to guarantee it.
+
+The wrappers `plot_valuation` / `plot_ticker_comparison` should pass the parameter through.
+
+## Step 4 — Housekeeping (small, verify anyway)
+
+- Remove the unused `from datetime import datetime` import (line ~14) — confirm by grep that
+  nothing in the file uses it.
+- `_make_grid`'s `n == 0` branch is unreachable now that every builder guards on an empty panel
+  list before calling it. Either remove the branch or leave it with a comment saying it is a
+  defensive no-op — state which and why. Do not change the non-zero logic.
+
+## Step 5 — Verify
+
+- **Default-path non-regression, the decisive check:** for at least three tickers spanning
+  different profiles (e.g. one `standard`, one `financial`, one `reit`), all three chart types,
+  confirm that calling each builder **with no new parameters** produces output byte-identical to
+  what it produced before this task (compare `fig.to_json()` against a baseline captured before
+  the change). Same for `build_ticker_comparison` on a real comparison.
+- **Panel narrowing works and the grid re-tiles:** pick a ticker with many visible fundamentals
+  panels, request a subset, and confirm the rendered subplot titles equal the expected narrowed
+  set, that the grid dimensions match `_make_grid(len(subset))`, and that no trailing empty cells
+  were created.
+- **`is_hidden` cannot be bypassed:** request a concept that is hidden for the ticker's profile
+  (e.g. `p_ffo` for a `standard` ticker, `efficiency_ratio` for a non-`financial` one) and confirm
+  it is not rendered, and that the Step 1.2 behaviour you chose is what actually happens.
+- **Narrowing to nothing** returns `None` and the wrapper writes neither file.
+- **Responsive sizing:** confirm a figure can be produced with no `width` key in its layout, and
+  that the default call still carries exactly today's width/height values.
+- **`as_of` window:** for a real ticker, confirm that a historical `as_of` produces a strictly
+  different, correctly bounded x-range than the default call (check the actual first and last
+  x-values against the expected window, both bounds), that `as_of=None` reproduces today's
+  x-range exactly, and that `build_valuation` and `build_ticker_comparison` agree on the same
+  window for the same metric/ticker/date.
 
 ## Output
 
-One file, `plotly_migration_phase1_report.md`: the design decisions from Step 2 (with
-reasoning, especially for the symlog keep-or-drop call and the degenerate-case behavior),
-what was implemented, the verification results from Step 4, and confirmation of what was
-removed (matplotlib usage) and why it was safe to remove.
+One file, `figures_parametrization_report.md`: the design decisions from Steps 1–3 with
+reasoning (especially the unknown/hidden-entry handling and the `as_of` upper-bound question),
+what was implemented, the housekeeping verdict from Step 4, and the Step 5 verification results
+including the byte-identical default-path evidence.
 
-No scratch scripts left behind. Do not touch `config.py`'s plotting-selection logic, and do
-not implement any Phase 2/3/4 capability (toggle buttons, ticker overlays, or cross-sectional
-plots) in this task — this is the rendering-backend swap only.
+No scratch scripts left behind.

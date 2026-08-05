@@ -6,6 +6,141 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-08-05 — Figure builders parametrized: panel selection, sizing, as-of window
+
+Three decisions the builders used to make internally are now caller-supplied,
+each unblocking a planned frontend feature. `figures.py` only; `main.py`
+untouched, its six call sites pass none of the new parameters.
+
+**Panel selection** (`concepts=None`) narrows what is drawn. The rule lives in
+one shared `_select_concepts` helper, and `is_hidden` stays authoritative *by
+construction*: the catalogue is visibility-filtered first and the caller's list
+only intersects what survives, so there is no path by which a requested name
+reaches the render loop unchecked. Unknown or hidden requests are ignored with a
+printed note rather than refused — a UI hands one selection to several tickers
+and a concept fine for one is routinely hidden for another (`fcf_margin` is
+visible for `standard`, hidden for `financial`), so refusing would turn normal
+operation into an error. Order follows the config catalogue, never the caller's
+list, so panel order is stable however the UI sends it. The grid re-tiles for
+free (9 panels 3x3 -> 3 panels 1x3, no trailing cells).
+
+**Sizing** via `width`/`height` parameters. Needed three states — unchanged,
+omit the key, use this number — and `None` had to mean "omit" (that is what
+`use_container_width` requires), so "unchanged" is a named `KEEP` sentinel.
+
+**`as_of`** anchors the valuation window, shared by `build_valuation` and
+`build_ticker_comparison` through one `_window_frame` helper. A supplied `as_of`
+bounds the window **above** as well: one-sided filtering would answer
+"everything since that date" instead of "the last N years as of that date" and
+show data the chosen date could not have known — the opposite of what an as-of
+view is for. The upper bound is applied only when `as_of` is given.
+
+Also removed the unused `datetime` import; kept `_make_grid`'s unreachable
+`n == 0` branch as a documented defensive no-op (without it `cols` becomes 0 and
+the next line raises `ZeroDivisionError`).
+
+**Non-regression proved by byte comparison against a baseline captured before
+the edits** (with the dataframes pickled, so yfinance re-adjustment cannot
+create a false positive): all 21 per-ticker figures and all 4 comparison figures
+byte-identical. A first run failed on the comparisons only — `data` and `layout`
+compared equal at identical length, the difference was purely serialised key
+*order* after `width`/`height` moved to the end of the layout dict. Fixed by
+restoring the original keyword position (splatting `_size(...)` in place) rather
+than by weakening the claim. Details in `figures_parametrization_report.md`.
+
+---
+
+## 2026-08-05 — Comparison cleanup: batch pre-rendering removed, build/write split introduced
+
+Phase 3's comparison *rendering* was right; its *batch pre-rendering of fixed
+peer groups* was wired for a world without a frontend. Removed
+`config.COMPARISON_GROUPS` and `main.render_comparison_charts` with both call
+sites, the timing entry, and two now-dead imports — six touchpoints, found by
+grep rather than by assuming the two call sites were all. Nothing in the project
+ever read a figure file back, so existing `figures/compare_*` files just go
+stale (same treatment Phase 1 gave the old PNGs).
+
+Introduced the **`build_*` returns a figure / `plot_*` writes it** convention and
+applied it to all four chart functions. The split was mechanical for every one
+of them — each built a figure through one linear path and handed it to
+`_write_figure` as its last statement — so all were cut rather than proposed;
+`plot_metric`/`plot_metric_dual` need no split, they mutate a figure passed in.
+Proof the wrappers add nothing: `build_*(...).to_json()` is **byte-identical**
+to the file `plot_*` writes, for 9 ticker x chart combinations.
+
+Exclusion information now reaches callers through three channels from one
+computation: the returned `excluded` list (Python callers), `fig.layout.meta`
+(survives `to_json`, so a JS consumer of the `.json` gets it), and the existing
+red on-chart annotation (standalone HTML readers). The returned tuple has to be
+primary because in the degenerate case there is no figure to hang meta on —
+`build_ticker_comparison` returns `(None, excluded)`, where a non-empty
+`excluded` means "everything was dropped" (a data outcome) and an empty one
+means "the request was rejected" (unknown concept, fewer than 2 tickers).
+
+Dropped the hard `MAX_COMPARISON_TICKERS` refusal from the rendering layer — a
+readability limit belongs in the UI picker, and a hard refusal deep in rendering
+turns a UI mistake into a missing chart. Kept as advisory
+`SUGGESTED_MAX_COMPARISON_TICKERS = 3` (renamed so nobody re-adds enforcement
+against it), kept the enforced minimum of 2, and widened the palette 3 -> 10 so
+palette width cannot silently become the real cap; the first three colors are
+unchanged and indexing still wraps rather than raising. Details in
+`comparison_cleanup_report.md`.
+
+---
+
+## 2026-08-05 — Plotly migration Phase 3: multi-ticker comparison charts
+
+New `plot_ticker_comparison(tickers, concept, data, output_path, years=5)` in
+`figures.py` — one metric, one line per ticker, 2-5 tickers, reusing Phase 1's
+scaffolding and dual HTML+JSON output. `config.py`, `main.py` and the four
+existing plot functions untouched. No buttons: Plotly's legend already does
+per-trace show/hide, which is why Phase 2's `updatemenus` were rolled back.
+
+The load-bearing decision was **scope**: comparisons are allowed across
+profiles, gated per ticker by `is_hidden(ticker, concept)` rather than by a
+same-profile rule. The measurement that settled it — six metrics (`roe`,
+`revenue_yoy_growth`, `pe_to_revenue_growth`, all three growth panels) are
+visible in **all 24** profiles, so a profile-equality rule would block sound
+comparisons; and `p_tbv` is visible in exactly `financial` + `insurance_life` +
+`insurance_pc`, so it would also block bank-vs-insurer, which is meaningful.
+Meanwhile for narrow metrics (`p_ffo` 1 profile, `efficiency_ratio` 1, `dio` 3)
+`is_hidden` already blocks the nonsense. The right granularity is metric x
+profile, which `config.py` already encodes — a second, coarser gate would only
+add false negatives.
+
+Consequently the visibility-mismatch case is real, and a hidden ticker is
+**dropped but never silently**: printed *and* written onto the chart as a red
+annotation naming the responsible profile, so the HTML stays self-documenting
+without console output. Chart furniture (ylabel, ref line, percent, and whether
+the 5-year valuation cutoff applies) is looked up from the same config tuples
+the single-ticker charts read, so a comparison chart cannot drift from them —
+verified element-wise: `pe_ratio` for JPM/BAC has x-values identical to their
+own `plot_valuation` traces, while fundamentals metrics keep full history.
+Per-ticker mean lines omitted; metric-level ref lines kept.
+
+Wired into `main.py` via `config.COMPARISON_GROUPS` (8 starter peer groups, cap
+3 tickers each) and `render_comparison_charts()`, called from both `main()` and
+`run_full_refresh()`; concepts route to the right dataframe through
+`figures.concept_source()`, and a group with a ticker missing from the run is
+skipped whole rather than drawn partially.
+
+**Two pre-existing data gaps surfaced by the comparison charts** (found because
+a comparison names what it drops, not fixed here): `DG` reports no
+`AccountsReceivable` facts at all and `DLTR` only 2, so `cash_conversion_cycle`
+is empty for both — the configured chart was moved to `dio`. And a scan of all
+501 cached `companyfacts` payloads found **2 tickers with none of the three
+`SharesOutstanding` candidate tags**: `V` (only the dei cover-page tag
+`EntityCommonStockSharesOutstanding`) and `STZ` (no usable share tag at all).
+Both have 0 rows for `SharesOutstanding` and `EPS_TTM_CALC`, and 0 non-NaN
+`pe_ratio` / `ev_ebitda` / `pfcf_ratio` — blank P/E charts and a market cap
+resting entirely on the yfinance fallback. Admitting
+`EntityCommonStockSharesOutstanding` as a last-resort tag would change the
+series from a period weighted average to an as-of-filing point-in-time figure
+and interacts with the yfinance-vs-EDGAR share resolution, so it needs its own
+task. Details in `plotly_migration_phase3_report.md`.
+
+---
+
 ## 2026-08-03 — Plotly migration Phase 1: rendering backend swapped, selection logic untouched
 
 `figures.py` rewritten from matplotlib to Plotly. Same five functions (`plot_metric`,
