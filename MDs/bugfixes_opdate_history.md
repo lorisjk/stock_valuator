@@ -6,6 +6,63 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-08-06 — Data inspection layer: the export completes, the app gets a Data tab
+
+The charts could not show the data behind them. `export_for_app()` now also writes
+`facts_full.parquet` (all 69 concepts, not the 3 the growth chart draws) and
+`current_snapshot.parquet`, and `app.py` gained a Data tab that walks the chain from
+raw filing facts to the final snapshot as downloadable tables. Schema 1 → 2.
+
+**The snapshot frame was measured, not assumed:** it is **long** — `ticker`, `end`,
+`concept`, `value`, one row per `(ticker, concept)`, 24–41 concepts per ticker by
+profile, with a single **constant** `end` (the as-of date, not a period end). So the
+snapshot section renders concept/value directly: that already *is* the transposed
+view, and pivoting would give one row × 40 columns with nothing to compare it to.
+
+**Two classification rules, both of which the obvious version gets wrong:**
+
+1. **Flags.** Neither `config.py` nor `quality.py` has a registry — `quality.py`'s
+   "flags" are unrelated EDGAR *coverage* warnings, and "absent from `METRICS`"
+   catches 16 concepts of which only 5 are flags (it also excludes `rotce`,
+   `effective_tax_rate` and the nine `*_quarterly`). A `_flag` suffix match alone is
+   **wrong, not just inelegant**: it misses `fcf_exceeds_ebitda` and
+   `inorganic_contaminated`. So the rule is name-based, lives in one place, and is
+   validated against the data — it agrees exactly with "every value in {0,1}" across
+   `metrics_long`. The data test is not *used* as the rule because it misfires
+   elsewhere: the snapshot's `shares_basis` is 0/1 but is a code, not a flag.
+2. **Raw vs derived facts.** The `_TTM`/`_QUARTERLY`/`_CALC` suffixes are not
+   sufficient — `PPNR`, `CoreOperatingEarnings` and `TangibleEquity` are derived and
+   carry none. The structural rule is exact: a concept is raw iff it is a key of
+   `get_concept_candidates(ticker)`, since those are the names actually requested
+   from EDGAR. Never contradicts the suffix rule, strictly better where those three
+   appear.
+
+**Display formatting is separated from export precision structurally**, not by
+convention: the pivot returns numbers, `format_for_display` returns a *separate*
+string frame used only by `st.dataframe`, and downloads read the numeric frame.
+`percent` from the registry covers the metric frames; facts fall back to the
+column's own magnitude, which puts `Assets` at `4.90T` and leaves
+`DividendsPerShare_TTM` at `5.9000` without a per-concept table that would go stale.
+
+**Fixed while verifying:** the missing-export branch ended in `st.stop()`, which only
+raises inside a script run — headlessly the page fell through into a
+`FileNotFoundError`. Now `st.stop()` **and** `return`.
+
+**Two traps worth remembering.** `pivot_table`'s default `dropna=True` silently drops
+all-null columns; here an all-null column is the finding (AZO's `roe`, `rotce` and
+`debt_to_equity` are null in all 72 periods because its equity is negative), so
+`dropna=False` is load-bearing. And **importing `streamlit` swaps plotly's default
+template**, shrinking every serialised figure by a constant 3,224 B — which looks
+exactly like a regression until you notice the delta is identical across every
+ticker and chart type.
+
+Size: `facts_full.parquet` is 13.7 MB extrapolated to 501 tickers, and that is an
+upper bound — measured bytes/ticker falls from 34,619 at one ticker to 28,691 at
+eight as Parquet's dictionary encoding amortises. Full detail in
+`data_tab_report.md`.
+
+---
+
 ## 2026-08-05 — Export layer + Streamlit prototype: the batch/read split goes live
 
 `main.export_for_app()` writes the frontend's inputs at the end of

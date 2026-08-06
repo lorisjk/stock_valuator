@@ -25,11 +25,27 @@ FRAME_FILES = {
     "valuation": "valuation_history.parquet",
     "growth": "facts_growth.parquet",
 }
+# The data tab reads the unnarrowed frames. facts_full deliberately duplicates
+# facts_growth: the charts want the 3 growth concepts, the data tab wants a raw
+# concept next to its _TTM derivation, which is what makes the TTM auditable.
+DATA_FILES = {
+    "facts": "facts_full.parquet",
+    "metrics": "metrics_long.parquet",
+    "valuation": "valuation_history.parquet",
+    "snapshot": "current_snapshot.parquet",
+}
 CHART_LABELS = {
     "fundamentals": "Fundamentals",
     "growth": "Growth (YoY)",
     "valuation": "Valuation",
 }
+
+# How many period columns the table and the copy block show by default. The
+# table gets 4 years of quarters; the copy block is deliberately smaller,
+# because a full facts table pasted into a chat is already near the practical
+# limit and the recent periods are what a question is usually about.
+DEFAULT_TABLE_PERIODS = 16
+DEFAULT_COPY_PERIODS = 8
 
 
 # --- loading -----------------------------------------------------------------
@@ -37,7 +53,8 @@ CHART_LABELS = {
 # cached figure would silently outlive the widget state that produced it.
 
 def missing_files() -> list[str]:
-    needed = list(FRAME_FILES.values()) + ["universe.parquet", "meta.json"]
+    needed = sorted(set(FRAME_FILES.values()) | set(DATA_FILES.values())
+                    | {"universe.parquet", "meta.json"})
     return [n for n in needed if not os.path.exists(os.path.join(APP_DATA_DIR, n))]
 
 
@@ -75,6 +92,236 @@ def metric_options(chart: str, ticker: str | None) -> tuple[list[str], dict[str,
     return [i for i, _ in pairs], {i: label for i, label in pairs}
 
 
+# --- data inspection ---------------------------------------------------------
+
+def pivot_ticker(frame: pd.DataFrame, ticker: str,
+                 value_column: str = "value") -> pd.DataFrame:
+    """One ticker's long frame as rows = period end (newest first), cols = concept.
+
+    Returns raw, unrounded numbers -- downloads and the copy block read this,
+    display formatting is applied separately in format_for_display().
+
+    dropna=False is load-bearing: a concept that exists for the ticker but is
+    null in every period must stay as an all-null column. Whether a metric is
+    "not applicable to this business model" or "extraction failed" is the
+    question this tab exists to answer, and dropping the column would answer
+    neither.
+    """
+    columns = ["end", "concept", value_column]
+    sub = frame.loc[frame["ticker"] == ticker, columns]
+    if sub.empty:
+        return pd.DataFrame()
+    wide = sub.pivot_table(index="end", columns="concept", values=value_column,
+                           aggfunc="first", dropna=False)
+    wide = wide.sort_index(ascending=False)
+    wide.columns.name = None
+    return wide
+
+
+# metrics_long mixes quality flags in among the metrics, and neither config.py
+# nor quality.py offers a way to tell them apart. METRICS excludes the flags, but
+# it also excludes rotce, effective_tax_rate and the nine *_quarterly series, so
+# "absent from METRICS" is not a flag test. quality.py's "flags" are an unrelated
+# thing (EDGAR coverage warnings that never reach these frames). So the rule is
+# name-based and lives only here. The suffix alone is not enough -- two flags
+# carry none -- hence the explicit pair; the suffix then widens the set on its
+# own if the pipeline gains another *_flag.
+QUALITY_FLAG_CONCEPTS = {"fcf_exceeds_ebitda", "inorganic_contaminated"}
+
+
+def is_quality_flag(concept: str) -> bool:
+    return concept.endswith("_flag") or concept in QUALITY_FLAG_CONCEPTS
+
+
+_FACT_SUFFIXES = ("_CALC", "_TTM", "_QUARTERLY")
+
+
+def fact_is_derived(ticker: str, concept: str) -> bool:
+    """Did the pipeline compute this concept, or fetch it from EDGAR?
+
+    Structural rather than a suffix match: the names the pipeline asks EDGAR for
+    are exactly get_concept_candidates(ticker)'s keys, so anything else in the
+    facts frame was derived. That catches PPNR, CoreOperatingEarnings and
+    TangibleEquity, which are derived but carry no suffix -- a suffix rule calls
+    all three raw.
+    """
+    return concept not in config.get_concept_candidates(ticker)
+
+
+def fact_base(concept: str) -> str:
+    """Concept name with the derivation suffixes stripped, so that Revenue and
+    Revenue_TTM sort next to each other -- comparing them is how the TTM
+    derivation gets audited."""
+    base = concept
+    changed = True
+    while changed:
+        changed = False
+        for suffix in _FACT_SUFFIXES:
+            if base.endswith(suffix) and len(base) > len(suffix):
+                base = base[: -len(suffix)]
+                changed = True
+    return base
+
+
+def order_fact_columns(ticker: str, concepts) -> list[str]:
+    """Grouped by base concept, raw before its own derivations."""
+    return sorted(concepts, key=lambda c: (fact_base(c), fact_is_derived(ticker, c), c))
+
+
+# --- display formatting ------------------------------------------------------
+# Kept strictly apart from the numbers: format_for_display returns a frame of
+# strings that is only ever handed to st.dataframe. Downloads and copy blocks
+# are produced from the numeric frame, so they carry full precision.
+
+_MAGNITUDES = ((1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K"))
+# Above this, a column is treated as absolute (currency, share counts) and gets
+# a scaled unit; below it as a ratio and gets fixed decimals. Per column, from
+# the column's own maximum, so one column never mixes two treatments.
+ABSOLUTE_THRESHOLD = 1e4
+
+
+def _format_absolute(value: float) -> str:
+    if pd.isna(value):
+        return ""
+    for cutoff, suffix in _MAGNITUDES:
+        if abs(value) >= cutoff:
+            return f"{value / cutoff:,.2f}{suffix}"
+    return f"{value:,.2f}"
+
+
+def _format_ratio(value: float, percent: bool) -> str:
+    if pd.isna(value):
+        return ""
+    return f"{value * 100:.2f}%" if percent else f"{value:.4f}"
+
+
+def format_for_display(wide: pd.DataFrame) -> pd.DataFrame:
+    """Numeric pivot -> strings for on-screen reading. Never used for export.
+
+    A concept registered with percent=True is shown as a percentage; that covers
+    the metric frames. The facts frame has no registry entry for its concepts, so
+    the fallback is the column's own magnitude -- which puts Revenue and Assets
+    in scaled units and leaves EPS_TTM_CALC and DividendsPerShare_TTM as plain
+    decimals, without needing a per-concept table that would go stale.
+    """
+    if wide.empty:
+        return wide
+    out = {}
+    for concept in wide.columns:
+        column = wide[concept]
+        metric = config.METRICS_BY_ID.get(concept)
+        if metric is not None and metric.percent:
+            out[concept] = column.map(lambda v: _format_ratio(v, True))
+        elif column.abs().max() >= ABSOLUTE_THRESHOLD:
+            out[concept] = column.map(_format_absolute)
+        else:
+            out[concept] = column.map(lambda v: _format_ratio(v, False))
+    display = pd.DataFrame(out, index=wide.index)
+    display.index = display.index.strftime("%Y-%m-%d")
+    display.index.name = "end"
+    return display
+
+
+def to_csv_text(wide: pd.DataFrame) -> str:
+    """Full precision, index included -- for downloads and the copy block."""
+    return wide.to_csv(index=True, lineterminator="\n")
+
+
+def render_data_section(title: str, wide: pd.DataFrame, ticker: str, slug: str,
+                        periods: int, copy_periods: int, caption: str = "") -> None:
+    """One section of the data tab: table, download, copy block."""
+    st.subheader(title)
+    if caption:
+        st.caption(caption)
+    if wide.empty:
+        st.info("No rows for this ticker in this frame.")
+        return
+
+    shown = wide.head(periods)
+    empty_columns = int(shown.isna().all().sum())
+    st.caption(
+        f"{len(shown)} of {len(wide)} periods · {shown.shape[1]} concepts"
+        + (f" · {empty_columns} null in every period shown — kept on purpose, "
+           "an empty column is a finding" if empty_columns else "")
+    )
+    st.dataframe(format_for_display(shown), width="stretch")
+
+    st.download_button(
+        "Download CSV", to_csv_text(shown), file_name=f"{ticker}_{slug}.csv",
+        mime="text/csv", key=f"dl_{slug}",
+    )
+    copied = wide.head(copy_periods)
+    text = to_csv_text(copied)
+    with st.expander(f"Copy for an LLM — {len(copied)} periods, ~{len(text):,} characters"):
+        st.code(text, language="text")
+
+
+def render_flag_section(wide: pd.DataFrame, ticker: str, periods: int) -> None:
+    """Quality flags get their own presentation, not columns among the ratios.
+
+    A flag is the pipeline saying where it is unsure, and a column of zeros
+    between two ratios buries exactly that. The summary answers the question a
+    0/1 column makes you reconstruct by eye: how often, and how recently.
+    """
+    if wide.empty:
+        st.info("No quality flags recorded for this ticker.")
+        return
+    rows = []
+    for concept in wide.columns:
+        column = wide[concept].dropna()
+        raised = column[column == 1.0]
+        rows.append({
+            "flag": concept,
+            "raised": int(len(raised)),
+            "periods evaluated": int(len(column)),
+            "most recent": raised.index.max().strftime("%Y-%m-%d") if len(raised) else "—",
+        })
+    st.dataframe(pd.DataFrame(rows).set_index("flag"), width="stretch")
+    with st.expander("Per-period flag values"):
+        shown = wide.head(periods)
+        display = shown.astype("Float64").astype("string").fillna("")
+        display.index = shown.index.strftime("%Y-%m-%d")
+        st.dataframe(display, width="stretch")
+        st.download_button(
+            "Download CSV", to_csv_text(shown), file_name=f"{ticker}_flags.csv",
+            mime="text/csv", key="dl_flags",
+        )
+
+
+def render_snapshot_section(snapshot: pd.DataFrame, ticker: str) -> None:
+    """The snapshot is long with one row per (ticker, concept) and a single
+    constant `end`, so the ticker's slice is already a concept/value list --
+    which is the transposed view. Pivoting it would produce one row and ~40
+    columns that scroll sideways, and would add nothing: there is no second
+    period to compare against.
+    """
+    st.subheader("Current snapshot")
+    sub = snapshot.loc[snapshot["ticker"] == ticker, ["concept", "value", "end"]]
+    if sub.empty:
+        st.info("No snapshot row for this ticker.")
+        return
+    as_of = sub["end"].iloc[0]
+    st.caption(f"{len(sub)} concepts · as of {as_of:%Y-%m-%d} · "
+               "one row per concept, so a profile that does not apply is simply absent")
+
+    table = sub[["concept", "value"]].sort_values("concept").set_index("concept")
+    display = table.copy()
+    display["value"] = [
+        _format_ratio(v, True) if (config.METRICS_BY_ID.get(c) is not None
+                                   and config.METRICS_BY_ID[c].percent)
+        else (_format_absolute(v) if abs(v) >= ABSOLUTE_THRESHOLD else _format_ratio(v, False))
+        for c, v in zip(table.index, table["value"])
+    ]
+    st.dataframe(display, width="stretch")
+    st.download_button(
+        "Download CSV", table.to_csv(index=True, lineterminator="\n"),
+        file_name=f"{ticker}_snapshot.csv", mime="text/csv", key="dl_snapshot",
+    )
+    text = table.to_csv(index=True, lineterminator="\n")
+    with st.expander(f"Copy for an LLM — ~{len(text):,} characters"):
+        st.code(text, language="text")
+
+
 def render(fig, empty_message: str) -> None:
     if fig is None:
         st.info(empty_message)
@@ -86,6 +333,69 @@ def render(fig, empty_message: str) -> None:
     st.plotly_chart(fig, width="stretch")
 
 
+def render_data_tab(ticker: str) -> None:
+    """The chain from raw filing facts to the final snapshot, as tables.
+
+    Every frame here is the pipeline's post-filter_hidden_rows output, so a
+    concept the ticker's profile suppresses is already absent -- this tab shows
+    what was extracted, never more than the charts are allowed to show.
+    """
+    st.write(
+        "Everything the charts are drawn from, for **" + ticker + "**, in pipeline order: "
+        "what EDGAR returned, what was derived from it, what was computed, and the "
+        "latest state. Every table downloads at full precision."
+    )
+
+    left, right = st.columns(2)
+    with left:
+        show_all = st.checkbox("Show all periods", value=False, key="data_all_periods")
+    with right:
+        fact_filter = st.radio(
+            "Facts", ["All", "Raw only", "Derived only"], horizontal=True,
+            key="data_fact_filter",
+            help="Raw is what EDGAR returned; derived is what the pipeline computed "
+                 "from it. Columns are grouped so a concept sits next to its own "
+                 "derivations.",
+        )
+    periods = 10**6 if show_all else DEFAULT_TABLE_PERIODS
+    if not show_all:
+        st.caption(f"Showing the most recent {DEFAULT_TABLE_PERIODS} periods.")
+
+    facts = pivot_ticker(load_frame(DATA_FILES["facts"]), ticker)
+    if not facts.empty:
+        keep = [c for c in facts.columns
+                if fact_filter == "All"
+                or (fact_filter == "Derived only") == fact_is_derived(ticker, c)]
+        facts = facts[order_fact_columns(ticker, keep)]
+    render_data_section(
+        "Raw & derived facts", facts, ticker, "facts", periods, DEFAULT_COPY_PERIODS,
+        caption="Straight from EDGAR, plus what the pipeline built on top. "
+                "`Revenue` next to `Revenue_TTM` is the TTM derivation, auditable.",
+    )
+
+    metrics = pivot_ticker(load_frame(DATA_FILES["metrics"]), ticker)
+    flags = metrics[[c for c in metrics.columns if is_quality_flag(c)]] if not metrics.empty else metrics
+    if not metrics.empty:
+        metrics = metrics[[c for c in metrics.columns if not is_quality_flag(c)]]
+    render_data_section(
+        "Calculated metrics", metrics, ticker, "metrics", periods, DEFAULT_COPY_PERIODS,
+        caption="What the pipeline computes from the facts above. Quality flags are "
+                "pulled out below rather than left as 0/1 columns between the ratios.",
+    )
+
+    st.subheader("Quality flags")
+    st.caption("Where the pipeline is unsure about its own numbers.")
+    render_flag_section(flags, ticker, periods)
+
+    render_data_section(
+        "Valuation history", pivot_ticker(load_frame(DATA_FILES["valuation"]), ticker),
+        ticker, "valuation", periods, DEFAULT_COPY_PERIODS,
+        caption="Multiples over time, priced off the closing price nearest each period end.",
+    )
+
+    render_snapshot_section(load_frame(DATA_FILES["snapshot"]), ticker)
+
+
 # --- page --------------------------------------------------------------------
 
 def main() -> None:
@@ -95,13 +405,18 @@ def main() -> None:
     absent = missing_files()
     if absent:
         st.error(
-            "No exported data found — the app reads what the pipeline wrote, it does "
-            "not compute anything itself.\n\n"
+            "Exported data is missing or out of date — the app reads what the pipeline "
+            "wrote, it does not compute anything itself.\n\n"
             f"Missing in `{APP_DATA_DIR}`: {', '.join(f'`{n}`' for n in absent)}\n\n"
             "Run the pipeline first: "
             "`python -c \"from main import run_full_refresh; run_full_refresh()\"`"
         )
+        # Both on purpose: st.stop() ends the run for the user, and the return
+        # makes the branch explicit rather than resting on st.stop() raising --
+        # which it does not do outside a script run, so without it this path
+        # falls through into a FileNotFoundError when exercised headlessly.
         st.stop()
+        return
 
     meta = load_meta()
     universe = load_frame("universe.parquet")
@@ -130,9 +445,9 @@ def main() -> None:
             as_of = pd.Timestamp(st.date_input("As of", value=pd.Timestamp.today().date()))
             st.caption("The valuation window runs backwards from this date and stops there.")
 
-    tab_fund, tab_growth, tab_val, tab_cmp = st.tabs(
+    tab_fund, tab_growth, tab_val, tab_cmp, tab_data = st.tabs(
         [CHART_LABELS["fundamentals"], CHART_LABELS["growth"],
-         CHART_LABELS["valuation"], "Comparison"]
+         CHART_LABELS["valuation"], "Comparison", "Data"]
     )
 
     with tab_fund:
@@ -194,6 +509,9 @@ def main() -> None:
             for dropped, reason in excluded:
                 st.warning(f"**{dropped}** not shown — {reason}")
             render(fig, "Pick at least two tickers that can show this metric.")
+
+    with tab_data:
+        render_data_tab(ticker)
 
 
 if __name__ == "__main__":

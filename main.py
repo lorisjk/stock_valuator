@@ -1439,7 +1439,8 @@ def write_full_refresh_report(
 # without importing main (the import direction is app -> figures -> config).
 APP_EXPORT_SUBDIR = "app"
 APP_EXPORT_DIR = os.path.join(DATA_DIR, APP_EXPORT_SUBDIR)
-APP_EXPORT_SCHEMA = 1
+# 2: added facts_full.parquet and current_snapshot.parquet for the data tab.
+APP_EXPORT_SCHEMA = 2
 
 
 def _write_parquet_atomic(df: pd.DataFrame, path: str) -> int:
@@ -1458,15 +1459,22 @@ def export_for_app(
     metrics_long: pd.DataFrame,
     valuation_history: pd.DataFrame,
     facts_out: pd.DataFrame,
+    snapshot: pd.DataFrame,
     requested_tickers: list[str],
     run_start: datetime,
     out_dir: str = APP_EXPORT_DIR,
 ) -> dict:
-    """Write the frontend's inputs: three chart frames, the universe, and meta.
+    """Write the frontend's inputs: the chart frames, the data-tab frames, the
+    universe, and meta.
 
     Parquet rather than CSV because `end` must survive as a real datetime --
     build_valuation and build_ticker_comparison compare it against a
     pd.Timestamp, and a CSV round-trip would turn it into a string.
+
+    facts_growth and facts_full are deliberately both written from the same
+    source frame: the charts read the narrow one (3 concepts, ~10x smaller), the
+    data tab reads the full one, where a raw concept sitting next to its _TTM
+    derivation is the whole point.
     """
     os.makedirs(out_dir, exist_ok=True)
 
@@ -1495,6 +1503,10 @@ def export_for_app(
             valuation_history, os.path.join(out_dir, "valuation_history.parquet")),
         "facts_growth.parquet": _write_parquet_atomic(
             facts_growth, os.path.join(out_dir, "facts_growth.parquet")),
+        "facts_full.parquet": _write_parquet_atomic(
+            facts_out.reset_index(drop=True), os.path.join(out_dir, "facts_full.parquet")),
+        "current_snapshot.parquet": _write_parquet_atomic(
+            snapshot.reset_index(drop=True), os.path.join(out_dir, "current_snapshot.parquet")),
         "universe.parquet": _write_parquet_atomic(
             universe, os.path.join(out_dir, "universe.parquet")),
     }
@@ -1509,7 +1521,7 @@ def export_for_app(
         "tickers_without_data": sorted(set(requested_tickers) - set(produced)),
         "rows": rows,
     }
-    # written last, so its presence means the four frames are already in place
+    # written last, so its presence means every frame above is already in place
     meta_tmp = os.path.join(out_dir, "meta.json.tmp")
     with open(meta_tmp, "w", encoding="utf-8") as fh:
         json.dump(meta, fh, indent=2)
@@ -1628,7 +1640,8 @@ def run_full_refresh():
         plot_times[ticker] = time.perf_counter() - t0
     print(f"Calculate + plot done: {calc_time + sum(plot_times.values()):.1f}s total.")
 
-    export_for_app(metrics_long, valuation_history, facts_out, active_tickers, run_start)
+    export_for_app(metrics_long, valuation_history, facts_out, snapshot,
+                   active_tickers, run_start)
 
     run_end = datetime.now()
 

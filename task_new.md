@@ -1,165 +1,152 @@
-# Task: Pipeline Export Layer + Streamlit Frontend Prototype
+# Task: Data Inspection Layer — Export Completion + App Data Tab
 
-**Depends on the `METRICS` registry task being complete and shipped.** Read
-`metrics_registry_report.md`, `figures_parametrization_report.md` and the current `figures.py`,
-`config.py` and `main.py` before changing anything.
+**Depends on the app export layer task being complete and shipped.** Read
+`app_export_layer_report.md`, `metrics_registry_report.md` and the current `main.py`, `app.py`,
+`config.py` before changing anything.
 
 ## Context
 
-`figures.py` is finished for a web frontend: the `build_*` functions return figure objects,
-accept an explicit `concepts` narrowing list, allow `width=None` for responsive rendering, and
-take an `as_of` anchor for the valuation window. `config.get_plottable_metrics()` enumerates
-selectable metrics per chart type with `is_hidden` already applied.
+The Streamlit prototype renders charts well. What it cannot do is show the **data behind them**,
+which for this project is not a secondary feature: showing coverage honestly — what was
+extracted, what is structurally not applicable, what failed — is the stated differentiator over
+commercial providers that buy standardized data and show no provenance.
 
-What does not exist yet is the **connection between the batch pipeline and a frontend**: the
-pipeline computes everything in memory and writes charts to disk, but nothing hands the
-dataframes over in a form a separate process can read.
+The goal is that a user looking at a ticker can walk the full chain from raw filing facts to the
+final snapshot, inspect any level as a readable table, download it, and paste it into an LLM.
 
-The target architecture is the batch/read split this project already decided on: `main.py` runs
-nightly and writes pre-computed data; the frontend process reads only that data and renders on
-demand. **No pipeline computation in the request path.**
+Two gaps block this today:
 
-**Explicitly NOT in this task:** no changes to `figures.py` or `config.py` (both are finished for
-this purpose — if you believe one needs a change, report it instead of making it), no Phase 4
-(cross-sectional/peer scatter), no `PROFILE_HIDDEN` refactor, no `SharesOutstanding` fix, no
-deployment/hosting work, no authentication, no styling beyond what is needed for the prototype to
-be usable.
+1. **`build_snapshot()`'s output is not exported.** It runs in the pipeline and is written as
+   `current_snapshot.csv`, but `export_for_app()` does not include it, so the app cannot show it.
+2. **`facts_growth.parquet` is narrowed to the three growth-chart concepts** (a correct decision
+   for charting, 18,120 → 1,705 rows). The data layer needs the full facts frame, which contains
+   both raw XBRL concepts (`Revenue`, `StockholdersEquity`, `Goodwill`, `LongTermDebt`, …) and
+   the pipeline's derived ones (`Revenue_TTM`, `FCF_QUARTERLY`, `EPS_TTM_CALC`, …) — that pairing
+   is precisely what makes the TTM derivation auditable.
+
+**Explicitly NOT in this task:** no changes to `figures.py`, no changes to the chart tabs beyond
+what is needed to add a new tab, no Phase 4, no `PROFILE_HIDDEN` refactor, no new metrics, no
+`SharesOutstanding` fix, no deployment or auth work.
 
 ---
 
-## Step 0 — Audit `run_full_refresh()` before touching it
+## Step 1 — Complete the export
 
-Read `run_full_refresh()` and `main()` in full and report their **current actual** behaviour —
-not what earlier reports said they did. Several tasks have modified `main.py` since this function
-was last examined end to end (the Plotly migration changed all six plot call sites; the
-comparison cleanup removed `render_comparison_charts`, its two call sites and its timing entry).
+Extend `export_for_app()` in `main.py`. Keep the existing five outputs unchanged, and add:
 
-Report specifically:
+| file | contents |
+|---|---|
+| `current_snapshot.parquet` | the snapshot frame `build_snapshot()` produces |
+| `facts_full.parquet` | the full facts frame — all concepts, not narrowed to growth panels |
 
-- The current execution order and what each stage produces.
-- **The exact names, shapes and dtypes of the three dataframes the chart builders consume** —
-  whatever `run_full_refresh` currently calls `metrics_long`, `valuation_history` and the facts
-  frame. Confirm the actual column names, in particular that the growth frame's column is
-  `yoy_growth` and that `end` is a real datetime dtype and not an object/string column.
-- What is currently written to disk, where, and in what format (CSV? Parquet? which directory?),
-  including anything written by `write_full_refresh_report`.
-- Whether `main()`'s ad-hoc path and `run_full_refresh()` have drifted apart — do they compute
-  the same things the same way, or has one been updated and the other not?
-- **Anything stale, dead, or inconsistent**: leftover names from removed features, timing
-  entries that no longer match the stages that exist, exclusions handled in two places,
-  hardcoded ticker lists, or steps whose output nothing consumes. Report these; fix only the ones
-  that are unambiguously dead code left behind by a previous task, and list anything you chose
-  not to touch with your reasoning.
+Requirements and things to decide:
 
-This audit goes in the report **before** the export design, because the export contract depends
-on what the frames actually are.
+1. **Inspect the snapshot frame's actual shape first** and report it: columns, dtypes, one row
+   per ticker or something else, and whether it is wide or long. Do not assume — the app's
+   rendering depends on it.
+2. **`facts_growth.parquet` stays** as it is. It is what the growth charts consume and it is
+   10.6× smaller; do not merge the two. State in the report that this is deliberate duplication
+   with a clear division of labour (charts vs. inspection).
+3. **Confirm what `filter_hidden_rows` did before the export.** The exported frames are
+   post-filter, which should mean a ticker's hidden metrics are already absent. Verify that
+   empirically for a `financial` and a `reit` ticker rather than assuming it — the data tab must
+   not become a way to see metrics that `is_hidden` deliberately suppresses.
+4. **File size.** Report the resulting size of `facts_full.parquet` for the run you test with,
+   and extrapolate to the full ~500-ticker universe. If it lands somewhere that would be a
+   problem to ship, say so with numbers rather than trimming silently.
+5. Extend `meta.json`'s row counts to cover the new files, and keep the write-then-`os.replace`
+   atomicity and the "meta.json written last" rule.
 
-## Step 1 — The export layer in `main.py`
+## Step 2 — Long-to-wide pivot helper in `app.py`
 
-Add a function (e.g. `export_for_app(...)`) that writes the frontend's inputs to disk, called at
-the end of `run_full_refresh()`.
+Every exported frame is long (`ticker`, `end`, `concept`, `value`), which is unreadable as a
+table and unusable for an LLM. Build one shared helper that pivots a long frame for a single
+ticker into **rows = period end, columns = concept**.
 
-**Format: Parquet, not CSV.** The decisive reason is dtype preservation: `build_valuation` and
-`build_ticker_comparison` compare `frame["end"]` against a `pd.Timestamp` cutoff, and a CSV
-round-trip turns `end` into a string, which either raises or — worse — compares wrong silently.
-Parquet also loads far faster, which matters because a Streamlit script re-runs on every widget
-interaction. If you find a concrete reason Parquet will not work here, report it rather than
-silently falling back to CSV.
+Design points:
 
-Write, at minimum:
+1. **Sort newest first.** A user opening the table wants the recent quarters, not 2009.
+2. **Missing values stay visibly missing.** Do not fill, do not drop columns that are entirely
+   empty for the ticker. A concept that is present in the frame but null for this ticker is
+   information — it is the difference between "not applicable to this business model" and
+   "extraction failed", and hiding it would defeat the purpose of this tab. (Concretely: `rotce`
+   is ~52% null for AAPL in the sample data.)
+3. **Display formatting vs. export precision must be separated.** On screen, raw fact values run
+   to `339000000.0` and ratios to many decimals; both are hard to read. Decide a display
+   treatment (e.g. thousands separators or scaled units for absolute values, fixed decimals for
+   ratios) — but **the download and the LLM copy block must carry full unrounded precision**.
+   State how you keep the two apart, and how you tell an absolute value from a ratio (the
+   `METRICS` registry's `percent` flag covers the metric frames; facts are a separate case —
+   say what you do there).
+4. Handle a ticker with no rows in a frame without raising.
 
-| file | contents | why the frontend needs it |
+## Step 3 — The data tab
+
+Add a new top-level tab alongside the existing chart tabs. It shows, for the currently selected
+ticker, four sections corresponding to the pipeline chain:
+
+| section | source | what it demonstrates |
 |---|---|---|
-| `metrics_long.parquet` | the fundamentals frame | `build_fundamentals` |
-| `valuation_history.parquet` | the valuation frame | `build_valuation` |
-| `facts_growth.parquet` | facts narrowed to `ticker`, `concept`, `end`, `yoy_growth` | `build_growth` — the full facts frame is large and the frontend needs only this |
-| `universe.parquet` | the tickers that actually produced data in this run | the ticker picker must not offer tickers that exist in `TICKER_PROFILES` but failed or were skipped in the run |
-| `meta.json` | run timestamp, ticker count, and whatever else identifies the run | the app shows the user how fresh the data is — this project treats data transparency as a differentiator, so it belongs in the UI, not just in a log |
+| Raw & derived facts | `facts_full` | what came out of EDGAR, and what the pipeline derived from it |
+| Calculated metrics | `metrics_long` | what the pipeline computes from those facts |
+| Valuation history | `valuation_history` | multiples over time |
+| Current snapshot | `current_snapshot` | the latest state, one row per ticker |
 
-Decide and state:
+Requirements:
 
-1. **Where these live** — reuse `DATA_DIR`, or a separate subdirectory so app inputs are not
-   mixed with existing CSV outputs. State the choice.
-2. **Whether existing CSV outputs stay.** Do not remove them in this task unless you have
-   confirmed nothing consumes them; if they are redundant, report that as a recommendation.
-3. **Atomicity.** A nightly run writing these files while the app is reading them can serve a
-   half-written file. Decide whether to write-then-rename (or another approach), and state it. A
-   prototype can accept the risk — but say so deliberately rather than not noticing it.
-4. **Whether `main()`'s ad-hoc path should also export.** Consider that an ad-hoc single-ticker
-   run would otherwise overwrite a full universe export with one ticker's data. State your
-   decision; refusing to export from the ad-hoc path is a legitimate answer.
+1. **Separate quality flags from metrics in the `metrics_long` section.** The frame mixes actual
+   metrics with binary flags — in the sample data, `buyback_distortion_flag`,
+   `fcf_exceeds_ebitda`, `inorganic_contaminated`, `low_tax_rate_flag` and `share_count_jump_flag`
+   sit alongside `roe` and `operating_margin`. Rendering 0/1 flags as columns between ratios is
+   noise, and worse, it buries information that matters: the flags are the pipeline telling the
+   user where it is unsure. Give them their own presentation. Decide how to identify them —
+   prefer something more robust than a `_flag` suffix match if the project offers one (check
+   `config.py` and `quality.py` first and say what you found); if a name-based rule is the only
+   option available, say so plainly and keep the rule in one place.
+2. **Distinguish raw from derived in the facts section.** The `_TTM` / `_QUARTERLY` / `_CALC`
+   suffixes carry that distinction. Make it visible (grouping, ordering, or a filter — your
+   call), because seeing `Revenue` next to `Revenue_TTM` is how a user audits the TTM logic.
+3. **A row/period limit with an explicit opt-out.** Default to a recent window (e.g. the last
+   ~12–20 periods) with a control to show everything. State the default you chose.
+4. **Per-section download button** producing the filtered, single-ticker table as CSV with a
+   meaningful filename (e.g. `AAPL_metrics.csv`). Full precision, not display-rounded.
+5. **An LLM-friendly copy block per section** — `st.code` with the table as CSV or Markdown text,
+   which gives a built-in copy button. Default it to a smaller window than the table view (state
+   the number) and note in the UI roughly how large it is, since a full 73×19 table plus facts is
+   near the practical limit for pasting into a chat.
+6. **The snapshot section** renders the single row for the selected ticker readably — a
+   transposed one-column view is likely better than a very wide single-row table, but decide
+   based on its actual shape from Step 1.1 and justify.
 
-## Step 2 — The frontend prototype
+Keep it consistent with the existing prototype: no custom CSS, no multi-page structure,
+`@st.cache_data` on data loading only and never on rendered output.
 
-Create **`app.py`** in the project root.
+## Step 4 — Verify
 
-**Do not name this file `streamlit.py`.** A module of that name shadows the installed package on
-`sys.path`, and `import streamlit as st` then imports the file itself. Name it `app.py` and run it
-with `streamlit run app.py`.
-
-`app.py` is a standalone entry point, not a module imported by `main.py`. The import direction is
-`app.py` → `figures.py` → `config.py`, never the reverse, and `app.py` must not import `main.py`
-or trigger any pipeline computation.
-
-Required capability:
-
-1. **Load and cache the exported frames** with `@st.cache_data`, because Streamlit re-executes
-   the whole script on every widget interaction. Cache the **dataframes only, never the figure
-   objects** — building a figure is cheap, and a cached figure is a stale-state trap.
-   Handle missing export files with a clear message telling the user to run the pipeline, not a
-   traceback.
-2. **Ticker selection** from `universe.parquet`.
-3. **Three chart sections** (fundamentals, growth, valuation), each with a metric multiselect
-   populated from `config.get_plottable_metrics(chart, ticker=...)`, which already returns
-   `(id, label)` pairs with `is_hidden` applied. Display the label, pass the id. Note the
-   namespace difference the registry now makes explicit: fundamentals/valuation ids are metric
-   names, growth ids are XBRL concept names — call the accessor per chart type rather than
-   building one shared metric list.
-4. **Render via `st.plotly_chart(fig, use_container_width=True)`**, passing `width=None` to the
-   builders so the layout does not fight the container width. Handle a `None` return (nothing
-   selected, or everything hidden) with an informational message rather than an exception.
-5. **An as-of date control** wired to `build_valuation`'s `as_of` parameter.
-6. **A comparison section**: pick a metric and 2+ tickers, route the right dataframe using
-   `figures.concept_source()`, call `build_ticker_comparison`, and **surface the returned
-   `excluded` list in the UI** (e.g. `st.caption`/`st.warning`) — the whole point of that return
-   value is that a user sees why a ticker is missing.
-7. **Show the run timestamp** from `meta.json` somewhere visible.
-
-Keep it a prototype: no custom CSS, no multi-page structure, no session-state gymnastics.
-`st.tabs` and the standard widgets are enough. Add `streamlit` and (if not already present) a
-Parquet engine to `requirements.txt`.
-
-## Step 3 — Verify
-
-- **The export round-trips losslessly, and this is the decisive check:** load the exported
-  Parquet files back, feed them to `build_fundamentals` / `build_growth` / `build_valuation` /
-  `build_ticker_comparison`, and confirm the resulting `fig.to_json()` is **byte-identical** to
-  the figure built from the in-memory frames in the same run, for at least three tickers spanning
-  different profiles (e.g. `standard`, `financial`, `reit`). This proves the dtype and content
-  preservation the whole format decision rests on. Include an `as_of` call and a narrowed
-  `concepts` call among them, since those are the paths that depend on `end` being a real
-  datetime.
-- **`universe.parquet` matches what the run actually produced** — not `TICKER_PROFILES`, and not
-  a hardcoded list.
-- **`app.py` imports cleanly** and its non-Streamlit logic (loading, routing a concept to the
-  right frame, building the selection lists) is exercised directly, without a browser. State
-  honestly what could and could not be verified headlessly — do not claim the UI was tested if it
-  was not.
-- **Nothing regressed:** `main()` and `run_full_refresh()` still run end to end; the existing
-  chart files are still written exactly as before; `figures.py` and `config.py` are unmodified
-  (confirm by diff, not by memory).
-- **Missing-export handling:** deleting one exported file produces the intended message, not a
-  traceback.
+- **Export round-trip:** the two new Parquet files load back with dtypes preserved (`end` as
+  `datetime64[ns]`), and their contents equal the in-memory frames they came from.
+- **The pivot is correct, checked against the source frame**: for at least one ticker and one
+  frame, verify a handful of individual cells against the long-format rows they came from, and
+  confirm the pivot's shape matches the ticker's distinct period/concept counts. Use at least one
+  `financial` or `reit` ticker, not only a `standard` one.
+- **Nulls survive the pivot** — a concept that is null for the ticker is still a column, still
+  null, not dropped and not filled.
+- **Downloads carry full precision:** compare a downloaded value against the source frame's
+  value, not against what the screen shows.
+- **Hidden metrics do not appear** in the data tab for a ticker whose profile hides them —
+  assert the precondition against `config.is_hidden` first, then check the rendered table.
+- **`app.py` still imports cleanly, imports no pipeline module**, and the whole page body runs to
+  completion in Streamlit's bare mode with the new tab included, as the previous task verified
+  it. State honestly what was not verifiable without a browser.
+- **Nothing regressed:** the chart tabs still render identically, `run_full_refresh()` runs end to
+  end, and `figures.py` / `config.py` are unmodified (confirm by hash, not memory).
 
 ## Output
 
-One file, `app_export_layer_report.md`, containing:
-1. The Step 0 audit of `run_full_refresh()` — its current behaviour, the exact frame shapes, and
-   the list of stale/inconsistent things found, split into what you fixed and what you left alone
-   with reasoning.
-2. The export design decisions (location, atomicity, ad-hoc path) with reasoning.
-3. What `app.py` does and its known limitations as a prototype.
-4. The Step 3 verification results, including the byte-identity evidence and an honest statement
-   of what was not verifiable without a browser.
+One file, `data_tab_report.md`: the snapshot frame's actual shape from Step 1.1, the export
+additions with file sizes and the full-universe extrapolation, the pivot and formatting design
+decisions, how flags and raw-vs-derived are distinguished (and what you found in `config.py` /
+`quality.py` for the flag identification), the limits and defaults chosen, and the Step 4
+verification results.
 
-No scratch scripts left behind.s
+No scratch scripts left behind.

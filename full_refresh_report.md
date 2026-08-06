@@ -2,9 +2,9 @@
 
 ## Run metadata
 
-- Start: 2026-08-05T17:35:20
-- End: 2026-08-05T17:36:11
-- Total wall-clock time: 51.1s (0.9 min)
+- Start: 2026-08-06T10:19:44
+- End: 2026-08-06T10:20:30
+- Total wall-clock time: 46.2s (0.8 min)
 - Active tickers processed: 8
 - Cached facts files deleted: 24
 
@@ -40,43 +40,43 @@
 ## Timing
 
 ### Phase 1 -- EDGAR fetch
-- Total: 23.0s across 8 tickers
-- Average per ticker: 2.88s
+- Total: 19.8s across 8 tickers
+- Average per ticker: 2.48s
 - Slowest 10 tickers:
-  - AFL: 3.79s
-  - AMT: 3.74s
-  - JPM: 3.25s
-  - BAC: 3.08s
-  - MSFT: 2.53s
-  - AZO: 2.26s
-  - AAPL: 2.22s
-  - O: 2.16s
+  - JPM: 3.40s
+  - BAC: 2.90s
+  - AFL: 2.68s
+  - AMT: 2.35s
+  - AZO: 2.29s
+  - MSFT: 2.26s
+  - AAPL: 2.08s
+  - O: 1.89s
 
 ### Phase 2 -- yfinance fetch
-- Total: 6.8s across 8 tickers
-- Average per ticker: 0.85s
+- Total: 7.4s across 8 tickers
+- Average per ticker: 0.92s
 - Slowest 10 tickers:
-  - AAPL: 1.44s
-  - AFL: 1.02s
-  - JPM: 0.82s
-  - AMT: 0.76s
-  - BAC: 0.73s
-  - O: 0.71s
-  - MSFT: 0.69s
-  - AZO: 0.67s
+  - AAPL: 1.62s
+  - AMT: 1.01s
+  - AFL: 0.90s
+  - O: 0.87s
+  - BAC: 0.80s
+  - JPM: 0.75s
+  - AZO: 0.73s
+  - MSFT: 0.72s
 
 ### Phase 3 -- Calculate + plot
-- Calculate (calculate_all_metrics/build_metrics_long/build_valuation_history/build_snapshot, whole batch, one run -- not decomposed per ticker, since doing so would mean calling these functions once per ticker instead of once for the batch, a change to how the calculation runs rather than pure instrumentation): 11.5s
-- Plot (per ticker, all three charts): total 7.6s across 8 tickers, average 0.95s/ticker
+- Calculate (calculate_all_metrics/build_metrics_long/build_valuation_history/build_snapshot, whole batch, one run -- not decomposed per ticker, since doing so would mean calling these functions once per ticker instead of once for the batch, a change to how the calculation runs rather than pure instrumentation): 10.5s
+- Plot (per ticker, all three charts): total 6.3s across 8 tickers, average 0.79s/ticker
 - Slowest 10 tickers (plotting):
-  - AAPL: 2.80s
-  - MSFT: 0.89s
-  - AZO: 0.83s
-  - AFL: 0.68s
+  - AAPL: 1.60s
+  - MSFT: 0.86s
+  - AZO: 0.82s
   - BAC: 0.66s
-  - JPM: 0.65s
-  - AMT: 0.56s
-  - O: 0.54s
+  - AFL: 0.65s
+  - JPM: 0.64s
+  - O: 0.57s
+  - AMT: 0.54s
 
 ## Data quality flags
 
@@ -89,8 +89,8 @@
 
 ### insurance_life
 
-- **MISSING** AFL `ShareBasedCompensation`: 0 of 73 (0%)
 - **MISSING** AFL `Investments`: 0 of 73 (0%) -- `python explore_tags.py AFL investments`
+- **MISSING** AFL `ShareBasedCompensation`: 0 of 73 (0%)
 - **MISSING** AFL `StockIssued`: 0 of 73 (0%) -- `python explore_tags.py AFL issuanceofcommon stockissuedduringperiodvalue saleofequity`
 - **thin** AFL `Goodwill`: 7 of 73 (10%) -- `python explore_tags.py AFL goodwill intangible`
 
@@ -102,8 +102,8 @@
 
 ### retail
 
-- **MISSING** AZO `StockIssued`: 0 of 73 (0%) -- `python explore_tags.py AZO issuanceofcommon stockissuedduringperiodvalue saleofequity`
 - **MISSING** AZO `DividendsPerShare`: 0 of 73 (0%) -- `python explore_tags.py AZO dividendspershare`
+- **MISSING** AZO `StockIssued`: 0 of 73 (0%) -- `python explore_tags.py AZO issuanceofcommon stockissuedduringperiodvalue saleofequity`
 
 ### standard
 
