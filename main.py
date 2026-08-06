@@ -31,6 +31,8 @@ from config import (
     get_active_tickers,
     CACHE_DIR,
     HARMONIC_MEAN_CONCEPTS,
+    METRICS,
+    CHART_GROWTH,
 )
 from metrics import (
     add_ttm_concepts,
@@ -1400,7 +1402,7 @@ def write_full_refresh_report(
         f"for the batch, a change to how the calculation runs rather than pure "
         f"instrumentation): {calc_time:.1f}s"
     )
-    lines.append(f"- Plot (per ticker, both figures): total {plot['total']:.1f}s "
+    lines.append(f"- Plot (per ticker, all three charts): total {plot['total']:.1f}s "
                   f"across {plot['n']} tickers, average {plot['average']:.2f}s/ticker")
     lines.append("- Slowest 10 tickers (plotting):")
     for t, s in plot["slowest"]:
@@ -1430,6 +1432,92 @@ def write_full_refresh_report(
 
     with open(report_path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines))
+
+
+# App inputs live in their own subdirectory so they are not mixed with the
+# human-facing CSVs in DATA_DIR. app.py derives the same path from config.DATA_DIR
+# without importing main (the import direction is app -> figures -> config).
+APP_EXPORT_SUBDIR = "app"
+APP_EXPORT_DIR = os.path.join(DATA_DIR, APP_EXPORT_SUBDIR)
+APP_EXPORT_SCHEMA = 1
+
+
+def _write_parquet_atomic(df: pd.DataFrame, path: str) -> int:
+    """Write to a temp file in the same directory, then rename over the target.
+
+    os.replace is atomic on the same filesystem, so a frontend reading while the
+    nightly run writes sees either the old file or the new one, never a partial.
+    """
+    tmp = path + ".tmp"
+    df.to_parquet(tmp, index=False)
+    os.replace(tmp, path)
+    return len(df)
+
+
+def export_for_app(
+    metrics_long: pd.DataFrame,
+    valuation_history: pd.DataFrame,
+    facts_out: pd.DataFrame,
+    requested_tickers: list[str],
+    run_start: datetime,
+    out_dir: str = APP_EXPORT_DIR,
+) -> dict:
+    """Write the frontend's inputs: three chart frames, the universe, and meta.
+
+    Parquet rather than CSV because `end` must survive as a real datetime --
+    build_valuation and build_ticker_comparison compare it against a
+    pd.Timestamp, and a CSV round-trip would turn it into a string.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+
+    # build_growth only ever draws the growth-chart concepts, and only ever reads
+    # these four columns -- exporting the whole facts frame would be ~10x the rows.
+    growth_ids = [m.id for m in METRICS if m.chart == CHART_GROWTH]
+    facts_growth = facts_out.loc[
+        facts_out["concept"].isin(growth_ids), ["ticker", "concept", "end", "yoy_growth"]
+    ].reset_index(drop=True)
+
+    produced = sorted(set(metrics_long["ticker"])
+                      | set(valuation_history["ticker"])
+                      | set(facts_growth["ticker"]))
+    universe = pd.DataFrame({
+        "ticker": produced,
+        "profile": [TICKER_PROFILES.get(t, DEFAULT_PROFILE) for t in produced],
+        "n_metrics": [int((metrics_long["ticker"] == t).sum()) for t in produced],
+        "n_valuation": [int((valuation_history["ticker"] == t).sum()) for t in produced],
+        "n_growth": [int((facts_growth["ticker"] == t).sum()) for t in produced],
+    })
+
+    rows = {
+        "metrics_long.parquet": _write_parquet_atomic(
+            metrics_long, os.path.join(out_dir, "metrics_long.parquet")),
+        "valuation_history.parquet": _write_parquet_atomic(
+            valuation_history, os.path.join(out_dir, "valuation_history.parquet")),
+        "facts_growth.parquet": _write_parquet_atomic(
+            facts_growth, os.path.join(out_dir, "facts_growth.parquet")),
+        "universe.parquet": _write_parquet_atomic(
+            universe, os.path.join(out_dir, "universe.parquet")),
+    }
+
+    meta = {
+        "schema": APP_EXPORT_SCHEMA,
+        "run_start": run_start.isoformat(timespec="seconds"),
+        "exported_at": datetime.now().isoformat(timespec="seconds"),
+        "period": PERIOD,
+        "tickers_requested": len(requested_tickers),
+        "tickers_with_data": len(produced),
+        "tickers_without_data": sorted(set(requested_tickers) - set(produced)),
+        "rows": rows,
+    }
+    # written last, so its presence means the four frames are already in place
+    meta_tmp = os.path.join(out_dir, "meta.json.tmp")
+    with open(meta_tmp, "w", encoding="utf-8") as fh:
+        json.dump(meta, fh, indent=2)
+    os.replace(meta_tmp, os.path.join(out_dir, "meta.json"))
+
+    print(f"[export] {len(produced)} tickers, "
+          f"{sum(rows.values())} rows across {len(rows)} frames -> {out_dir}")
+    return meta
 
 
 def run_full_refresh():
@@ -1539,6 +1627,8 @@ def run_full_refresh():
         plot_growth(ticker, facts_out, os.path.join(FIGURE_DIR, f"{ticker}_growth"))
         plot_times[ticker] = time.perf_counter() - t0
     print(f"Calculate + plot done: {calc_time + sum(plot_times.values()):.1f}s total.")
+
+    export_for_app(metrics_long, valuation_history, facts_out, active_tickers, run_start)
 
     run_end = datetime.now()
 

@@ -1,130 +1,165 @@
-# Task: Parametrize the Figure Builders for an Interactive Caller
+# Task: Pipeline Export Layer + Streamlit Frontend Prototype
 
-**Depends on the comparison-cleanup task being complete and shipped** — `figures.py` already has
-the `build_*` / `plot_*` split (`build_fundamentals`, `build_growth`, `build_valuation`,
-`build_ticker_comparison` plus their file-writing wrappers). Read `comparison_cleanup_report.md`
-and the current `figures.py` in full before changing anything.
+**Depends on the `METRICS` registry task being complete and shipped.** Read
+`metrics_registry_report.md`, `figures_parametrization_report.md` and the current `figures.py`,
+`config.py` and `main.py` before changing anything.
 
-## Context — why this task exists
+## Context
 
-The builders return figure objects now, but they still make three decisions internally that an
-interactive caller needs to make from the outside: **which panels to draw**, **how wide the
-figure is**, and **what "today" means for the valuation window**. Each of these blocks a
-concretely planned feature:
+`figures.py` is finished for a web frontend: the `build_*` functions return figure objects,
+accept an explicit `concepts` narrowing list, allow `width=None` for responsive rendering, and
+take an `as_of` anchor for the valuation window. `config.get_plottable_metrics()` enumerates
+selectable metrics per chart type with `is_hidden` already applied.
 
-| internal decision today | blocked feature |
-|---|---|
-| panel list computed from `is_hidden` + config only | user unchecks metrics in the UI and the grid re-tiles to use the freed space |
-| `width=500*cols` hardcoded in `update_layout` | responsive rendering via `st.plotly_chart(fig, use_container_width=True)` |
-| `pd.Timestamp.today()` as the valuation cutoff anchor | user-selectable as-of date (`build_snapshot_as_of`), where the window must run from the chosen date, not from today |
+What does not exist yet is the **connection between the batch pipeline and a frontend**: the
+pipeline computes everything in memory and writes charts to disk, but nothing hands the
+dataframes over in a form a separate process can read.
 
-This task makes those three parameters, and does nothing else of substance.
+The target architecture is the batch/read split this project already decided on: `main.py` runs
+nightly and writes pre-computed data; the frontend process reads only that data and renders on
+demand. **No pipeline computation in the request path.**
 
-**Explicitly NOT in this task:** no Streamlit code, no Streamlit import in `figures.py`, no Phase 4
-(cross-sectional/peer plots), no change to `config.py`'s selection logic, no fix for the
-`V`/`STZ` missing-`SharesOutstanding` finding. `figures.py` stays a pure rendering module.
+**Explicitly NOT in this task:** no changes to `figures.py` or `config.py` (both are finished for
+this purpose — if you believe one needs a change, report it instead of making it), no Phase 4
+(cross-sectional/peer scatter), no `PROFILE_HIDDEN` refactor, no `SharesOutstanding` fix, no
+deployment/hosting work, no authentication, no styling beyond what is needed for the prototype to
+be usable.
 
-**Standing requirement:** default behaviour must not change. Every existing caller passes none of
-the new parameters, and must produce byte-identical output to what it produces today. Prove that,
-don't assert it (Step 4).
+---
 
-## Step 1 — Explicit panel selection
+## Step 0 — Audit `run_full_refresh()` before touching it
 
-Add an optional parameter to `build_fundamentals`, `build_growth` and `build_valuation` letting
-the caller restrict which panels are drawn — e.g. `concepts: list[str] | None = None`, where
-`None` means "everything the config says is visible" (today's behaviour, unchanged).
+Read `run_full_refresh()` and `main()` in full and report their **current actual** behaviour —
+not what earlier reports said they did. Several tasks have modified `main.py` since this function
+was last examined end to end (the Plotly migration changed all six plot call sites; the
+comparison cleanup removed `render_comparison_charts`, its two call sites and its timing entry).
 
-Design points to decide and state:
+Report specifically:
 
-1. **`is_hidden` stays authoritative.** An explicit list is a *narrowing* filter applied on top of
-   the existing visibility rule, never a way around it: a caller asking for a concept that
-   `is_hidden` hides for that ticker must not get it. State how you enforce this and make sure the
-   same rule holds in all three builders.
-2. **Unknown or already-hidden entries in the caller's list.** Decide the behaviour (ignore
-   silently, ignore with a printed note, or refuse the call) and apply it consistently. Note that
-   a UI-driven caller will routinely pass concepts that are fine for one ticker and hidden for
-   another — so refusing outright is probably wrong; say what you chose and why.
-3. **Ordering.** Decide whether the rendered order follows the config list order (recommended —
-   it keeps a chart's panel order stable no matter what order the UI hands over) or the caller's
-   list order. State the choice.
-4. **Empty result.** A caller narrowing down to nothing (or to only hidden concepts) must hit the
-   existing "nothing to build" path and get `None`, with the wrapper still writing neither file.
+- The current execution order and what each stage produces.
+- **The exact names, shapes and dtypes of the three dataframes the chart builders consume** —
+  whatever `run_full_refresh` currently calls `metrics_long`, `valuation_history` and the facts
+  frame. Confirm the actual column names, in particular that the growth frame's column is
+  `yoy_growth` and that `end` is a real datetime dtype and not an object/string column.
+- What is currently written to disk, where, and in what format (CSV? Parquet? which directory?),
+  including anything written by `write_full_refresh_report`.
+- Whether `main()`'s ad-hoc path and `run_full_refresh()` have drifted apart — do they compute
+  the same things the same way, or has one been updated and the other not?
+- **Anything stale, dead, or inconsistent**: leftover names from removed features, timing
+  entries that no longer match the stages that exist, exclusions handled in two places,
+  hardcoded ticker lists, or steps whose output nothing consumes. Report these; fix only the ones
+  that are unambiguously dead code left behind by a previous task, and list anything you chose
+  not to touch with your reasoning.
 
-The grid must re-tile automatically: `_make_grid` already derives rows/cols from the panel count,
-so a reduced list should produce a tighter grid with no extra work. Confirm that it does.
+This audit goes in the report **before** the export design, because the export contract depends
+on what the frames actually are.
 
-`build_ticker_comparison` is out of scope here — it already takes its concept explicitly.
+## Step 1 — The export layer in `main.py`
 
-## Step 2 — Make figure sizing controllable
+Add a function (e.g. `export_for_app(...)`) that writes the frontend's inputs to disk, called at
+the end of `run_full_refresh()`.
 
-All three per-ticker builders currently hardcode `width=500*cols` and a per-chart row height;
-`build_ticker_comparison` hardcodes `width=900, height=520`. A fixed `width` in the layout fights
-`use_container_width=True` in a web frontend.
+**Format: Parquet, not CSV.** The decisive reason is dtype preservation: `build_valuation` and
+`build_ticker_comparison` compare `frame["end"]` against a `pd.Timestamp` cutoff, and a CSV
+round-trip turns `end` into a string, which either raises or — worse — compares wrong silently.
+Parquet also loads far faster, which matters because a Streamlit script re-runs on every widget
+interaction. If you find a concrete reason Parquet will not work here, report it rather than
+silently falling back to CSV.
 
-Make width and height controllable, defaulting to exactly today's values so file output is
-unchanged. Decide and state the shape: explicit `width`/`height` parameters, or a single flag
-meaning "let the container decide the width" that omits `width` from the layout. Whichever you
-pick, it must be possible for a caller to get a figure with **no** `width` set in
-`layout` — that is the case the web frontend needs — and the report should show the produced
-layout for both the default and the responsive call.
+Write, at minimum:
 
-## Step 3 — Anchor the valuation window to a caller-supplied date
+| file | contents | why the frontend needs it |
+|---|---|---|
+| `metrics_long.parquet` | the fundamentals frame | `build_fundamentals` |
+| `valuation_history.parquet` | the valuation frame | `build_valuation` |
+| `facts_growth.parquet` | facts narrowed to `ticker`, `concept`, `end`, `yoy_growth` | `build_growth` — the full facts frame is large and the frontend needs only this |
+| `universe.parquet` | the tickers that actually produced data in this run | the ticker picker must not offer tickers that exist in `TICKER_PROFILES` but failed or were skipped in the run |
+| `meta.json` | run timestamp, ticker count, and whatever else identifies the run | the app shows the user how fresh the data is — this project treats data transparency as a differentiator, so it belongs in the UI, not just in a log |
 
-`build_valuation` and `build_ticker_comparison` both compute
-`pd.Timestamp.today() - pd.DateOffset(years=years)`. Add an `as_of: pd.Timestamp | None = None`
-parameter to both: `None` keeps today's behaviour (anchor on `pd.Timestamp.today()`), a supplied
-date anchors the window on that date instead.
+Decide and state:
 
-Two things to get right:
+1. **Where these live** — reuse `DATA_DIR`, or a separate subdirectory so app inputs are not
+   mixed with existing CSV outputs. State the choice.
+2. **Whether existing CSV outputs stay.** Do not remove them in this task unless you have
+   confirmed nothing consumes them; if they are redundant, report that as a recommendation.
+3. **Atomicity.** A nightly run writing these files while the app is reading them can serve a
+   half-written file. Decide whether to write-then-rename (or another approach), and state it. A
+   prototype can accept the risk — but say so deliberately rather than not noticing it.
+4. **Whether `main()`'s ad-hoc path should also export.** Consider that an ad-hoc single-ticker
+   run would otherwise overwrite a full universe export with one ticker's data. State your
+   decision; refusing to export from the ad-hoc path is a legitimate answer.
 
-1. **The cutoff and the upper bound.** Today the filter is one-sided (`end >= cutoff`), which is
-   fine when the anchor is today because no data lies in the future. With a historical `as_of`,
-   a one-sided filter would still show data *after* the chosen date, which defeats the purpose.
-   Decide whether supplying `as_of` should also bound the window above (`end <= as_of`) —
-   recommended: yes — and state the reasoning, since this is the difference between "the last 5
-   years as of that date" and "everything since that date".
-2. **One expression, two call sites.** `build_valuation` and `build_ticker_comparison` must use
-   the same windowing logic, not two copies that can drift. Factor it into a small helper if that
-   is the clean way to guarantee it.
+## Step 2 — The frontend prototype
 
-The wrappers `plot_valuation` / `plot_ticker_comparison` should pass the parameter through.
+Create **`app.py`** in the project root.
 
-## Step 4 — Housekeeping (small, verify anyway)
+**Do not name this file `streamlit.py`.** A module of that name shadows the installed package on
+`sys.path`, and `import streamlit as st` then imports the file itself. Name it `app.py` and run it
+with `streamlit run app.py`.
 
-- Remove the unused `from datetime import datetime` import (line ~14) — confirm by grep that
-  nothing in the file uses it.
-- `_make_grid`'s `n == 0` branch is unreachable now that every builder guards on an empty panel
-  list before calling it. Either remove the branch or leave it with a comment saying it is a
-  defensive no-op — state which and why. Do not change the non-zero logic.
+`app.py` is a standalone entry point, not a module imported by `main.py`. The import direction is
+`app.py` → `figures.py` → `config.py`, never the reverse, and `app.py` must not import `main.py`
+or trigger any pipeline computation.
 
-## Step 5 — Verify
+Required capability:
 
-- **Default-path non-regression, the decisive check:** for at least three tickers spanning
-  different profiles (e.g. one `standard`, one `financial`, one `reit`), all three chart types,
-  confirm that calling each builder **with no new parameters** produces output byte-identical to
-  what it produced before this task (compare `fig.to_json()` against a baseline captured before
-  the change). Same for `build_ticker_comparison` on a real comparison.
-- **Panel narrowing works and the grid re-tiles:** pick a ticker with many visible fundamentals
-  panels, request a subset, and confirm the rendered subplot titles equal the expected narrowed
-  set, that the grid dimensions match `_make_grid(len(subset))`, and that no trailing empty cells
-  were created.
-- **`is_hidden` cannot be bypassed:** request a concept that is hidden for the ticker's profile
-  (e.g. `p_ffo` for a `standard` ticker, `efficiency_ratio` for a non-`financial` one) and confirm
-  it is not rendered, and that the Step 1.2 behaviour you chose is what actually happens.
-- **Narrowing to nothing** returns `None` and the wrapper writes neither file.
-- **Responsive sizing:** confirm a figure can be produced with no `width` key in its layout, and
-  that the default call still carries exactly today's width/height values.
-- **`as_of` window:** for a real ticker, confirm that a historical `as_of` produces a strictly
-  different, correctly bounded x-range than the default call (check the actual first and last
-  x-values against the expected window, both bounds), that `as_of=None` reproduces today's
-  x-range exactly, and that `build_valuation` and `build_ticker_comparison` agree on the same
-  window for the same metric/ticker/date.
+1. **Load and cache the exported frames** with `@st.cache_data`, because Streamlit re-executes
+   the whole script on every widget interaction. Cache the **dataframes only, never the figure
+   objects** — building a figure is cheap, and a cached figure is a stale-state trap.
+   Handle missing export files with a clear message telling the user to run the pipeline, not a
+   traceback.
+2. **Ticker selection** from `universe.parquet`.
+3. **Three chart sections** (fundamentals, growth, valuation), each with a metric multiselect
+   populated from `config.get_plottable_metrics(chart, ticker=...)`, which already returns
+   `(id, label)` pairs with `is_hidden` applied. Display the label, pass the id. Note the
+   namespace difference the registry now makes explicit: fundamentals/valuation ids are metric
+   names, growth ids are XBRL concept names — call the accessor per chart type rather than
+   building one shared metric list.
+4. **Render via `st.plotly_chart(fig, use_container_width=True)`**, passing `width=None` to the
+   builders so the layout does not fight the container width. Handle a `None` return (nothing
+   selected, or everything hidden) with an informational message rather than an exception.
+5. **An as-of date control** wired to `build_valuation`'s `as_of` parameter.
+6. **A comparison section**: pick a metric and 2+ tickers, route the right dataframe using
+   `figures.concept_source()`, call `build_ticker_comparison`, and **surface the returned
+   `excluded` list in the UI** (e.g. `st.caption`/`st.warning`) — the whole point of that return
+   value is that a user sees why a ticker is missing.
+7. **Show the run timestamp** from `meta.json` somewhere visible.
+
+Keep it a prototype: no custom CSS, no multi-page structure, no session-state gymnastics.
+`st.tabs` and the standard widgets are enough. Add `streamlit` and (if not already present) a
+Parquet engine to `requirements.txt`.
+
+## Step 3 — Verify
+
+- **The export round-trips losslessly, and this is the decisive check:** load the exported
+  Parquet files back, feed them to `build_fundamentals` / `build_growth` / `build_valuation` /
+  `build_ticker_comparison`, and confirm the resulting `fig.to_json()` is **byte-identical** to
+  the figure built from the in-memory frames in the same run, for at least three tickers spanning
+  different profiles (e.g. `standard`, `financial`, `reit`). This proves the dtype and content
+  preservation the whole format decision rests on. Include an `as_of` call and a narrowed
+  `concepts` call among them, since those are the paths that depend on `end` being a real
+  datetime.
+- **`universe.parquet` matches what the run actually produced** — not `TICKER_PROFILES`, and not
+  a hardcoded list.
+- **`app.py` imports cleanly** and its non-Streamlit logic (loading, routing a concept to the
+  right frame, building the selection lists) is exercised directly, without a browser. State
+  honestly what could and could not be verified headlessly — do not claim the UI was tested if it
+  was not.
+- **Nothing regressed:** `main()` and `run_full_refresh()` still run end to end; the existing
+  chart files are still written exactly as before; `figures.py` and `config.py` are unmodified
+  (confirm by diff, not by memory).
+- **Missing-export handling:** deleting one exported file produces the intended message, not a
+  traceback.
 
 ## Output
 
-One file, `figures_parametrization_report.md`: the design decisions from Steps 1–3 with
-reasoning (especially the unknown/hidden-entry handling and the `as_of` upper-bound question),
-what was implemented, the housekeeping verdict from Step 4, and the Step 5 verification results
-including the byte-identical default-path evidence.
+One file, `app_export_layer_report.md`, containing:
+1. The Step 0 audit of `run_full_refresh()` — its current behaviour, the exact frame shapes, and
+   the list of stale/inconsistent things found, split into what you fixed and what you left alone
+   with reasoning.
+2. The export design decisions (location, atomicity, ad-hoc path) with reasoning.
+3. What `app.py` does and its known limitations as a prototype.
+4. The Step 3 verification results, including the byte-identity evidence and an honest statement
+   of what was not verifiable without a browser.
 
-No scratch scripts left behind.
+No scratch scripts left behind.s

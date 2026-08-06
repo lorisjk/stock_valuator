@@ -6,6 +6,90 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-08-05 — Export layer + Streamlit prototype: the batch/read split goes live
+
+`main.export_for_app()` writes the frontend's inputs at the end of
+`run_full_refresh()`, and a new `app.py` reads only those files — no pipeline
+computation in the request path. `figures.py` and `config.py` unmodified,
+verified by SHA-256 before and after rather than by memory.
+
+**Parquet, not CSV**, and the verification is the argument: for AAPL/JPM/AMT the
+figures built from the Parquet round-trip are **byte-identical** to those built
+from the in-memory frames — including the `as_of` and narrowed-`concepts` calls,
+which are exactly the paths that break if `end` stops being a real datetime.
+`facts_growth.parquet` is narrowed by rows as well as columns (18,120 -> 1,705,
+10.6x) because `GROWTH_PANELS` provably bounds what `build_growth` can draw; the
+concept list is derived from `config.METRICS` so a new growth panel widens it
+automatically. Files are written temp-then-`os.replace` (atomic per file) with
+`meta.json` last; the residual cross-file window is documented, not hidden.
+`universe.parquet` lists tickers that **produced data**, not
+`get_active_tickers()` — which returns `sorted(TICKER_PROFILES)` and so cannot
+tell "asked for" from "worked". The ad-hoc `main()` path deliberately does not
+export: it runs on `config.TICKERS` and would replace a 501-ticker export with
+two.
+
+**Audit findings (reported, mostly not fixed).** `main()` and
+`run_full_refresh()` have drifted six ways; three are behaviour questions rather
+than dead code and were left for a decision: `main()` drops NaN rows before
+writing `valuation_history.csv` while the full refresh does not, `main()` sorts
+the frames before writing and the full refresh does not, and the
+`SNAPSHOT_AS_OF_DATES` loop exists only on the ad-hoc path. Also confirmed:
+**no code anywhere reads a project CSV back** — they are human-facing only.
+Fixed exactly one unambiguously stale thing: the run report said "Plot (per
+ticker, both figures)" when there have been three charts per ticker for some
+time.
+
+One deliberate deviation from the brief: it asked for
+`st.plotly_chart(use_container_width=True)`, but on Streamlit 1.61 that
+parameter is past its stated removal date of 2025-12-31 and warns on every
+chart, so `width="stretch"` is used instead (`streamlit>=1.50` pinned).
+Details in `app_export_layer_report.md`.
+
+---
+
+## 2026-08-05 — METRICS registry: one source of truth for the plotting spec
+
+A metric's properties lived in five separate structures in `config.py`
+(`FUNDAMENTALS_TO_PLOT`, `VALUATIONS_TO_PLOT`, `GROWTH_PANELS`,
+`QUARTERLY_COUNTERPART`, `HARMONIC_MEAN_CONCEPTS`), with `figures.py`
+reconstructing the association a sixth time in `_concept_plot_spec`. Adding a
+metric meant touching up to four of them. Now there is one `METRICS` list of 45
+frozen `Metric` dataclasses, and the five names are **derived** from it — so
+every consumer keeps working unchanged and correctness reduces to one provable
+claim: the derived structures equal the pre-change literals. Verified against a
+pickled capture of the actual objects, element-wise including `type()` and
+`repr()` at every leaf, so `0` vs `0.0` and `None` vs `0` could not slip through.
+
+Frozen dataclass over dict/TypedDict because it is the only option that fails at
+*runtime*: a missing field is a `TypeError` at import, a typo'd field name is a
+`TypeError` naming the correct spelling, and entries cannot be mutated. Duplicate
+ids and unknown chart names raise from `_index_metrics` at import. The legacy
+`symlog` flag deliberately did **not** enter the registry (no metric ever set it,
+nothing renders it); the derived 5-tuple supplies its constant `False`
+positionally.
+
+Structural finding: **no id appears in two charts** (45 unique across 29+13+3),
+so `_concept_plot_spec`'s valuation-before-fundamentals scan order was moot and
+its replacement by a flat `METRICS_BY_ID` lookup cannot change any answer.
+Also confirmed before relying on it: every `QUARTERLY_COUNTERPART` value is
+exactly `<id>_quarterly` and every `HARMONIC_MEAN_CONCEPTS` member is a valuation
+id, so both collapse to booleans on the metric without special cases.
+
+New: `CHART_SPECS` makes the id namespace explicit (fundamentals/valuation ids
+are metric names read from `value`; growth ids are XBRL concept names read from
+`yoy_growth`) — previously only implied by list membership and hardcoded inside
+`_concept_plot_spec`. `Metric.label_for(language)` adds room for a second
+language with fallback to the primary label, never to an empty string; no German
+labels were invented, the field is present and unpopulated.
+`config.get_plottable_metrics(chart, ticker, language)` gives a frontend picker
+its options, already narrowed by `is_hidden` when a ticker is supplied, so a
+picker cannot offer a metric the chart would then drop.
+
+All 32 per-ticker and 8 comparison figures byte-identical. Details in
+`metrics_registry_report.md`.
+
+---
+
 ## 2026-08-05 — Figure builders parametrized: panel selection, sizing, as-of window
 
 Three decisions the builders used to make internally are now caller-supplied,

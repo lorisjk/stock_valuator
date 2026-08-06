@@ -4,4 +4,6 @@ __pycache__/
 .env
 cache/
 debug_tags.py
+figures/
 
+data/app/

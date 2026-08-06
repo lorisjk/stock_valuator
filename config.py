@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 TICKERS = ["AAPL", "MSFT"]
 
 EDGAR_USER_AGENT = "Loris loris2006@gmx.de"
@@ -1984,76 +1986,187 @@ FIGURE_DIR = "figures"
 
 
 # FOR FIGURES:PY
+#
+# METRICS is the single source of truth for everything that gets plotted. The
+# five structures figures.py has always imported (FUNDAMENTALS_TO_PLOT,
+# VALUATIONS_TO_PLOT, GROWTH_PANELS, QUARTERLY_COUNTERPART,
+# HARMONIC_MEAN_CONCEPTS) are derived from it further down, so existing
+# consumers keep working unchanged. Add a metric here and nowhere else.
 
-QUARTERLY_COUNTERPART = {
-    "operating_margin": "operating_margin_quarterly",
-    "payout_ratio": "payout_ratio_quarterly",
-    "fcf_margin": "fcf_margin_quarterly",
-    "efficiency_ratio": "efficiency_ratio_quarterly",
-    "provision_ratio": "provision_ratio_quarterly",
-    "combined_ratio": "combined_ratio_quarterly",
-    "loss_ratio": "loss_ratio_quarterly",
-    "expense_ratio": "expense_ratio_quarterly",
-    "rd_intensity": "rd_intensity_quarterly",
-    "capex_intensity": "capex_intensity_quarterly",
-    "ffo_margin": "ffo_margin_quarterly",
+CHART_FUNDAMENTALS = "fundamentals"
+CHART_VALUATION = "valuation"
+CHART_GROWTH = "growth"
+
+# What an id in a given chart actually names, and which dataframe column holds
+# its values. Declared once rather than repeated on 45 entries, but reachable
+# per metric via Metric.id_namespace / Metric.value_column.
+CHART_SPECS = {
+    CHART_FUNDAMENTALS: {"id_namespace": "metric", "value_column": "value"},
+    CHART_VALUATION: {"id_namespace": "metric", "value_column": "value"},
+    CHART_GROWTH: {"id_namespace": "xbrl_concept", "value_column": "yoy_growth"},
 }
 
-FUNDAMENTALS_TO_PLOT = [
-    ("revenue_yoy_growth", "Revenue growth", 0, True, False),
-    ("income_yoy_growth", "Income growth", 0, True, False),
-    ("operating_margin", "Operating Margin", None, True, False),
-    ("roe", "Return on Equity", None, True, False),
-    ("debt_to_equity", "Debt-to-Equity Ratio", None, False, False),
-    ("payout_ratio", "Payout Ratio", None, True, False),
-    ("fcf_margin", "Free Cash Flow Margin", None, True, False),
-    ("net_debt_to_ebitda", "Net Debt / EBITDA", 0, False, False),
-    ("rule_of_40", "Rule of 40", 0.4, True, False),
-    ("net_interest_margin", "Net Interest Margin", None, True, False),
-    ("efficiency_ratio", "Efficiency Ratio", None, True, False),
-    ("roa", "Return on Assets", None, True, False),
-    ("equity_to_assets", "Equity / Assets", None, True, False),
-    ("provision_ratio", "Provision/Revenue", 0, True, False),
-    ("combined_ratio", "Combined Ratio", 1.0, True, False),
-    ("loss_ratio", "Loss Ratio", None, True, False),
-    ("expense_ratio", "Expense Ratio", None, True, False),
-    ("net_investment_yield", "Net Investment Yield", None, True, False),
-    ("reserve_growth", "Reserve Growth", 0, True, False),
-    ("inventory_turnover", "Inventory Turnover (x/Year)", None, False, False),
-    ("dio", "Days Inventory Outstanding", None, False, False),
-    ("dso", "Days Sales Outstanding", None, False, False),
-    ("dpo", "Days Payable Outstanding", None, False, False),
-    ("cash_conversion_cycle", "Cash Conversion Cycle (Days)", 0, False, False),
-    ("rd_intensity", "R&D Intensity (% Revenue)", None, True, False),
-    ("capex_intensity", "CapEx Intensity (% Revenue)", None, True, False),
-    ("operating_leverage", "Operating Leverage", 1.0, False, False),
-    ("operating_income_yoy_growth", "Operating Income YOY Growth", 0, True, False),
-    ("ffo_margin", "FFO Margin (% Revenue)", None, True, False),
+# `label` is the string rendered onto the chart today and must stay byte-identical.
+# It is registered as the primary language; some entries mix German words
+# ("Quartal"), which is preserved verbatim -- relabelling is a separate job.
+LANGUAGE_PRIMARY = "en"
+
+
+@dataclass(frozen=True)
+class Metric:
+    """One plottable metric.
+
+    Frozen dataclass rather than a dict: a missing required field or a typo'd
+    field name raises TypeError at import, instead of a dict's .get() quietly
+    returning None and producing a blank axis at render time.
+    """
+    id: str
+    chart: str
+    label: str
+    ref_line: float | int | None = None
+    percent: bool = False
+    quarterly: bool = False   # a <id>_quarterly series exists
+    harmonic: bool = False    # mean line uses the harmonic mean
+    label_de: str | None = None
+
+    @property
+    def id_namespace(self) -> str:
+        return CHART_SPECS[self.chart]["id_namespace"]
+
+    @property
+    def value_column(self) -> str:
+        return CHART_SPECS[self.chart]["value_column"]
+
+    def label_for(self, language: str = LANGUAGE_PRIMARY) -> str:
+        """Label in `language`, falling back to the primary label.
+
+        Never returns an empty string: an unpopulated translation falls back
+        rather than blanking an axis title.
+        """
+        if language != LANGUAGE_PRIMARY:
+            translated = getattr(self, f"label_{language}", None)
+            if translated:
+                return translated
+        return self.label
+
+
+METRICS = [
+    # --- fundamentals: order is panel order ---
+    Metric("revenue_yoy_growth", CHART_FUNDAMENTALS, "Revenue growth", 0, percent=True),
+    Metric("income_yoy_growth", CHART_FUNDAMENTALS, "Income growth", 0, percent=True),
+    Metric("operating_margin", CHART_FUNDAMENTALS, "Operating Margin", None, percent=True, quarterly=True),
+    Metric("roe", CHART_FUNDAMENTALS, "Return on Equity", None, percent=True),
+    Metric("debt_to_equity", CHART_FUNDAMENTALS, "Debt-to-Equity Ratio", None),
+    Metric("payout_ratio", CHART_FUNDAMENTALS, "Payout Ratio", None, percent=True, quarterly=True),
+    Metric("fcf_margin", CHART_FUNDAMENTALS, "Free Cash Flow Margin", None, percent=True, quarterly=True),
+    Metric("net_debt_to_ebitda", CHART_FUNDAMENTALS, "Net Debt / EBITDA", 0),
+    Metric("rule_of_40", CHART_FUNDAMENTALS, "Rule of 40", 0.4, percent=True),
+    Metric("net_interest_margin", CHART_FUNDAMENTALS, "Net Interest Margin", None, percent=True),
+    Metric("efficiency_ratio", CHART_FUNDAMENTALS, "Efficiency Ratio", None, percent=True, quarterly=True),
+    Metric("roa", CHART_FUNDAMENTALS, "Return on Assets", None, percent=True),
+    Metric("equity_to_assets", CHART_FUNDAMENTALS, "Equity / Assets", None, percent=True),
+    Metric("provision_ratio", CHART_FUNDAMENTALS, "Provision/Revenue", 0, percent=True, quarterly=True),
+    Metric("combined_ratio", CHART_FUNDAMENTALS, "Combined Ratio", 1.0, percent=True, quarterly=True),
+    Metric("loss_ratio", CHART_FUNDAMENTALS, "Loss Ratio", None, percent=True, quarterly=True),
+    Metric("expense_ratio", CHART_FUNDAMENTALS, "Expense Ratio", None, percent=True, quarterly=True),
+    Metric("net_investment_yield", CHART_FUNDAMENTALS, "Net Investment Yield", None, percent=True),
+    Metric("reserve_growth", CHART_FUNDAMENTALS, "Reserve Growth", 0, percent=True),
+    Metric("inventory_turnover", CHART_FUNDAMENTALS, "Inventory Turnover (x/Year)", None),
+    Metric("dio", CHART_FUNDAMENTALS, "Days Inventory Outstanding", None),
+    Metric("dso", CHART_FUNDAMENTALS, "Days Sales Outstanding", None),
+    Metric("dpo", CHART_FUNDAMENTALS, "Days Payable Outstanding", None),
+    Metric("cash_conversion_cycle", CHART_FUNDAMENTALS, "Cash Conversion Cycle (Days)", 0),
+    Metric("rd_intensity", CHART_FUNDAMENTALS, "R&D Intensity (% Revenue)", None, percent=True, quarterly=True),
+    Metric("capex_intensity", CHART_FUNDAMENTALS, "CapEx Intensity (% Revenue)", None, percent=True, quarterly=True),
+    Metric("operating_leverage", CHART_FUNDAMENTALS, "Operating Leverage", 1.0),
+    Metric("operating_income_yoy_growth", CHART_FUNDAMENTALS, "Operating Income YOY Growth", 0, percent=True),
+    Metric("ffo_margin", CHART_FUNDAMENTALS, "FFO Margin (% Revenue)", None, percent=True, quarterly=True),
+
+    # --- valuation: order is panel order ---
+    Metric("pe_ratio", CHART_VALUATION, "P/E (TTM)", None, harmonic=True),
+    Metric("pb_ratio", CHART_VALUATION, "P/B", None),
+    Metric("pfcf_ratio", CHART_VALUATION, "P/FCF (TTM)", None, harmonic=True),
+    Metric("ev_fcf", CHART_VALUATION, "EV/FCF (TTM)", None),
+    Metric("pfcf_ex_sbc", CHART_VALUATION, "P/FCF ex-SBC (TTM)", None),
+    Metric("ev_ebitda", CHART_VALUATION, "EV/EBITDA", None, harmonic=True),
+    Metric("ev_sales", CHART_VALUATION, "EV/Sales", None),
+    Metric("dividend_yield", CHART_VALUATION, "dividend yield", None, percent=True),
+    Metric("p_tbv", CHART_VALUATION, "P/TBV", None, harmonic=True),
+    Metric("p_ppnr", CHART_VALUATION, "P/PPNR", None, harmonic=True),
+    Metric("p_core_earnings", CHART_VALUATION, "P/Core Earnings", None, harmonic=True),
+    Metric("p_ffo", CHART_VALUATION, "P/FFO (TTM)", None, harmonic=True),
+    Metric("pe_to_revenue_growth", CHART_VALUATION, "PE to Revenue Growth", None),
+
+    # --- growth: ids are XBRL concept names, values read from `yoy_growth`.
+    #     ref_line/percent match what build_growth draws (a 0 line, percent axis).
+    Metric("Revenue", CHART_GROWTH, "Revenue growth (Quartal, YoY)", 0, percent=True),
+    Metric("NetIncomeLoss", CHART_GROWTH, "Net Income Growth (Quartal, YoY)", 0, percent=True),
+    Metric("SharesOutstanding", CHART_GROWTH, "Shares Outstanding (Stock Dilution/Repurchase)", 0, percent=True),
 ]
 
-GROWTH_PANELS = [
-    ("Revenue", "Revenue growth (Quartal, YoY)"),
-    ("NetIncomeLoss", "Net Income Growth (Quartal, YoY)"),
-    ("SharesOutstanding", "Shares Outstanding (Stock Dilution/Repurchase)"),
+
+def _index_metrics(metrics: list[Metric]) -> dict[str, Metric]:
+    """Fail loudly at import on a duplicate id or an unknown chart."""
+    index = {}
+    for metric in metrics:
+        if metric.chart not in CHART_SPECS:
+            raise ValueError(
+                f"METRICS: '{metric.id}' has unknown chart {metric.chart!r}; "
+                f"expected one of {sorted(CHART_SPECS)}"
+            )
+        if metric.id in index:
+            raise ValueError(
+                f"METRICS: duplicate id {metric.id!r} "
+                f"(charts {index[metric.id].chart!r} and {metric.chart!r})"
+            )
+        index[metric.id] = metric
+    return index
+
+
+METRICS_BY_ID = _index_metrics(METRICS)
+
+
+def _metrics_for(chart: str) -> list[Metric]:
+    return [m for m in METRICS if m.chart == chart]
+
+
+def get_plottable_metrics(
+    chart: str,
+    ticker: str | None = None,
+    language: str = LANGUAGE_PRIMARY,
+) -> list[tuple[str, str]]:
+    """(id, label) pairs for a chart type, in panel order -- for a UI picker.
+
+    With a ticker, the list is already narrowed by `is_hidden`; without one it is
+    the full catalogue. Narrowing only, never bypassing: this is the same rule
+    the figure builders follow, so a picker cannot offer a metric the chart would
+    then refuse to draw.
+    """
+    if chart not in CHART_SPECS:
+        raise ValueError(f"unknown chart {chart!r}; expected one of {sorted(CHART_SPECS)}")
+    return [
+        (m.id, m.label_for(language))
+        for m in _metrics_for(chart)
+        if ticker is None or not is_hidden(ticker, m.id)
+    ]
+
+
+# --- derived compatibility layer -------------------------------------------
+# Everything below is generated from METRICS and must stay equal to the literals
+# these names held before the registry existed. The legacy symlog flag is not
+# part of the registry (no metric ever set it and nothing renders it); the
+# 5-tuple below supplies its constant False positionally.
+
+FUNDAMENTALS_TO_PLOT = [
+    (m.id, m.label, m.ref_line, m.percent, False) for m in _metrics_for(CHART_FUNDAMENTALS)
 ]
 
 VALUATIONS_TO_PLOT = [
-    ("pe_ratio", "P/E (TTM)", None, False),
-    ("pb_ratio", "P/B", None, False),
-    ("pfcf_ratio", "P/FCF (TTM)", None, False),
-    ("ev_fcf", "EV/FCF (TTM)", None, False),
-    ("pfcf_ex_sbc", "P/FCF ex-SBC (TTM)", None, False),
-    ("ev_ebitda", "EV/EBITDA", None, False),
-    ("ev_sales", "EV/Sales", None, False),
-    ("dividend_yield", "dividend yield", None, True),
-    ("p_tbv", "P/TBV", None, False),
-    ("p_ppnr", "P/PPNR", None, False),
-    ("p_core_earnings", "P/Core Earnings", None, False),
-    ("p_ffo", "P/FFO (TTM)", None, False),
-    ("pe_to_revenue_growth", "PE to Revenue Growth", None, False),
+    (m.id, m.label, m.ref_line, m.percent) for m in _metrics_for(CHART_VALUATION)
 ]
 
+GROWTH_PANELS = [(m.id, m.label) for m in _metrics_for(CHART_GROWTH)]
 
-HARMONIC_MEAN_CONCEPTS = {
-    "pe_ratio", "pfcf_ratio", "ev_ebitda", "p_tbv", "p_ppnr", "p_core_earnings", "p_ffo",
-}
+QUARTERLY_COUNTERPART = {m.id: f"{m.id}_quarterly" for m in METRICS if m.quarterly}
+
+HARMONIC_MEAN_CONCEPTS = {m.id for m in METRICS if m.harmonic}

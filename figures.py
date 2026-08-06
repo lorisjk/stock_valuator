@@ -8,6 +8,7 @@ from plotly.subplots import make_subplots
 from config import (
     is_hidden, FUNDAMENTALS_TO_PLOT, QUARTERLY_COUNTERPART, GROWTH_PANELS,
     VALUATIONS_TO_PLOT, HARMONIC_MEAN_CONCEPTS, TICKER_PROFILES, DEFAULT_PROFILE,
+    METRICS_BY_ID, CHART_VALUATION,
 )
 from metrics import harmonic_mean
 
@@ -48,9 +49,7 @@ def _write_figure(fig: go.Figure, output_path: str) -> None:
 
 
 def _make_grid(n: int, max_cols: int = 3):
-    # n == 0 is unreachable: every builder returns early on an empty panel list.
-    # Kept as a defensive no-op so a future caller cannot get a ZeroDivisionError
-    # out of `min(max_cols, 0)` -> cols=0.
+
     if n == 0:
         return 1, 1
     cols = min(max_cols, n)
@@ -552,24 +551,29 @@ def plot_valuation(
 
 
 def _concept_plot_spec(concept: str):
-    """Chart furniture for a concept, read off the same config tuples the
-    single-ticker charts use, so a comparison chart cannot drift from them.
+    """Chart furniture for a concept, straight out of config's METRICS registry,
+    which is also what the single-ticker charts are built from -- so a comparison
+    chart cannot drift from them.
 
     Returns (source, ylabel, ref_line, percent, is_valuation, value_column) or
     None if the concept is not something this project plots.
+
+    This used to scan VALUATIONS_TO_PLOT, then FUNDAMENTALS_TO_PLOT, then
+    GROWTH_PANELS. That precedence is moot: every id belongs to exactly one
+    chart, and config's registry index refuses a duplicate id at import.
     """
-    for c in VALUATIONS_TO_PLOT:
-        if c[0] == concept:
-            # plot_valuation applies the rolling year cutoff; comparisons must too
-            return "valuation", c[1], c[2], c[3], True, "value"
-    for c in FUNDAMENTALS_TO_PLOT:
-        if c[0] == concept:
-            return "fundamentals", c[1], c[2], c[3], False, "value"
-    for c, label in GROWTH_PANELS:
-        if c == concept:
-            # plot_growth draws facts[growth_column] as a percentage against a 0 line
-            return "growth", label, 0, True, False, "yoy_growth"
-    return None
+    metric = METRICS_BY_ID.get(concept)
+    if metric is None:
+        return None
+    return (
+        metric.chart,
+        metric.label,
+        metric.ref_line,
+        metric.percent,
+        # plot_valuation applies the rolling year cutoff; comparisons must too
+        metric.chart == CHART_VALUATION,
+        metric.value_column,
+    )
 
 
 def concept_source(concept: str) -> str | None:
