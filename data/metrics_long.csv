@@ -486,6 +486,7 @@ O,2025-06-30,0.0,buyback_distortion_flag
 O,2025-09-30,0.0,buyback_distortion_flag
 O,2025-12-31,0.0,buyback_distortion_flag
 O,2026-03-31,0.0,buyback_distortion_flag
+O,2026-06-30,0.0,buyback_distortion_flag
 AAPL,2009-09-26,0.0,inorganic_contaminated
 AAPL,2009-12-26,1.0,inorganic_contaminated
 AAPL,2010-03-27,1.0,inorganic_contaminated
@@ -921,6 +922,7 @@ O,2025-06-30,0.0,inorganic_contaminated
 O,2025-09-30,0.0,inorganic_contaminated
 O,2025-12-31,0.0,inorganic_contaminated
 O,2026-03-31,0.0,inorganic_contaminated
+O,2026-06-30,0.0,inorganic_contaminated
 AAPL,2008-09-27,0.0,share_count_jump_flag
 AAPL,2008-12-27,0.0,share_count_jump_flag
 AAPL,2009-03-28,0.0,share_count_jump_flag
@@ -1488,6 +1490,7 @@ O,2025-06-30,0.0,share_count_jump_flag
 O,2025-09-30,0.0,share_count_jump_flag
 O,2025-12-31,0.0,share_count_jump_flag
 O,2026-03-31,0.0,share_count_jump_flag
+O,2026-06-30,0.0,share_count_jump_flag
 AAPL,2009-09-26,0.0,fcf_exceeds_ebitda
 AAPL,2009-12-26,0.0,fcf_exceeds_ebitda
 AAPL,2010-03-27,0.0,fcf_exceeds_ebitda
@@ -2275,6 +2278,7 @@ O,2025-06-30,0.07532014996102697,effective_tax_rate
 O,2025-09-30,0.07942685954925485,effective_tax_rate
 O,2025-12-31,0.07388438867001001,effective_tax_rate
 O,2026-03-31,0.07763006622731027,effective_tax_rate
+O,2026-06-30,0.06931840370353277,effective_tax_rate
 AAPL,2009-06-27,0.0,low_tax_rate_flag
 AAPL,2009-09-26,0.0,low_tax_rate_flag
 AAPL,2009-12-26,0.0,low_tax_rate_flag
@@ -2766,6 +2770,7 @@ O,2025-06-30,1.0,low_tax_rate_flag
 O,2025-09-30,1.0,low_tax_rate_flag
 O,2025-12-31,1.0,low_tax_rate_flag
 O,2026-03-31,1.0,low_tax_rate_flag
+O,2026-06-30,1.0,low_tax_rate_flag
 AAPL,2008-06-28,,revenue_yoy_growth
 AAPL,2008-12-27,,revenue_yoy_growth
 AAPL,2009-03-28,,revenue_yoy_growth
@@ -3318,6 +3323,7 @@ O,2025-06-30,0.15837323344326593,revenue_yoy_growth
 O,2025-09-30,0.11875190728098017,revenue_yoy_growth
 O,2025-12-31,0.09072701892682833,revenue_yoy_growth
 O,2026-03-31,0.09764815080682054,revenue_yoy_growth
+O,2026-06-30,0.10853615378855408,revenue_yoy_growth
 AAPL,2008-06-28,,income_yoy_growth
 AAPL,2008-12-27,,income_yoy_growth
 AAPL,2009-03-28,,income_yoy_growth
@@ -4453,6 +4459,7 @@ O,2025-06-30,0.02339101781605781,roe
 O,2025-09-30,0.02463770272193278,roe
 O,2025-12-31,0.02684140537611602,roe
 O,2026-03-31,0.028623575690749994,roe
+O,2026-06-30,0.03205034635406915,roe
 AAPL,2009-06-27,0.2638137144192204,rotce
 AAPL,2009-09-26,0.2619774766176751,rotce
 AAPL,2009-12-26,0.263494298183866,rotce
@@ -4903,6 +4910,7 @@ O,2025-06-30,0.026762323979314752,rotce
 O,2025-09-30,0.028199360356837386,rotce
 O,2025-12-31,0.030677991761319377,rotce
 O,2026-03-31,0.032749718941411154,rotce
+O,2026-06-30,0.036616803627821624,rotce
 AAPL,2012-09-29,0.0,debt_to_equity
 AAPL,2013-06-29,0.13747426106976668,debt_to_equity
 AAPL,2013-09-28,0.1372734704449247,debt_to_equity
@@ -5219,6 +5227,7 @@ O,2025-06-30,0.635604031005867,debt_to_equity
 O,2025-09-30,0.6345988257234582,debt_to_equity
 O,2025-12-31,0.6347052558407422,debt_to_equity
 O,2026-03-31,0.6363604711771395,debt_to_equity
+O,2026-06-30,0.6344341100963533,debt_to_equity
 AAPL,2011-12-31,,payout_ratio
 AAPL,2012-03-31,,payout_ratio
 AAPL,2012-06-30,,payout_ratio
@@ -7436,6 +7445,7 @@ O,2025-06-30,0.5940894129122936,ffo_margin
 O,2025-09-30,0.5930945667894977,ffo_margin
 O,2025-12-31,0.5922641705353467,ffo_margin
 O,2026-03-31,0.5872881890104416,ffo_margin
+O,2026-06-30,0.5977781418519647,ffo_margin
 AAPL,2008-06-28,0.1864951768488746,operating_margin_quarterly
 AAPL,2008-12-27,0.26102693602693605,operating_margin_quarterly
 AAPL,2009-03-28,0.25572435050638487,operating_margin_quarterly
@@ -8710,3 +8720,4 @@ O,2025-06-30,0.5716212249482053,ffo_margin_quarterly
 O,2025-09-30,0.611093657347717,ffo_margin_quarterly
 O,2025-12-31,0.580728281075472,ffo_margin_quarterly
 O,2026-03-31,0.5852542120076683,ffo_margin_quarterly
+O,2026-06-30,0.6140500390576794,ffo_margin_quarterly

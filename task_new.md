@@ -1,152 +1,216 @@
-# Task: Data Inspection Layer — Export Completion + App Data Tab
+# Task: App Refinements — Tab Order, Format Bug, Growth Expansion, Snapshot-in-Chart
 
-**Depends on the app export layer task being complete and shipped.** Read
-`app_export_layer_report.md`, `metrics_registry_report.md` and the current `main.py`, `app.py`,
-`config.py` before changing anything.
+**Depends on the data inspection layer being complete and shipped.** Read `data_tab_report.md`,
+`metrics_registry_report.md`, `app_export_layer_report.md` and the current `app.py`, `figures.py`,
+`config.py`, `main.py` before changing anything.
 
-## Context
+This task has four independent parts, ordered by risk. **Parts 1 and 2 are small and should be
+finished and verified before starting 3 and 4.** Parts 3 and 4 both touch `config.py` and
+`figures.py`, which have been stable for several tasks — treat them accordingly.
 
-The Streamlit prototype renders charts well. What it cannot do is show the **data behind them**,
-which for this project is not a secondary feature: showing coverage honestly — what was
-extracted, what is structurally not applicable, what failed — is the stated differentiator over
-commercial providers that buy standardized data and show no provenance.
-
-The goal is that a user looking at a ticker can walk the full chain from raw filing facts to the
-final snapshot, inspect any level as a readable table, download it, and paste it into an LLM.
-
-Two gaps block this today:
-
-1. **`build_snapshot()`'s output is not exported.** It runs in the pipeline and is written as
-   `current_snapshot.csv`, but `export_for_app()` does not include it, so the app cannot show it.
-2. **`facts_growth.parquet` is narrowed to the three growth-chart concepts** (a correct decision
-   for charting, 18,120 → 1,705 rows). The data layer needs the full facts frame, which contains
-   both raw XBRL concepts (`Revenue`, `StockholdersEquity`, `Goodwill`, `LongTermDebt`, …) and
-   the pipeline's derived ones (`Revenue_TTM`, `FCF_QUARTERLY`, `EPS_TTM_CALC`, …) — that pairing
-   is precisely what makes the TTM derivation auditable.
-
-**Explicitly NOT in this task:** no changes to `figures.py`, no changes to the chart tabs beyond
-what is needed to add a new tab, no Phase 4, no `PROFILE_HIDDEN` refactor, no new metrics, no
-`SharesOutstanding` fix, no deployment or auth work.
+**Explicitly NOT in this task:** no Phase 4 (cross-sectional/peer scatter), no `PROFILE_HIDDEN`
+structural refactor, no `SharesOutstanding` fix for `V`/`STZ`, no deployment work, no restyling
+beyond what each part requires.
 
 ---
 
-## Step 1 — Complete the export
+## Part 1 — Reorder the tabs
 
-Extend `export_for_app()` in `main.py`. Keep the existing five outputs unchanged, and add:
+The data tab is currently last. Move it first, so the app opens on the data and the charts follow.
+This is a presentation change only: no change to what each tab renders, no change to which tab is
+selected by default beyond it now being the data tab.
 
-| file | contents |
-|---|---|
-| `current_snapshot.parquet` | the snapshot frame `build_snapshot()` produces |
-| `facts_full.parquet` | the full facts frame — all concepts, not narrowed to growth panels |
+Confirm nothing depends on tab order (e.g. index-based `st.tabs` unpacking elsewhere in the file).
 
-Requirements and things to decide:
+---
 
-1. **Inspect the snapshot frame's actual shape first** and report it: columns, dtypes, one row
-   per ticker or something else, and whether it is wide or long. Do not assume — the app's
-   rendering depends on it.
-2. **`facts_growth.parquet` stays** as it is. It is what the growth charts consume and it is
-   10.6× smaller; do not merge the two. State in the report that this is deliberate duplication
-   with a clear division of labour (charts vs. inspection).
-3. **Confirm what `filter_hidden_rows` did before the export.** The exported frames are
-   post-filter, which should mean a ticker's hidden metrics are already absent. Verify that
-   empirically for a `financial` and a `reit` ticker rather than assuming it — the data tab must
-   not become a way to see metrics that `is_hidden` deliberately suppresses.
-4. **File size.** Report the resulting size of `facts_full.parquet` for the run you test with,
-   and extrapolate to the full ~500-ticker universe. If it lands somewhere that would be a
-   problem to ship, say so with numbers rather than trimming silently.
-5. Extend `meta.json`'s row counts to cover the new files, and keep the write-then-`os.replace`
-   atomicity and the "meta.json written last" rule.
+## Part 2 — Fix the percent-formatting bug in the facts table
 
-## Step 2 — Long-to-wide pivot helper in `app.py`
+**Symptom:** in the raw facts table, `Revenue` and `SharesOutstanding` render as percentages
+(e.g. an absolute dollar figure shown as `9,400,000,000.00%`) instead of scaled absolute values.
 
-Every exported frame is long (`ticker`, `end`, `concept`, `value`), which is unreadable as a
-table and unusable for an LLM. Build one shared helper that pivots a long frame for a single
-ticker into **rows = period end, columns = concept**.
+**Diagnosed cause — verify this before fixing, don't take it on faith.** `format_for_display`
+resolves `percent` from `config.METRICS_BY_ID[concept].percent` as its first rule. The three
+`CHART_GROWTH` registry entries are keyed by **XBRL concept name** — `Revenue`, `NetIncomeLoss`,
+`SharesOutstanding` — and carry `percent=True`, correctly, because the growth charts plot YoY
+percentages. The facts frame contains columns with those same three names holding **absolute
+values**. The registry lookup therefore returns the growth metric's formatting for the raw fact.
+`NetIncomeLoss` should be affected identically — check it and say so either way.
 
-Design points:
+**The fix must address the namespace collision, not just the three symptoms.** A hardcoded
+exception list for these three names would break again the moment a growth metric is added in
+Part 3. The registry already distinguishes namespaces (`CHART_SPECS[...]["id_namespace"]` is
+`"metric"` for fundamentals/valuation and `"xbrl_concept"` for growth) and each `Metric` exposes
+`value_column`. Use that structure: the registry's `percent` flag describes a metric in the
+**metric frames**, and must not be applied to a concept read from the **facts frame**.
 
-1. **Sort newest first.** A user opening the table wants the recent quarters, not 2009.
-2. **Missing values stay visibly missing.** Do not fill, do not drop columns that are entirely
-   empty for the ticker. A concept that is present in the frame but null for this ticker is
-   information — it is the difference between "not applicable to this business model" and
-   "extraction failed", and hiding it would defeat the purpose of this tab. (Concretely: `rotce`
-   is ~52% null for AAPL in the sample data.)
-3. **Display formatting vs. export precision must be separated.** On screen, raw fact values run
-   to `339000000.0` and ratios to many decimals; both are hard to read. Decide a display
-   treatment (e.g. thousands separators or scaled units for absolute values, fixed decimals for
-   ratios) — but **the download and the LLM copy block must carry full unrounded precision**.
-   State how you keep the two apart, and how you tell an absolute value from a ratio (the
-   `METRICS` registry's `percent` flag covers the metric frames; facts are a separate case —
-   say what you do there).
-4. Handle a ticker with no rows in a frame without raising.
+Decide and state how the formatter learns which frame it is formatting (an explicit argument at
+the call site is likely cleanest — the caller always knows). Facts columns then fall through to
+the existing magnitude-based rule, which already renders `Assets` as `4.90T` correctly.
 
-## Step 3 — The data tab
+Verify with real values, comparing displayed strings against the source: `Revenue`,
+`NetIncomeLoss` and `SharesOutstanding` in the facts table render as scaled absolutes; the same
+three concepts still render as percentages in the **growth chart** axis; and metrics whose
+registry `percent` flag is genuinely correct (e.g. `operating_margin`, `roe`) are unaffected in
+the metrics table. Include a per-share concept (`EPS_TTM_CALC`) to confirm the magnitude fallback
+still gives it decimals rather than a scaled unit.
 
-Add a new top-level tab alongside the existing chart tabs. It shows, for the currently selected
-ticker, four sections corresponding to the pipeline chain:
+---
 
-| section | source | what it demonstrates |
-|---|---|---|
-| Raw & derived facts | `facts_full` | what came out of EDGAR, and what the pipeline derived from it |
-| Calculated metrics | `metrics_long` | what the pipeline computes from those facts |
-| Valuation history | `valuation_history` | multiples over time |
-| Current snapshot | `current_snapshot` | the latest state, one row per ticker |
+## Part 3 — Expand growth coverage
 
-Requirements:
+**The problem:** the pipeline computes `yoy_growth` for far more concepts than it plots. The facts
+frame carries 69 concepts with a `yoy_growth` column, and the growth chart shows **three**
+(`Revenue`, `NetIncomeLoss`, `SharesOutstanding`). Growth in EPS, FCF, operating income, equity
+and the sector-specific aggregates is computed and then discarded at render time.
 
-1. **Separate quality flags from metrics in the `metrics_long` section.** The frame mixes actual
-   metrics with binary flags — in the sample data, `buyback_distortion_flag`,
-   `fcf_exceeds_ebitda`, `inorganic_contaminated`, `low_tax_rate_flag` and `share_count_jump_flag`
-   sit alongside `roe` and `operating_margin`. Rendering 0/1 flags as columns between ratios is
-   noise, and worse, it buries information that matters: the flags are the pipeline telling the
-   user where it is unsure. Give them their own presentation. Decide how to identify them —
-   prefer something more robust than a `_flag` suffix match if the project offers one (check
-   `config.py` and `quality.py` first and say what you found); if a name-based rule is the only
-   option available, say so plainly and keep the rule in one place.
-2. **Distinguish raw from derived in the facts section.** The `_TTM` / `_QUARTERLY` / `_CALC`
-   suffixes carry that distinction. Make it visible (grouping, ordering, or a filter — your
-   call), because seeing `Revenue` next to `Revenue_TTM` is how a user audits the TTM logic.
-3. **A row/period limit with an explicit opt-out.** Default to a recent window (e.g. the last
-   ~12–20 periods) with a control to show everything. State the default you chose.
-4. **Per-section download button** producing the filtered, single-ticker table as CSV with a
-   meaningful filename (e.g. `AAPL_metrics.csv`). Full precision, not display-rounded.
-5. **An LLM-friendly copy block per section** — `st.code` with the table as CSV or Markdown text,
-   which gives a built-in copy button. Default it to a smaller window than the table view (state
-   the number) and note in the UI roughly how large it is, since a full 73×19 table plus facts is
-   near the practical limit for pasting into a chat.
-6. **The snapshot section** renders the single row for the selected ticker readably — a
-   transposed one-column view is likely better than a very wide single-row table, but decide
-   based on its actual shape from Step 1.1 and justify.
+### Step 3.1 — Survey what is actually available and reliable
 
-Keep it consistent with the existing prototype: no custom CSS, no multi-page structure,
-`@st.cache_data` on data loading only and never on rendered output.
+Before proposing anything, measure across a real multi-profile ticker set (at minimum one
+`standard`, one `financial`, one `insurance`, one `reit`, one retail/`industrial`):
 
-## Step 4 — Verify
+- For every concept in the facts frame, how many tickers have usable `yoy_growth` (non-null
+  count, and how far back the series runs).
+- Which concepts are **TTM** vs. **quarterly** vs. raw — growth on a raw quarterly figure is
+  seasonal noise for most businesses, growth on a `_TTM` series is the meaningful comparison.
+  State this explicitly per candidate rather than treating all concepts alike.
+- Which concepts produce **structurally unstable growth**: a series that crosses zero makes
+  percentage growth meaningless or explosive (`NetIncomeLoss` for a company with a loss quarter,
+  `FCF` likewise). Identify which candidates have this property and how often it actually bites
+  in the real data — this is the single most likely way an expanded growth chart produces a
+  plausible-looking but worthless panel.
 
-- **Export round-trip:** the two new Parquet files load back with dtypes preserved (`end` as
-  `datetime64[ns]`), and their contents equal the in-memory frames they came from.
-- **The pivot is correct, checked against the source frame**: for at least one ticker and one
-  frame, verify a handful of individual cells against the long-format rows they came from, and
-  confirm the pivot's shape matches the ticker's distinct period/concept counts. Use at least one
-  `financial` or `reit` ticker, not only a `standard` one.
-- **Nulls survive the pivot** — a concept that is null for the ticker is still a column, still
-  null, not dropped and not filled.
-- **Downloads carry full precision:** compare a downloaded value against the source frame's
-  value, not against what the screen shows.
-- **Hidden metrics do not appear** in the data tab for a ticker whose profile hides them —
-  assert the precondition against `config.is_hidden` first, then check the rendered table.
-- **`app.py` still imports cleanly, imports no pipeline module**, and the whole page body runs to
-  completion in Streamlit's bare mode with the new tab included, as the previous task verified
-  it. State honestly what was not verifiable without a browser.
-- **Nothing regressed:** the chart tabs still render identically, `run_full_refresh()` runs end to
-  end, and `figures.py` / `config.py` are unmodified (confirm by hash, not memory).
+Report the survey as a table. **Confirmed-not-suitable is a fully successful outcome for a
+candidate** — this project prefers an honest gap to a forced panel.
+
+### Step 3.2 — Propose the expansion, with per-profile assignment
+
+Propose which concepts become growth panels, and for which profiles. Growth panels are not
+universal: a bank's meaningful growth series is not a software company's. Concretely worth
+evaluating (not a mandate — evaluate against Step 3.1's data):
+
+- `EPS_TTM_CALC` growth — explicitly requested, and likely the single most useful addition
+- `FCF_TTM`, `OperatingCashFlow_TTM`, `OperatingIncomeLoss_TTM` growth
+- `StockholdersEquity` growth (already a `GROWTH_BASE_PANELS` name — see the note below)
+- sector aggregates for `financial` / `insurance` / `reit` profiles
+
+**Note the dead-code precedent.** `config.py` contains `GROWTH_BASE_PANELS`, `GROWTH_PROFILE_EXTRA`
+and `get_growth_panels()` — a per-profile growth panel mechanism with **zero consumers**, confirmed
+in the Phase 1 report. It names concepts like `fcf_growth` and `nii_growth`, i.e. someone already
+sketched this expansion. Read it, say what it intended, and state explicitly whether your design
+supersedes it (in which case propose deleting it) or revives it. Do not leave a third parallel
+mechanism behind.
+
+### Step 3.3 — Implement via the registry
+
+New growth panels are new `METRICS` entries with `chart=CHART_GROWTH`. That is the whole point of
+the registry — adding a metric should be one line.
+
+Two constraints:
+
+1. **Per-profile visibility runs through `is_hidden`, as everywhere else.** Do not build a second
+   visibility mechanism for growth.
+2. **Report the `PROFILE_HIDDEN` cost.** It is a negative list: every growth metric that applies to
+   only some profiles needs hide entries for all the others. Count how many entries your proposal
+   adds. If it adds a disproportionate number, **say so and flag it** — that is direct evidence for
+   the known "negative list will not scale" problem, and a measured number is more useful than the
+   general worry. Do not refactor `PROFILE_HIDDEN` here; report the number.
+
+New growth panels appear in both the growth chart and the data tab automatically if both read the
+registry. Confirm that they do, and fix the one that does not rather than special-casing.
+
+### Step 3.4 — Verify
+
+- Non-regression: the three existing growth panels render byte-identically for a ticker whose
+  profile gains no new panels.
+- Each new panel renders real data for the profiles it targets, and is correctly absent for the
+  profiles it does not.
+- At least one new panel checked numerically against the source frame's `yoy_growth` values.
+- The data tab picks up the new concepts without a change there.
+
+---
+
+## Part 4 — The current snapshot as the final point in valuation charts
+
+**Goal:** the user should see the current multiple against its own history without leaving the
+chart — `build_snapshot()` already computes it, and `valuation_history` ends at the last period
+end, so the most decision-relevant number is currently the one that is missing from the picture.
+
+This is the most design-sensitive part of the task. Get the following right.
+
+### 4.1 — The snapshot point must not enter the mean
+
+`build_valuation` draws a mean line (harmonic for `HARMONIC_MEAN_CONCEPTS`, arithmetic otherwise)
+over the plotted series. **The mean is the historical benchmark the current value is judged
+against.** If the snapshot point is folded into the same series, it contaminates the very
+comparison the feature exists to enable.
+
+Implement it so the mean is computed over the historical series only, and prove it numerically:
+the mean line's value and label must be **identical** with and without the snapshot point.
+
+### 4.2 — It must be visually distinguishable from a filed period
+
+A snapshot point is a different kind of observation: current market price against the latest
+available fundamentals, not a value at a completed fiscal period end. Render it so a reader cannot
+mistake it for a filed data point (separate trace with its own marker style and legend entry is the
+obvious approach — state what you chose). Its hover text should say what it is and carry its
+as-of date.
+
+### 4.3 — Concept alignment must be verified, not assumed
+
+Confirm that the snapshot frame's concept names match `valuation_history`'s for the plotted
+multiples (`pe_ratio`, `p_tbv`, `p_ffo`, `ev_ebitda`, `dividend_yield`, …). The data-tab report
+found the snapshot carries 76 concepts across 8 tickers including non-valuation ones like
+`shares_basis`. Report the actual overlap. Any valuation concept **without** a snapshot
+counterpart simply gets no extra point — that panel renders exactly as today.
+
+### 4.4 — Interaction with `as_of`
+
+`build_valuation` accepts `as_of` for historical windows. The snapshot is as of the pipeline run
+date. Appending a run-date point to a chart windowed to a past date would show the user data that
+date could not have known — the exact error `as_of` exists to prevent.
+
+Decide and state the rule; the recommended one is: **suppress the snapshot point whenever `as_of`
+is set to a date earlier than the snapshot's own date.** Verify it.
+
+### 4.5 — Where the data comes from
+
+`build_valuation`'s signature currently takes `valuation_history`. Decide how the snapshot reaches
+it — an optional `snapshot: pd.DataFrame | None = None` parameter is the natural shape, keeping the
+default behaviour (no parameter → no extra point → today's output exactly). State the choice, and
+update both callers: `app.py`, which has the snapshot frame loaded already, and `main.py`'s
+pipeline path, where you should decide whether the written chart files include the point (they are
+snapshots of a moment either way — say what you chose and why).
+
+### 4.6 — Comparison charts
+
+`build_ticker_comparison` also plots valuation concepts. State whether the snapshot point applies
+there too. Implementing it is optional; **deciding and stating it is not** — leaving the two chart
+types silently inconsistent is the failure mode here.
+
+### 4.7 — Verify
+
+- Mean line identical with and without the snapshot point (4.1), numerically, for both a harmonic
+  and an arithmetic concept.
+- The extra point's value equals the snapshot frame's value for that ticker/concept, and its x
+  position is the snapshot date.
+- A valuation concept absent from the snapshot renders unchanged versus today.
+- `as_of` suppression behaves as designed.
+- Default call (no snapshot passed) produces **byte-identical** output to before this part, for
+  three tickers across profiles.
+
+---
 
 ## Output
 
-One file, `data_tab_report.md`: the snapshot frame's actual shape from Step 1.1, the export
-additions with file sizes and the full-universe extrapolation, the pivot and formatting design
-decisions, how flags and raw-vs-derived are distinguished (and what you found in `config.py` /
-`quality.py` for the flag identification), the limits and defaults chosen, and the Step 4
-verification results.
+One file, `app_refinements_report.md`, with a section per part:
+1. The tab reorder and what you confirmed did not depend on order.
+2. The percent bug: confirmation of the diagnosed cause (including `NetIncomeLoss`), the
+   namespace-aware fix, and the verification.
+3. The growth survey table, the expansion proposal with per-profile reasoning, what was
+   implemented, the `PROFILE_HIDDEN` entry count, the verdict on `GROWTH_BASE_PANELS` /
+   `get_growth_panels()`, and any candidate you rejected with the reason.
+4. The snapshot-point design decisions (4.1–4.6) with reasoning, and the verification results
+   including the mean-line invariance proof.
 
 No scratch scripts left behind.

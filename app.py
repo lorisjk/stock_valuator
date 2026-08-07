@@ -195,22 +195,46 @@ def _format_ratio(value: float, percent: bool) -> str:
     return f"{value * 100:.2f}%" if percent else f"{value:.4f}"
 
 
-def format_for_display(wide: pd.DataFrame) -> pd.DataFrame:
+def _percent_applies(concept: str, value_column: str) -> bool:
+    """Does the registry's percent flag describe *this* column of *this* frame?
+
+    The registry spans two id namespaces, and three ids exist in both worlds:
+    Revenue, NetIncomeLoss and SharesOutstanding are registered as CHART_GROWTH
+    metrics keyed by XBRL concept name, with percent=True -- correct, because the
+    growth chart plots YoY percentages. The facts frame holds columns with those
+    same three names carrying absolute dollar figures, so reading the flag by name
+    alone rendered $109bn of revenue as "10941700000000.00%".
+
+    Matching on id_namespace would not fix it: the facts frame's columns *are*
+    XBRL concept names, i.e. exactly the namespace those entries live in.
+    value_column is what separates them -- a growth entry describes `yoy_growth`
+    and never `value`. Registry ids are globally unique (_index_metrics raises on
+    a duplicate at import), so this single test is unambiguous.
+    """
+    metric = config.METRICS_BY_ID.get(concept)
+    return metric is not None and metric.percent and metric.value_column == value_column
+
+
+def format_for_display(wide: pd.DataFrame, value_column: str = "value") -> pd.DataFrame:
     """Numeric pivot -> strings for on-screen reading. Never used for export.
 
-    A concept registered with percent=True is shown as a percentage; that covers
-    the metric frames. The facts frame has no registry entry for its concepts, so
-    the fallback is the column's own magnitude -- which puts Revenue and Assets
-    in scaled units and leaves EPS_TTM_CALC and DividendsPerShare_TTM as plain
-    decimals, without needing a per-concept table that would go stale.
+    `value_column` is the column the pivot was built from; the caller always knows
+    it. It decides whether a registry entry describes what is being shown -- see
+    _percent_applies.
+
+    A concept whose registry entry does describe this column and carries
+    percent=True is shown as a percentage; that covers the metric frames. Facts
+    concepts have no applicable entry, so the fallback is the column's own
+    magnitude -- which puts Revenue and Assets in scaled units and leaves
+    EPS_TTM_CALC and DividendsPerShare_TTM as plain decimals, without needing a
+    per-concept table that would go stale.
     """
     if wide.empty:
         return wide
     out = {}
     for concept in wide.columns:
         column = wide[concept]
-        metric = config.METRICS_BY_ID.get(concept)
-        if metric is not None and metric.percent:
+        if _percent_applies(concept, value_column):
             out[concept] = column.map(lambda v: _format_ratio(v, True))
         elif column.abs().max() >= ABSOLUTE_THRESHOLD:
             out[concept] = column.map(_format_absolute)
@@ -228,7 +252,8 @@ def to_csv_text(wide: pd.DataFrame) -> str:
 
 
 def render_data_section(title: str, wide: pd.DataFrame, ticker: str, slug: str,
-                        periods: int, copy_periods: int, caption: str = "") -> None:
+                        periods: int, copy_periods: int, caption: str = "",
+                        value_column: str = "value") -> None:
     """One section of the data tab: table, download, copy block."""
     st.subheader(title)
     if caption:
@@ -244,7 +269,7 @@ def render_data_section(title: str, wide: pd.DataFrame, ticker: str, slug: str,
         + (f" · {empty_columns} null in every period shown — kept on purpose, "
            "an empty column is a finding" if empty_columns else "")
     )
-    st.dataframe(format_for_display(shown), width="stretch")
+    st.dataframe(format_for_display(shown, value_column), width="stretch")
 
     st.download_button(
         "Download CSV", to_csv_text(shown), file_name=f"{ticker}_{slug}.csv",
@@ -306,9 +331,11 @@ def render_snapshot_section(snapshot: pd.DataFrame, ticker: str) -> None:
 
     table = sub[["concept", "value"]].sort_values("concept").set_index("concept")
     display = table.copy()
+    # Same rule as format_for_display, via the same helper -- the snapshot is one
+    # value per concept rather than a column, so it cannot use the magnitude of a
+    # column and decides per value instead.
     display["value"] = [
-        _format_ratio(v, True) if (config.METRICS_BY_ID.get(c) is not None
-                                   and config.METRICS_BY_ID[c].percent)
+        _format_ratio(v, True) if _percent_applies(c, "value")
         else (_format_absolute(v) if abs(v) >= ABSOLUTE_THRESHOLD else _format_ratio(v, False))
         for c, v in zip(table.index, table["value"])
     ]
@@ -445,10 +472,16 @@ def main() -> None:
             as_of = pd.Timestamp(st.date_input("As of", value=pd.Timestamp.today().date()))
             st.caption("The valuation window runs backwards from this date and stops there.")
 
-    tab_fund, tab_growth, tab_val, tab_cmp, tab_data = st.tabs(
-        [CHART_LABELS["fundamentals"], CHART_LABELS["growth"],
-         CHART_LABELS["valuation"], "Comparison", "Data"]
+    # Data first: the app opens on what was extracted, and the charts follow.
+    # The `with` blocks below fill named containers, so their order in the source
+    # is independent of the order the tabs render in -- only this list decides.
+    tab_data, tab_fund, tab_growth, tab_val, tab_cmp = st.tabs(
+        ["Data", CHART_LABELS["fundamentals"], CHART_LABELS["growth"],
+         CHART_LABELS["valuation"], "Comparison"]
     )
+
+    with tab_data:
+        render_data_tab(ticker)
 
     with tab_fund:
         ids, labels = metric_options("fundamentals", ticker)
@@ -477,8 +510,15 @@ def main() -> None:
         years = st.slider("Window (years)", 1, 15, 5)
         render(
             figures.build_valuation(ticker, frame_for("valuation"), years=years,
-                                    concepts=chosen, as_of=as_of, width=None),
+                                    concepts=chosen, as_of=as_of,
+                                    snapshot=load_frame(DATA_FILES["snapshot"]),
+                                    width=None),
             "Nothing selected, or no valuation data for this ticker.",
+        )
+        st.caption(
+            "The green circle is the current multiple — today's price against the "
+            "latest available fundamentals — not a filed period. It is excluded from "
+            "the mean line, and hidden when the as-of date predates it."
         )
 
     with tab_cmp:
@@ -509,9 +549,6 @@ def main() -> None:
             for dropped, reason in excluded:
                 st.warning(f"**{dropped}** not shown — {reason}")
             render(fig, "Pick at least two tickers that can show this metric.")
-
-    with tab_data:
-        render_data_tab(ticker)
 
 
 if __name__ == "__main__":

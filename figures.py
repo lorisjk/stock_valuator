@@ -16,6 +16,9 @@ from metrics import harmonic_mean
 # (each mpl axes restarted its color cycle; one Plotly figure would not).
 _PRIMARY_COLOR = "#1f77b4"
 _SECONDARY_COLOR = "#ff7f0e"
+# The snapshot marker: green rather than the series blue, and never red, which is
+# already the mean line and the reference line.
+_SNAPSHOT_COLOR = "#2ca02c"
 _PERCENT_TICKFORMAT = ".1~%"
 _KNOWN_OUTPUT_EXTENSIONS = {".png", ".html", ".json"}
 
@@ -83,10 +86,10 @@ def _select_concepts(ticker: str, catalogue: list, requested: list[str] | None) 
     if dropped:
         known = {c[0] for c in catalogue}
         detail = ", ".join(
-            f"{name} ({'für dieses Profil ausgeblendet' if name in known else 'unbekannt'})"
+            f"{name} ({'not shown for this profile' if name in known else 'unknown'})"
             for name in dropped
         )
-        print(f"[figures] {ticker}: angeforderte Konzepte nicht darstellbar -- {detail}")
+        print(f"[figures] {ticker}: requested concepts not plottable -- {detail}")
     return selected
 
 
@@ -156,7 +159,7 @@ def _annotate_no_data(
 ) -> None:
 
     fig.add_annotation(
-        text="Keine Daten",
+        text="No Data",
         x=0.5,
         y=0.5,
         showarrow=False,
@@ -196,6 +199,34 @@ def _style_axes(fig: go.Figure, row: int, col: int, ylabel: str, percent: bool) 
     )
 
 
+def _snapshot_point(
+    snapshot: pd.DataFrame | None,
+    ticker: str,
+    concept: str,
+    as_of: pd.Timestamp | None,
+) -> tuple[pd.Timestamp, float] | None:
+    """The current value for one panel as (date, value), or None.
+
+    None when there is no snapshot, when this concept has no snapshot counterpart
+    (build_snapshot computes 10 of the 13 valuation panels -- ev_fcf, pfcf_ex_sbc
+    and p_ffo simply have none, and those panels then render exactly as before),
+    or when `as_of` predates the snapshot: appending a run-date point to a window
+    that ends earlier would put data on the chart that the chosen date could not
+    have known, which is the error `as_of` exists to prevent.
+    """
+    if snapshot is None or snapshot.empty:
+        return None
+    rows = snapshot[(snapshot["ticker"] == ticker) & (snapshot["concept"] == concept)]
+    rows = rows.dropna(subset=["end", "value"])
+    if rows.empty:
+        return None
+    latest = rows.sort_values("end").iloc[-1]
+    stamp = pd.Timestamp(latest["end"])
+    if as_of is not None and pd.Timestamp(as_of) < stamp:
+        return None
+    return stamp, float(latest["value"])
+
+
 def plot_metric(
     fig: go.Figure,
     row: int,
@@ -208,6 +239,8 @@ def plot_metric(
     percent: bool = False,
     show_mean: bool = False,
     harmonic: bool = False,
+    snapshot_point: "tuple[pd.Timestamp, float] | None" = None,
+    snapshot_in_legend: bool = False,
 ) -> None:
 
     filtered = metrics_long[
@@ -287,6 +320,33 @@ def plot_metric(
             col=col,
         )
 
+    # Added last, and as its own trace: the mean above is computed from
+    # `filtered`, which the snapshot never enters. That is what keeps the
+    # historical benchmark uncontaminated by the value being judged against it --
+    # a structural guarantee, not an ordering convention.
+    if snapshot_point is not None:
+        stamp, value = snapshot_point
+        fig.add_trace(
+            go.Scatter(
+                x=[stamp],
+                y=[value],
+                mode="markers",
+                name="Snapshot (current value)",
+                legendgroup="snapshot",
+                showlegend=snapshot_in_legend,
+                marker=dict(color=_SNAPSHOT_COLOR, size=9, symbol="circle",
+                            line=dict(color="white", width=1)),
+                hovertemplate=(
+                    "Snapshot (current value)"
+                    f"<br>Date: {stamp:%d.%m.%Y}"
+                    "<br>Value: %{y}<extra></extra>"
+                ),
+            ),
+            row=row,
+            col=col,
+        )
+
+
 def plot_metric_dual(
     fig: go.Figure,
     row: int,
@@ -346,7 +406,7 @@ def plot_metric_dual(
                 x=quarterly["end"],
                 y=quarterly["value"],
                 mode="lines",
-                name=f"{concept} · Quartal",
+                name=f"{concept} · quarterly",
                 line=dict(
                     color=_SECONDARY_COLOR,
                     width=0.8,
@@ -451,10 +511,15 @@ def build_growth(
         print(f"[build_growth] {ticker}: no visible panels, nothing to build.")
         return None
 
-    fig = _make_subplot_figure(1, len(panels), [c for c, _ in panels])
+    # Wraps at _make_grid's 3 columns like the other charts. This was a single row
+    # while there were only ever three panels; the registry now yields up to seven,
+    # and one row of seven is a 3500px-wide figure. For <= 3 panels the grid is
+    # still 1 x n at the same pixel size, so those figures stay byte-identical.
+    rows, cols = _make_grid(len(panels))
+    fig = _make_subplot_figure(rows, cols, [c for c, _ in panels])
 
     for idx, (concept, label) in enumerate(panels):
-        col = idx + 1
+        r, col = idx // cols + 1, idx % cols + 1
         series = facts[
             (facts["ticker"] == ticker) & (facts["concept"] == concept)
         ].sort_values("end")
@@ -462,7 +527,7 @@ def build_growth(
         series_values = series.dropna(subset=[growth_column])
 
         if series_values.empty:
-            _annotate_no_data(fig, 1, col)
+            _annotate_no_data(fig, r, col)
             continue
 
         fig.add_trace(
@@ -470,14 +535,14 @@ def build_growth(
                 x=series["end"], y=series[growth_column], mode="lines + markers",
                 name=concept, line=dict(color=_PRIMARY_COLOR), connectgaps=True, hovertemplate=("Date: %{x|%d.%m.%Y}""<br>Value: %{y}""<extra></extra>")
             ),
-            row=1, col=col,
+            row=r, col=col,
         )
-        _style_axes(fig, 1, col, label, percent=True)
-        fig.add_hline(y=0, line_color="red", line_width=1, row=1, col=col)
+        _style_axes(fig, r, col, label, percent=True)
+        fig.add_hline(y=0, line_color="red", line_width=1, row=r, col=col)
 
     fig.update_layout(
         title_text=f"Growth (YoY) {ticker}",
-        **_size(width, height, 500 * len(panels), 360),
+        **_size(width, height, 500 * cols, 360 * rows),
         legend=dict(font=dict(size=9)),
     )
     return fig
@@ -503,6 +568,7 @@ def build_valuation(
     years: int = 5,
     concepts: list[str] | None = None,
     as_of: pd.Timestamp | None = None,
+    snapshot: pd.DataFrame | None = None,
     width: int | None = KEEP,
     height: int | None = KEEP,
 ) -> go.Figure | None:
@@ -510,6 +576,14 @@ def build_valuation(
 
     `as_of` anchors that window: None means today (unchanged), a date means the
     window runs backwards from that date and is bounded above by it.
+
+    `snapshot` optionally adds the current multiple as one extra marker per panel
+    -- the value the history is there to be judged against. It is a separate
+    trace, so it never enters the mean line, and it is suppressed for an `as_of`
+    earlier than the snapshot itself (see _snapshot_point). Omitting it is the
+    default and reproduces this function's output exactly as before.
+
+    Not mirrored in build_ticker_comparison, deliberately: see that docstring.
     """
     filtered = _window_frame(valuation_history, years, as_of)
 
@@ -522,10 +596,15 @@ def build_valuation(
     rows, cols = _make_grid(len(concepts_to_plot))
     fig = _make_subplot_figure(rows, cols, [c[0] for c in concepts_to_plot])
 
+    snapshot_shown = False
     for idx, (concept, ylabel, ref_line, percent) in enumerate(concepts_to_plot):
         r, c = idx // cols + 1, idx % cols + 1
+        point = _snapshot_point(snapshot, ticker, concept, as_of)
         plot_metric(fig, r, c, filtered, ticker, concept, ylabel, ref_line, percent,
-                    show_mean=True, harmonic=concept in HARMONIC_MEAN_CONCEPTS)
+                    show_mean=True, harmonic=concept in HARMONIC_MEAN_CONCEPTS,
+                    snapshot_point=point, snapshot_in_legend=not snapshot_shown)
+        # one legend entry for all of them, on whichever panel got the first marker
+        snapshot_shown = snapshot_shown or point is not None
 
     fig.update_layout(
         title_text=f"Valuation Data {ticker}",
@@ -542,9 +621,10 @@ def plot_valuation(
     years: int = 5,
     concepts: list[str] | None = None,
     as_of: pd.Timestamp | None = None,
+    snapshot: pd.DataFrame | None = None,
 ) -> None:
     """File-writing wrapper around build_valuation."""
-    fig = build_valuation(ticker, valuation_history, years, concepts, as_of)
+    fig = build_valuation(ticker, valuation_history, years, concepts, as_of, snapshot)
     if fig is None:
         return
     _write_figure(fig, output_path)
@@ -616,6 +696,14 @@ def build_ticker_comparison(
     No per-ticker mean lines (n of them would bury the data); the metric-level
     reference line stays because it does not depend on the ticker. Per-ticker
     show/hide is left to Plotly's legend, which does it natively.
+
+    **No snapshot point either, deliberately** -- build_valuation grows one and
+    this does not. Same reasoning as the mean lines: n markers, one per ticker,
+    all at the same x just past the last filed period, would cluster into what
+    reads as a vertical spike rather than n separate current values. And the
+    comparison chart answers "how have these moved relative to each other",
+    where the shape of the history is the content; the current level for several
+    tickers side by side is what the snapshot table already shows better.
     """
     spec = _concept_plot_spec(concept)
     if spec is None:
@@ -636,19 +724,19 @@ def build_ticker_comparison(
     for position, ticker in enumerate(requested):
         if is_hidden(ticker, concept):
             profile = TICKER_PROFILES.get(ticker, DEFAULT_PROFILE)
-            excluded.append((ticker, f"für Profil '{profile}' ausgeblendet"))
+            excluded.append((ticker, f"for profile '{profile}' not shown"))
             continue
         series = frame[
             (frame["ticker"] == ticker) & (frame["concept"] == concept)
         ].sort_values("end")
         if series.dropna(subset=["end", column]).empty:
-            excluded.append((ticker, "keine Daten"))
+            excluded.append((ticker, "No Data"))
             continue
         plotted.append((position, ticker, series))
 
     excluded_text = [f"{ticker} ({reason})" for ticker, reason in excluded]
     if excluded:
-        print(f"[ticker_comparison] {concept}: nicht dargestellt -- "
+        print(f"[ticker_comparison] {concept}: not shown -- "
               f"{', '.join(excluded_text)}")
 
     if not plotted:
@@ -658,20 +746,21 @@ def build_ticker_comparison(
     fig = _make_subplot_figure(1, 1, [concept])
 
     for position, ticker, series in plotted:
-        fig.add_trace(
-            go.Scatter(
-                x=series["end"],
-                y=series[column],
-                mode="lines + markers",
-                name=ticker,
-                line=dict(color=_COMPARISON_COLORS[position % len(_COMPARISON_COLORS)]),
-                connectgaps=True,
-                hovertemplate="%{fullData.name}: %{y}<extra></extra>",
-            ),
-            row=1,
-            col=1,
-        )
+            fig.add_trace(
+                go.Scatter(
+                    x=series["end"],
+                    y=series[column],
+                    mode="lines+markers",
+                    name=ticker,
+                    line=dict(color=_COMPARISON_COLORS[position % len(_COMPARISON_COLORS)]),
+                    connectgaps=True,
+                    hovertemplate="%{fullData.name}: %{y}<extra></extra>",
+                ),
+                row=1,
+                col=1,
+            )
 
+    fig.update_xaxes(hoverformat="%d.%m.%Y", row=1, col=1)
     _style_axes(fig, 1, 1, ylabel, percent)
 
     if ref_line is not None:
@@ -685,7 +774,7 @@ def build_ticker_comparison(
 
     if excluded:
         fig.add_annotation(
-            text="Nicht dargestellt: " + ", ".join(excluded_text),
+            text="Not shown: " + ", ".join(excluded_text),
             x=0.0,
             xref="paper",
             xanchor="left",

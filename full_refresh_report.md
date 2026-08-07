@@ -2,9 +2,9 @@
 
 ## Run metadata
 
-- Start: 2026-08-06T10:19:44
-- End: 2026-08-06T10:20:30
-- Total wall-clock time: 46.2s (0.8 min)
+- Start: 2026-08-06T19:21:29
+- End: 2026-08-06T19:22:22
+- Total wall-clock time: 52.8s (0.9 min)
 - Active tickers processed: 8
 - Cached facts files deleted: 24
 
@@ -40,43 +40,43 @@
 ## Timing
 
 ### Phase 1 -- EDGAR fetch
-- Total: 19.8s across 8 tickers
-- Average per ticker: 2.48s
+- Total: 23.2s across 8 tickers
+- Average per ticker: 2.90s
 - Slowest 10 tickers:
-  - JPM: 3.40s
-  - BAC: 2.90s
-  - AFL: 2.68s
-  - AMT: 2.35s
-  - AZO: 2.29s
-  - MSFT: 2.26s
-  - AAPL: 2.08s
-  - O: 1.89s
+  - O: 5.46s
+  - JPM: 3.21s
+  - BAC: 2.97s
+  - AMT: 2.47s
+  - AFL: 2.42s
+  - AZO: 2.36s
+  - MSFT: 2.32s
+  - AAPL: 2.01s
 
 ### Phase 2 -- yfinance fetch
-- Total: 7.4s across 8 tickers
-- Average per ticker: 0.92s
+- Total: 7.7s across 8 tickers
+- Average per ticker: 0.96s
 - Slowest 10 tickers:
-  - AAPL: 1.62s
-  - AMT: 1.01s
-  - AFL: 0.90s
-  - O: 0.87s
-  - BAC: 0.80s
-  - JPM: 0.75s
-  - AZO: 0.73s
-  - MSFT: 0.72s
+  - AAPL: 1.86s
+  - O: 1.19s
+  - JPM: 1.03s
+  - BAC: 0.88s
+  - AFL: 0.79s
+  - AMT: 0.68s
+  - MSFT: 0.65s
+  - AZO: 0.60s
 
 ### Phase 3 -- Calculate + plot
-- Calculate (calculate_all_metrics/build_metrics_long/build_valuation_history/build_snapshot, whole batch, one run -- not decomposed per ticker, since doing so would mean calling these functions once per ticker instead of once for the batch, a change to how the calculation runs rather than pure instrumentation): 10.5s
-- Plot (per ticker, all three charts): total 6.3s across 8 tickers, average 0.79s/ticker
+- Calculate (calculate_all_metrics/build_metrics_long/build_valuation_history/build_snapshot, whole batch, one run -- not decomposed per ticker, since doing so would mean calling these functions once per ticker instead of once for the batch, a change to how the calculation runs rather than pure instrumentation): 11.4s
+- Plot (per ticker, all three charts): total 7.9s across 8 tickers, average 0.99s/ticker
 - Slowest 10 tickers (plotting):
-  - AAPL: 1.60s
-  - MSFT: 0.86s
-  - AZO: 0.82s
-  - BAC: 0.66s
-  - AFL: 0.65s
-  - JPM: 0.64s
-  - O: 0.57s
-  - AMT: 0.54s
+  - AAPL: 1.89s
+  - AZO: 1.06s
+  - MSFT: 1.04s
+  - AFL: 0.85s
+  - BAC: 0.80s
+  - JPM: 0.80s
+  - O: 0.74s
+  - AMT: 0.72s
 
 ## Data quality flags
 
@@ -97,8 +97,8 @@
 ### reit
 
 - **MISSING** AMT `GainLossOnSaleOfProperties`: 0 of 74 (0%)
-- **thin** O `StockRepurchased`: 2 of 69 (3%) -- `python explore_tags.py O repurchase treasurystock buyback`
-- **thin** O `PretaxIncome`: 23 of 69 (33%)
+- **thin** O `StockRepurchased`: 4 of 70 (6%) -- `python explore_tags.py O repurchase treasurystock buyback`
+- **thin** O `PretaxIncome`: 24 of 70 (34%)
 
 ### retail
 

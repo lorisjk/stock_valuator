@@ -625,6 +625,12 @@ PROFILE_HIDDEN = {
         "inventory_turnover", "dio", "dso", "dpo", "cash_conversion_cycle",
         "capex_intensity","operating_leverage","operating_income_yoy_growth",
         "ffo_margin", "p_ffo",
+        # Banks do not file an operating-income line, so the growth panel would be
+        # permanently empty rather than merely sparse (0 of 2 financial tickers
+        # tested have any value). PPNR is the aggregate that replaces it here.
+        # Only `financial` is listed: captive_finance and alt_asset_manager were
+        # not tested, so they keep the panel rather than being hidden on a guess.
+        "OperatingIncomeLoss_TTM",
     },
     "insurance_pc":{
         "pfcf_ttm",
@@ -1936,48 +1942,13 @@ def get_concept_candidates(ticker: str) -> dict:
     resolved.update(TICKER_CONCEPT_OVERRIDES.get(ticker, {}))
     return resolved
 
-GROWTH_BASE_PANELS = ["shares_outstanding_growth", "equity_growth", "debt_growth"]
-
-GROWTH_PROFILE_EXTRA = {
-    # capital/asset-light sectors where growth investors watch cash generation directly
-    "standard": ["fcf_growth", "ebitda_growth"],
-    "media": ["fcf_growth", "ebitda_growth"],
-    "leisure": ["fcf_growth", "ebitda_growth"],
-    "marketplace": ["fcf_growth", "ebitda_growth"],
-    # capex-heavy / physical-asset sectors: capex growth is the central capacity signal
-    "industrials": ["fcf_growth", "capex_growth"],
-    "telecom_cable": ["fcf_growth", "capex_growth"],
-    "railroads": ["fcf_growth", "capex_growth"],
-    "airline": ["fcf_growth", "capex_growth"],
-    "energy": ["capex_growth", "ebitda_growth"],
-    "energy_integrated": ["capex_growth", "ebitda_growth"],
-    "utilities": ["capex_growth", "assets_growth"],
-    "materials": ["capex_growth", "inventory_growth"],
-    "materials_integrated": ["capex_growth", "inventory_growth"],
-    # inventory-driven sectors
-    "retail": ["inventory_growth", "cash_growth"],
-    "consumer_staples": ["inventory_growth", "fcf_growth"],
-    "homebuilder": ["inventory_growth", "fcf_growth"],
-    # R&D-driven sectors
-    "pharma_medtech": ["rd_growth", "fcf_growth"],
-    "health_services": ["rd_growth", "fcf_growth"],
-    # bank / balance-sheet-driven sectors
-    "financial": ["nii_growth", "provision_growth"],
-    "captive_finance": ["fcf_growth", "assets_growth"],
-    "alt_asset_manager": ["fcf_growth", "assets_growth"],
-    # insurance: premium and investment-income growth are the core underwriting signals
-    # (reserve_growth already exists and is already plotted on the fundamentals chart)
-    "insurance_pc": ["earned_premiums_growth", "net_investment_income_growth"],
-    "insurance_life": ["earned_premiums_growth", "net_investment_income_growth"],
-    # REIT: FFO growth is the headline metric this sector is valued on
-    "reit": ["ffo_growth", "cash_growth"],
-}
-
-
-def get_growth_panels(ticker: str) -> list[str]:
-    profile = TICKER_PROFILES.get(ticker, DEFAULT_PROFILE)
-    return GROWTH_BASE_PANELS + GROWTH_PROFILE_EXTRA.get(profile, [])
-
+# GROWTH_BASE_PANELS / GROWTH_PROFILE_EXTRA / get_growth_panels() stood here: an
+# earlier sketch of per-profile growth panels, with zero consumers. It named 15
+# concepts (fcf_growth, nii_growth, ffo_growth, equity_growth, ...) of which not
+# one existed in any dataframe or in this registry -- an invented naming scheme
+# that was never wired to data. The growth entries in METRICS supersede it, keyed
+# by real concept names and made per-profile by is_hidden rather than by a second
+# visibility mechanism, so it is deleted rather than left as a third parallel one.
 
 CACHE_DIR = "cache"
 DATA_DIR = "data"
@@ -2099,9 +2070,25 @@ METRICS = [
 
     # --- growth: ids are XBRL concept names, values read from `yoy_growth`.
     #     ref_line/percent match what build_growth draws (a 0 line, percent axis).
+    #
+    #     Per-profile visibility runs through is_hidden like everywhere else -- there
+    #     is no growth-specific visibility mechanism. The three sector aggregates
+    #     below are *derived* concepts, so _DERIVED_CONCEPT_CONSUMERS already resolves
+    #     them to exactly the right profiles at zero cost in PROFILE_HIDDEN entries:
+    #     PPNR -> financial only, FFO_TTM -> reit only, CoreOperatingEarnings ->
+    #     the two insurance profiles. Registering the raw sector tags instead
+    #     (NetInterestIncome_TTM, EarnedPremiums_TTM, ...) would have cost 22-23
+    #     hide entries each, since PROFILE_HIDDEN is a negative list.
     Metric("Revenue", CHART_GROWTH, "Revenue growth (Quartal, YoY)", 0, percent=True),
     Metric("NetIncomeLoss", CHART_GROWTH, "Net Income Growth (Quartal, YoY)", 0, percent=True),
     Metric("SharesOutstanding", CHART_GROWTH, "Shares Outstanding (Stock Dilution/Repurchase)", 0, percent=True),
+    Metric("EPS_TTM_CALC", CHART_GROWTH, "EPS Growth (TTM, YoY)", 0, percent=True),
+    Metric("FCF_TTM", CHART_GROWTH, "Free Cash Flow Growth (TTM, YoY)", 0, percent=True),
+    Metric("OperatingIncomeLoss_TTM", CHART_GROWTH, "Operating Income Growth (TTM, YoY)", 0, percent=True),
+    Metric("StockholdersEquity", CHART_GROWTH, "Equity Growth (Quartal, YoY)", 0, percent=True),
+    Metric("PPNR", CHART_GROWTH, "PPNR Growth (TTM, YoY)", 0, percent=True),
+    Metric("CoreOperatingEarnings", CHART_GROWTH, "Core Operating Earnings Growth (TTM, YoY)", 0, percent=True),
+    Metric("FFO_TTM", CHART_GROWTH, "FFO Growth (TTM, YoY)", 0, percent=True),
 ]
 
 

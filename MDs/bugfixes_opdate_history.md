@@ -6,6 +6,74 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-08-06 (later) — App refinements: a namespace collision, growth ×3, and the current multiple on the chart
+
+Four independent changes. Details in `app_refinements_report.md`.
+
+**The percent bug: two registry namespaces, one name.** The facts table rendered
+`Revenue` as `10941700000000.00%`. Cause confirmed: `Revenue`, `NetIncomeLoss` and
+`SharesOutstanding` are registered as `CHART_GROWTH` metrics with `percent=True` —
+correct, the growth chart plots YoY percentages — and the facts frame has columns
+with those same three names holding absolute dollars. `NetIncomeLoss` was affected
+identically.
+
+**Matching on `id_namespace` would not have fixed it**, which is the trap worth
+remembering: the facts frame's columns *are* XBRL concept names, i.e. exactly the
+namespace those entries live in, so a namespace test says "apply" and keeps the bug.
+`value_column` is what separates them — a growth entry describes `yoy_growth` and
+never `value`. Safe as a single test because registry ids are globally unique
+(`_index_metrics` raises on a duplicate at import). A hardcoded three-name exception
+would have broken the same day, when the growth expansion registered
+`StockholdersEquity` — also a facts column holding an absolute.
+
+**Growth: 3 panels → 10, and the brief's premise was wrong.** `growth_concepts()`
+excluded every `_TTM` name, so `EPS_TTM_CALC`, `FCF_TTM`, `FFO_TTM` and every sector
+aggregate had **zero** growth values — not computed and discarded, never computed.
+Lifting the exclusion costs +0.44s per run and **no extra rows**, only fewer NaNs in
+an existing column. Worth it: measured head to head, a raw quarterly growth series is
+1.1–2.2× more volatile than its TTM counterpart (three of ~40 pairs invert, so
+"always smoother" would be an overstatement).
+
+Two findings that shaped the design:
+
+1. **Zero-crossing is already handled, and the failure mode is the opposite of the
+   expected one.** `calculate_growth` requires `value > 0` *and* `prev_value > 0`;
+   0 of 9,301 growth values came from a non-positive level. So an expanded chart
+   cannot produce an explosive panel — it produces a **gappy** one. Survival rate,
+   not outlier count, is the number to look at.
+2. **The sector aggregates are free.** `is_hidden` already resolves derived concepts
+   through `_DERIVED_CONCEPT_CONSUMERS`: `PPNR` → financial only, `FFO_TTM` → reit
+   only, `CoreOperatingEarnings` → the two insurance profiles, at **0**
+   `PROFILE_HIDDEN` entries. Registering the raw sector tags instead
+   (`NetInterestIncome_TTM`, `EarnedPremiums_TTM`, …) would have cost 22–23 each,
+   112 in total — an 18% increase on the 615 entries that exist today. Total cost of
+   the shipped design: **1 entry**. That number is the concrete evidence for the
+   known "negative list will not scale" problem.
+
+`build_growth` now wraps at `_make_grid`'s 3 columns — seven panels in one row was a
+3500px-wide figure. For ≤3 panels the grid is still 1×n at the identical pixel size,
+so the three original panels stay byte-identical.
+
+Deleted `GROWTH_BASE_PANELS` / `GROWTH_PROFILE_EXTRA` / `get_growth_panels()`: 15
+invented concept names (`fcf_growth`, `nii_growth`, …), none of which existed in any
+frame or the registry, zero consumers. Their *intent* was this feature and their data
+structure — a positive per-profile list — was the better one; the names were the
+problem.
+
+**The current multiple now appears on the valuation charts** as a green diamond at the
+run date. It is a separate trace added after the mean is computed and never enters the
+series the mean is taken over — structural, not an ordering convention — proved by
+mean labels and line values being identical with and without it for all 8 tickers, for
+both the harmonic and the arithmetic case. Suppressed when `as_of` predates it, since
+appending a run-date point to an earlier window shows data that date could not have
+known. 10 of 13 valuation panels have a snapshot counterpart; `ev_fcf`, `pfcf_ex_sbc`
+and `p_ffo` have none and render unchanged — note that `p_ffo` is the REIT headline
+multiple, a pre-existing gap in `build_snapshot`. Comparison charts deliberately do
+**not** get the point (n markers at the same x read as a spike); recorded in the
+docstring so the two chart types are not silently inconsistent.
+
+---
+
 ## 2026-08-06 — Data inspection layer: the export completes, the app gets a Data tab
 
 The charts could not show the data behind them. `export_for_app()` now also writes
