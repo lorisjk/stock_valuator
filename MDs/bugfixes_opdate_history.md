@@ -6,6 +6,259 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-08-08 — Directional scale detection: a P/B of 3,377 removed, and the cross-concept scope answered with a measurement
+
+The scale audit left two gaps: the sweep is upward-only, and its evidence is symmetric. Both are
+closed. Detail in `directional_scale_detection_report.md`.
+
+**Scope verdict: this is a `SharesOutstanding` problem, and the data says so rather than the five
+known cases.** The within-accession cross-tag test finds 4,501 power-of-ten disagreements across
+18 concepts, and almost none are scale errors — they are `LongTermDebtCurrent` against
+`LongTermDebt`, `AmortizationOfIntangibleAssets` against `DepreciationDepletionAndAmortization`:
+components against totals that happen to sit ~10x apart. The **discriminator is measurable**: a
+scale error is the same number re-typed, so its ratio's deviation from the exact power of ten is
+only the two tags' real difference. `SharesOutstanding` has a median deviation of **0.0026**;
+every other concept sits at 0.012–0.018, uniform noise. It is also the only concept in the
+registry whose candidate tags are synonyms, which is why it is the only one where the test can
+speak at all.
+
+**A first pass keyed cells on `(accn, start, end)` and missed Sherwin-Williams entirely** —
+`CommonStockSharesOutstanding` is an instant fact, the weighted-average tags are durations, so
+the two never met. Re-keyed on `(accn, end)`: 244 cells on 68 tickers, every one exactly 10^3 or
+10^6.
+
+**The symmetric EPS test made directional**, by comparing each of net income, shares and EPS
+against its *own* series' magnitude. Of 40 surviving inconsistencies: **6 share count, 1 net
+income (CTVA), 2 whole-filing scalings (ATO, LUV), 31 neither** — confirming the audit's read of
+HAL/HIG/CTVA/TMO, whose share counts are correct. Three of the six are already fixed by the
+upward sweep, leaving exactly the five named periods. The test rediscovers them and finds nothing
+else.
+
+**"Use the sibling tag directly" was implemented first and was wrong.** SHW's accession carries
+`CommonStockSharesOutstanding = 122,814,241` next to a mis-scaled
+`WeightedAverageNumberOfDilutedSharesOutstanding = 130,924,690,000` — but the sibling is the
+*period-end* count, 6.2% below the diluted weighted average the series is built from and that the
+filing's own EPS demands (615,578,000 / 4.70 = 130,974,043). Substituting it would drop a silent
+measurement step into the middle of the history. **The rule takes only the exponent** and divides
+in place, keeping the tag's own measure. Repaired value lands **0.04%** from what the filer's EPS
+implies.
+
+**Treatment differs by class.** Sibling establishes the exponent -> rescale in place (SHW x2).
+No sibling but series and EPS both convict -> **drop the row** (AIG, ARE, TFC): 130,248,736,000,000
+shares is not a better input than a gap. Suspected but unproven -> leave as filed; **no case
+reached that branch**.
+
+**Thresholds measured and left alone.** Across `_GATE_LOG_GAP` 1.0–2.5 and `_MATCH_TOLERANCE`
+0.2–1.0, the accepted set moves **7 rows out of 32,061** (262–269) while the gate absorbs the
+variation by rejecting 0–10. Not load-bearing once proposals are corroborated.
+
+**This one reaches the charts, unlike the previous task.** 2 values changed and 3 dropped, and
+downstream: **SHW's `pb_ratio` goes 3,376.87 -> 3.38 and `p_tbv` 7,641.69 -> 7.64**; TFC's
+`pb_ratio` of 497.27 and ARE's of 848.17 disappear; TFC's `payout_ratio_quarterly` of 586.75
+goes; `avg_p_tbv_5y` moves at 20 points, `avg_pe_5y` and `avg_p_ffo_5y` at 19 each.
+`share_count_jump_flag` 744 -> 734 — the flag had been correctly firing on the discontinuities
+these rows created. Anchor invariant holds for all 498 tickers, **0 values touched by both the
+sweep and the repair**, and Agilent's 406 and the rest of the no-evidence class are untouched.
+
+---
+
+## 2026-08-07 (final) — `_normalize_scale_outliers` audited: 96% right, ten rows corrupting one ticker, and the opposite default from the split fix
+
+The split task left this function as the last component choosing a numeric correction with
+nothing independent to check against. Audited across all 501 tickers. Detail in
+`scale_outlier_audit_report.md`.
+
+**It runs on exactly one concept** (`_SCALE_CORRECTED_CONCEPTS = {"SharesOutstanding"}`) and on
+**279 rows across 70 tickers** — not the 350/79 the split report quoted, because that figure
+predates the ordering fix shipped in the same task; applying the split basis first removed 71
+Chipotle rows the sweep used to "correct" by 100x when the real gap was a 50x split.
+
+**It is upward-only by construction** (`if own_log > anchor_log: continue`), so Agilent's 406 is
+in scope and **AIG's 130-trillion row never was**. The factor distribution is uninformative for
+the same reason the split factors were — every factor is a power of ten because the candidate
+list contains nothing else.
+
+**One correction to how it was characterised:** it is *not* the same anchor-proximity idea as the
+deleted split normaliser. That one compared every value to the newest value; this one re-anchors
+on each accepted value, so it compares against running neighbours, runs forward and backward, and
+requires agreement. It is a local outlier detector, and the audit result reflects that.
+
+**Corroboration used two sources, both from inside the filings.** The companyfacts API carries no
+`decimals` attribute and the unit key is `shares` either way, so the fact's own metadata is a dead
+end — recorded so nobody tries again. What works: the same period restated at a power-of-ten
+ratio, and `net income / shares = reported EPS` **keyed on `(accn, start, end)`**. Getting that
+key wrong twice was instructive — matching by period across filings invented a 25x "error" on
+NVDA that was really a 2009-basis EPS against a split-restated share count, and matching by
+accession alone paired quarterly income with year-to-date EPS and smeared the implied error over
+2.2–2.9 instead of landing on 3.0.
+
+**Result: 253 corroborated, 10 contradicted, 16 no evidence — 96% right where testable.** All ten
+contradicted rows are **EXE**: Chesapeake's 1:200 reverse split of December 2020 restated its
+history to ~9.8m shares, which against a 1.4bn series looks like an outlier, and the sweep
+multiplied ten quarters by 100. Same ticker the split task classified as no-evidence, because its
+price history starts after the reverse split — one missing feed, two mechanisms misled.
+
+**No-evidence default: keep rescaling — the opposite of the split task's, argued on numbers.**
+The split normaliser was 17% right where testable, so its untested cases were probably wrong;
+this one is 96% right, so suspending it would trade 15 correct corrections for 1. The asymmetry
+points the same way: an uncorrected unit error is **loud** (Agilent at 406 shares implies a
+$16,000 market cap), while a wrong split factor was quiet. **Drop-instead-of-correct was
+considered and rejected with a reason worth keeping**: `NI/shares ≠ EPS` is symmetric and does not
+say which number is wrong — 47 periods across 12 tickers show a ≥100x inconsistency after the
+pipeline and most of them (HAL, HIG, CTVA, TMO) have correct share counts and a differently-scaled
+net income. A rule built on it would delete more good data than bad.
+
+**Effect, reported without inflation.** 10 `SharesOutstanding` values and 10 `EPS_TTM_CALC` values
+change; **`metrics_long`, `valuation_history` and all five flag counts are unchanged**, because
+EXE has no price history before 2021 so those quarters had no multiples to begin with. The
+independent check is decisive though: EXE's FY2020 `EPS_TTM_CALC` goes **−9.96 → −996.01** against
+Chesapeake's filed **−998.26**. Anchor invariant holds for all 498 tickers, 0 rows appeared or
+disappeared.
+
+**Carried forward with a concrete starting point:** five periods on AIG, SHW, TFC and ARE hold
+share counts provably 1,000x+ too large and pass straight through, since the sweep cannot look
+downward. Sherwin-Williams shows the detector that would catch them — **the same accession**
+reports `WeightedAverageNumberOfDilutedSharesOutstanding = 130,924,690,000` and
+`CommonStockSharesOutstanding = 122,814,241`. A within-accession disagreement names *which* tag is
+wrong, which is exactly what dropping or correcting downward requires and what the EPS identity
+cannot supply.
+
+---
+
+## 2026-08-07 (last) — Split normalisation was inventing splits: 7,357 of 8,893 rescalings were wrong, and every historical multiple with them
+
+The tag investigation deferred two defects. Chased down, they are one failure: **the pipeline
+inferred share-count events from the share-count series itself, with nothing independent to check
+against.** Full detail in `split_normalisation_report.md`.
+
+**`_normalize_series` was never split detection.** For each value independently it picked
+whichever of `v`, `v*f`, `v/f` over a fixed factor list landed closest to the newest value —
+history pulled toward today's anchor. Two internal tests, both available all along, falsify it
+without any external source: only **178 of 929 rescaling events** have a raw step at the boundary
+matching the factor applied (median step for the rest: **1.04**, a flat series), and the factor
+sequence, which for a real split adjustment can only shrink toward the present, **increases at
+730 steps across 307 tickers**.
+
+**The factor distribution proves nothing, and that is the trap.** All 929 events carry textbook
+split ratios (2, 3, 1/2, 10, ...) because the algorithm can produce nothing else. A plausible
+ratio is evidence of the algorithm's vocabulary, not of a split.
+
+**Corroboration needed two sources, not one.** yfinance **back-adjusts prices for splits
+regardless of `auto_adjust`** — AAPL's 2020-08-28 close comes back as 124.81, which is 499.23/4 —
+so there is no price step to find, in either direction. The `Stock Splits` column in the same
+response is the usable feed (372 events, 231 tickers, zero extra requests), but it also carries
+spin-off and stock-dividend ratios, and **the ratio's shape cannot separate them**: Agilent's
+Keysight spin-off is 1.398 and a 7:5 split would be 1.400. The second source is the filers
+themselves — the same period reported at two filing dates straddling a real split differs by
+exactly the ratio, because the underlying count is identical. CMG 50.0000, NFLX 10.0000, GOOGL
+19.9994; Agilent's only >1.2x restatements are 1,000,000x unit fixes, the spin-off leaving the
+share count untouched. **145 of 372 feed events corroborate.**
+
+**Reclassified: 7,357 rows contradicted (305 tickers), 1,406 corroborated, 130 no evidence.**
+AAPL is the instructive case — two genuine splits, cumulative 28x, and the old code applied 15
+then 3. Neither obviously broken nor right.
+
+**No-evidence default: do not normalise** — 130 rows is 0.41% of all share-count rows, on 5
+tickers (SATS, EXE, HWM, DELL, VICI), so the honest gap is cheap, and the alternative is more
+guessing. The brief's third option, flag-instead-of-fix, was **rejected as redundant and then
+verified**: 19 of the 20 pre-listing tickers now carry a `share_count_jump_flag` on their own.
+VLTO is the exception because its pre-listing rows are flat — no jump to surface.
+
+**Order matters and was the subtle part.** The fix lives in `parse_edgar._apply_split_basis` and
+runs **before** `_normalize_scale_outliers`: which basis a number is on is a property of the
+filing, a unit-scale error is a property of how it was typed. Reversed, the scale sweep absorbs
+the split with the wrong factor — Chipotle's pre-split count is 50x low and the sweep, knowing
+only powers of ten, "fixed" it by 100x. That needs the feed at parse time, so **the yfinance
+phase now runs before the EDGAR phase**.
+
+**`share_count_jump_flag` now prices in dollars, not book value.** Book value per share collapses
+to cents when equity is near zero or negative, at which point any cash flow "corroborates" any
+move. Fallback when no price exists: **none — the quarter stays flagged**, which costs 33 of 455
+big-move quarters, all pre-listing, exactly where book value would have been least trustworthy.
+The 0.5 threshold is kept: on a correct denominator, 0.25 through 1.5 moves 28 quarters out of
+30,938, so it was never load-bearing.
+
+**Blast radius, measured.** 7,765 share-count values changed on 312 tickers, 0 rows added or
+lost, **the anchor invariant holds for all 498 tickers** and every change traces to a corroborated
+ratio (0 unexplained). Downstream, **46,146 of 273,755 valuation-history rows (16.9%) changed**,
+and a third to a half of every 5-year rolling mean moved by a median ~50% — the line the charts
+draw as "the benchmark". Independent check: URI's 2013 market cap goes 4.0bn → **8.0bn** against
+an actual ~7.5bn; AAPL's 219bn → **438bn** against ~500bn. `share_count_jump_flag` falls
+**1,441 → 744**: 697 flagged quarters were the normaliser's own fabrications reported as data
+problems. `buyback_distortion_flag` is unchanged at 644 and *cannot* move — it reads equity and
+net income, never the share count.
+
+---
+
+## 2026-08-07 (later) — `StockIssued` / `StockRepurchased` / `ShareBasedCompensation`: 574 flags investigated, 257 closed, 246 confirmed unclosable
+
+The 501-ticker refresh produced 1,000 quality flags, **574 of them from three concepts across
+427 tickers**. Every flagged (ticker, concept) pair was checked against that ticker's own cached
+CompanyFacts. Full detail in `tag_investigation_stock_sbc_report.md`.
+
+**The classification is the deliverable, more than the fixes:**
+
+| concept | A tag gap | B genuine absence | C structurally unavailable |
+|---|---:|---:|---:|
+| `StockIssued` | 302 | 55 | 10 |
+| `ShareBasedCompensation` | 26 | 47 | 8 |
+| `StockRepurchased` | **0** | 111 | 15 |
+
+**43% of the 574 flags cannot be closed by any tag change**, and `StockRepurchased` is 0/126
+actionable. That was worth measuring rather than assuming: the fix and the non-fix look identical
+from a flag count. Companies report a repurchase line in a median **29.6%** of the quarters in
+which they report operating cash flow, because in the other 70% they bought nothing back and XBRL
+does not tag an absent line. The class-C list reads like the answer you would guess if you knew
+the companies — TSLA, DDOG, FSLR, VICI, FRT, LNT — and AEP/BXP/DLR carry only *preferred*
+redemptions.
+
+**The one tag that would have "fixed" 44 `StockRepurchased` flags was rejected.**
+`PaymentsRelatedToTaxWithholdingForShareBasedCompensation` is, by its own element description,
+"cash outflow to satisfy **grantee's tax withholding obligation**" — a payment to a tax
+authority. Under `fallback` it would populate exactly the quarters with no buyback, and it runs
+at a **median 2.9%** of the repurchase figure, far too small to ever corroborate anything for
+`share_count_jump_flag`, its only consumer. Flags removed, no answer improved, concept meaning
+split in two.
+
+**`StockIssued`'s candidate list only knew about capital-raising issuance.** All three existing
+tags describe a company *selling shares to raise money*, which a mature S&P 500 industrial never
+does — hence 192 flags reading `MISSING`, 0 of ~75 quarters. What those companies do every
+quarter is issue shares through option exercises and ESPP, on their own cash-flow line. Seven
+tags appended (aggregate before component), `StockIssued` flags **367 → 123**, `MISSING` 192 → 27.
+
+**`ShareBasedCompensation` in utilities was not a different tag — it is annual-only disclosure.**
+18 of the 21 flagged utilities cannot be fixed. NEE, AEP, PEG and ES all carry
+`AllocatedShareBasedCompensationExpense`, and **every fact under it has a 12-month duration**:
+there is nothing for `decumulate_period_values` to decumulate, so a quarterly pipeline gets zero,
+and 21 annual values against a 74-quarter denominator is permanently 28%. The 3 real gaps (ED,
+EIX, SO) tag the amount in the equity statement instead;
+`AdjustmentsToAdditionalPaidInCapitalSharebasedCompensationRequisiteServicePeriodRecognitionValue`
+appended, SO goes 0 → 45 quarters.
+
+**`sum` vs `fallback`: `fallback` both times, and the double-count is real, not hypothetical.**
+Where a filer reports both the aggregate `…IncludingStockOptions` tag and the component
+`ProceedsFromStockOptionsExercised`, **60 of 145 co-reported quarters carry an identical value**
+(ABNB 2023-09-30: 14,000,000 under both). `sum` would report exactly double. Accepted in exchange:
+`fallback` undercounts by a median 8.1% where a filer genuinely reports two separate lines. Same
+trade as `LongTermDebt` in July, same reason — an undercount degrades gracefully.
+
+**Non-regression, all 501 tickers, per change group:** +13,868 values then +905, and **0 changed,
+0 disappeared** both times. Append-only on a `fallback` list can only fill empty dates, and that
+was confirmed rather than argued. Total flags **1,000 → 743**; no concept outside the three moved.
+The A/B/C classification predicted exactly which 257 pairs would clear — 0 mismatches over 574.
+
+**Two adjacent defects surfaced and are deliberately left for a future task.** The four
+`share_count_jump_flag` quarters that stopped firing (INCY, URI) are *not* an improvement: both
+"jumps" are artefacts of `normalize_split_adjusted` inventing splits that never happened (INCY
+doubled before 2013-09-30; URI halved from 2012-09-30, reading the RSC Holdings share issuance as
+a 1:2 split), and both now clear a corroboration test only because `implied_price` is book value
+per share — $0.19 and **negative** equity giving $0.27 — so any cash flow at all "explains" any
+share count. Separately, `calculate_ttm` rolls over four *available rows*, not four calendar
+quarters, so a sparse `_TTM` can silently span years; that is why filling SBC gaps moved
+`owner_fcf` for 15 tickers that were never flagged.
+
+---
+
 ## 2026-08-07 — Sidebar navigation, a metric encyclopedia written from the code, and a generated coverage matrix
 
 Reference pages reached from a **sidebar view switch**, not more tabs. Tab count was

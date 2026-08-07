@@ -8,7 +8,7 @@ from fetchers.edgar import (
     get_submissions,
     get_latest_filed_period,
 )
-from fetchers.yfinance_fetcher import get_current_price_and_shares, get_price_history
+from fetchers.yfinance_fetcher import get_current_price_and_shares, get_price_history, split_events
 from parsers.parse_edgar import build_dataframe, _drop_known_bad_facts
 from fetchers.edgar import extract_quarterly_values
 from config import (
@@ -47,7 +47,6 @@ from metrics import (
     get_latest_value,
     get_latest_row,
     to_long_format,
-    normalize_split_adjusted,
     apply_denominator_scale_guard,
     apply_self_relative_scale_guard,
     MIN_DENOMINATOR_SCALE_RATIO,
@@ -72,7 +71,18 @@ import pandas as pd
 from datetime import date, datetime
 
 
-def load_facts() -> pd.DataFrame:
+def splits_by_ticker(price_history: pd.DataFrame) -> dict:
+    """Corporate-action splits keyed by ticker, as ISO-dated dicts the parser can use."""
+    events = split_events(price_history)
+    out = {}
+    for row in events.itertuples():
+        out.setdefault(row.ticker, []).append(
+            {"date": pd.Timestamp(row.date).date().isoformat(), "ratio": float(row.ratio)}
+        )
+    return out
+
+
+def load_facts(splits: dict = None) -> pd.DataFrame:
     mapping = fetch_or_cache(
         url="https://www.sec.gov/files/company_tickers.json",
         cache_path="cache/ticker_mapping.json",
@@ -85,8 +95,9 @@ def load_facts() -> pd.DataFrame:
         concept_candidates = get_concept_candidates(ticker)
         cik = get_cik(ticker, cik_mapping)
         company_info = get_company_info(ticker, cik, EDGAR_USER_AGENT)
-        all_dfs.append(build_dataframe(ticker, company_info, concept_candidates, period=PERIOD))
-        
+        all_dfs.append(build_dataframe(ticker, company_info, concept_candidates, period=PERIOD,
+                                       splits=(splits or {}).get(ticker)))
+
     df = pd.concat(all_dfs, ignore_index=True)
     df["end"] = pd.to_datetime(df["end"]).astype("datetime64[ns]")
     return df
@@ -241,9 +252,26 @@ def calculate_inorganic_flag(facts: pd.DataFrame) -> pd.DataFrame:
 
 MIN_SHARE_COUNT_QOQ_CHANGE = 0.15
 MIN_CORROBORATING_EQUITY_FLOW_RATIO = 0.5
+# how far back a quarter end may reach for the last trading day's close
+MAX_PRICE_LOOKBACK_DAYS = 10
 
 
-def calculate_share_count_jump_flag(facts: pd.DataFrame) -> pd.DataFrame:
+def _market_price_at(price_history: pd.DataFrame, keys: pd.DataFrame) -> pd.DataFrame:
+    """Close on the last trading day at or before each quarter end."""
+    empty = keys[["ticker", "end"]].assign(market_price=float("nan"))
+    if price_history is None or price_history.empty:
+        return empty
+
+    px = price_history[["ticker", "date", "close"]].dropna().sort_values("date")
+    want = keys[["ticker", "end"]].drop_duplicates().sort_values("end")
+    matched = pd.merge_asof(
+        want, px, left_on="end", right_on="date", by="ticker",
+        direction="backward", tolerance=pd.Timedelta(days=MAX_PRICE_LOOKBACK_DAYS),
+    )
+    return matched[["ticker", "end", "close"]].rename(columns={"close": "market_price"})
+
+
+def calculate_share_count_jump_flag(facts: pd.DataFrame, price_history: pd.DataFrame = None) -> pd.DataFrame:
 
     shares = _qoq_change(facts, "SharesOutstanding", "shares")
     shares["_applicable"] = shares["_gap_ok"] & (shares["prev_shares"] > 0)
@@ -258,12 +286,17 @@ def calculate_share_count_jump_flag(facts: pd.DataFrame) -> pd.DataFrame:
 
     merged = shares.merge(flows, on=["ticker", "end"], how="left")
 
-    equity = facts[facts["concept"] == "StockholdersEquity"][["ticker", "end", "value"]].rename(columns={"value": "equity"})
-    merged = merged.merge(equity, on=["ticker", "end"], how="left")
-    implied_price = (merged["equity"] / merged["shares"]).abs()
+    # The share price a repurchase or issuance actually transacts at is the market
+    # price, not book value per share. Book value was the original basis and it
+    # collapses to cents whenever equity is near zero or negative -- at which point
+    # any cash flow at all "explains" any share-count move, which is exactly how two
+    # fabricated split steps (INCY, URI) stayed silent. No market price for the
+    # quarter means no corroboration attempt: leaving the jump flagged is the honest
+    # outcome, since an uncorroborated jump is what the flag is for.
+    merged = merged.merge(_market_price_at(price_history, merged), on=["ticker", "end"], how="left")
 
     flow_cash = merged[["StockRepurchased", "StockIssued"]].abs().max(axis=1)
-    implied_flow_shares = flow_cash / implied_price.where(implied_price > 0)
+    implied_flow_shares = flow_cash / merged["market_price"].where(merged["market_price"] > 0)
     corroborated = implied_flow_shares >= MIN_CORROBORATING_EQUITY_FLOW_RATIO * merged["_share_delta"]
 
     raw = (merged["_abs_change"] > MIN_SHARE_COUNT_QOQ_CHANGE) & ~corroborated.fillna(False)
@@ -311,12 +344,12 @@ def calculate_tax_metrics(facts: pd.DataFrame) -> tuple:
     return rate, flag[["ticker", "end", "low_tax_rate_flag"]]
 
 
-def calculate_all_metrics(facts: pd.DataFrame) -> dict:
+def calculate_all_metrics(facts: pd.DataFrame, price_history: pd.DataFrame = None) -> dict:
     m = {}
 
     m["buyback_distortion_flag"] = calculate_buyback_distortion_flag(facts)
     m["inorganic_contaminated"] = calculate_inorganic_flag(facts)
-    m["share_count_jump_flag"] = calculate_share_count_jump_flag(facts)
+    m["share_count_jump_flag"] = calculate_share_count_jump_flag(facts, price_history)
     m["effective_tax_rate"], m["low_tax_rate_flag"] = calculate_tax_metrics(facts)
 
     m["revenue_growth"] = calculate_growth(facts, "Revenue_TTM", 4, "yoy_growth")
@@ -1251,17 +1284,21 @@ def main():
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(FIGURE_DIR, exist_ok=True)
 
-    facts = load_facts()
-    facts = normalize_split_adjusted(facts, ["SharesOutstanding"])
-   
+    # prices first: the corporate-action feed rides along with them, and the parser
+    # needs it to put historical share counts on the current split basis
+    price_history = load_price_history()
+    prices = load_current_prices()
+
+    facts = load_facts(splits_by_ticker(price_history))
+
     expected_by_ticker = {ticker: get_expected_concepts(ticker) for ticker in TICKERS}
     print_data_quality(facts, expected_by_ticker, SEARCH_HINTS)
-    
-    
+
+
 
     facts = add_derived_concepts(facts)
     facts = add_quarterly_derived_concepts(facts)
-    metrics = calculate_all_metrics(facts)
+    metrics = calculate_all_metrics(facts, price_history)
     quarterly_metrics = calculate_quarterly_metrics(facts)
 
     facts = add_as_concept(facts, metrics["fcf"], "fcf", "FCF_TTM")
@@ -1275,9 +1312,6 @@ def main():
         print(duplicates)
 
     metrics_long = build_metrics_long(metrics, quarterly_metrics)
-
-    price_history = load_price_history()
-    prices = load_current_prices()
 
     valuation_history = build_valuation_history(facts, price_history, prices)
     jump_flags = metrics["share_count_jump_flag"]
@@ -1386,19 +1420,19 @@ def write_full_refresh_report(
         lines.append("\n</details>\n")
 
     lines.append("## Timing\n")
-    lines.append("### Phase 1 -- EDGAR fetch")
-    lines.append(f"- Total: {edgar['total']:.1f}s across {edgar['n']} tickers")
-    lines.append(f"- Average per ticker: {edgar['average']:.2f}s")
-    lines.append("- Slowest 10 tickers:")
-    for t, s in edgar["slowest"]:
-        lines.append(f"  - {t}: {s:.2f}s")
-    lines.append("")
-
-    lines.append("### Phase 2 -- yfinance fetch")
+    lines.append("### Phase 1 -- yfinance fetch")
     lines.append(f"- Total: {yfin['total']:.1f}s across {yfin['n']} tickers")
     lines.append(f"- Average per ticker: {yfin['average']:.2f}s")
     lines.append("- Slowest 10 tickers:")
     for t, s in yfin["slowest"]:
+        lines.append(f"  - {t}: {s:.2f}s")
+    lines.append("")
+
+    lines.append("### Phase 2 -- EDGAR fetch")
+    lines.append(f"- Total: {edgar['total']:.1f}s across {edgar['n']} tickers")
+    lines.append(f"- Average per ticker: {edgar['average']:.2f}s")
+    lines.append("- Slowest 10 tickers:")
+    for t, s in edgar["slowest"]:
         lines.append(f"  - {t}: {s:.2f}s")
     lines.append("")
 
@@ -1552,34 +1586,9 @@ def run_full_refresh():
     deleted = delete_cached_facts(active_tickers)
     print(f"Deleted {len(deleted)} cached company-facts files.")
 
-    # --- Phase 1: EDGAR fetch, timed per ticker ---
-    mapping = fetch_or_cache(
-        url="https://www.sec.gov/files/company_tickers.json",
-        cache_path="cache/ticker_mapping.json",
-        headers={"User-Agent": EDGAR_USER_AGENT},
-    )
-    cik_mapping = build_ticker_to_cik(mapping)
-
-    edgar_times = {}
-    facts_frames = []
-    for ticker in active_tickers:
-        t0 = time.perf_counter()
-        concept_candidates = get_concept_candidates(ticker)
-        cik = get_cik(ticker, cik_mapping)
-        company_info = get_company_info(ticker, cik, EDGAR_USER_AGENT)
-        facts_frames.append(build_dataframe(ticker, company_info, concept_candidates, period=PERIOD))
-        edgar_times[ticker] = time.perf_counter() - t0
-    print(f"EDGAR fetch done: {sum(edgar_times.values()):.1f}s total.")
-
-    facts = pd.concat(facts_frames, ignore_index=True)
-    facts["end"] = pd.to_datetime(facts["end"]).astype("datetime64[ns]")
-    facts = normalize_split_adjusted(facts, ["SharesOutstanding"])
-
-    quality_flags = []
-    expected_by_ticker = {ticker: get_expected_concepts(ticker) for ticker in active_tickers}
-    print_data_quality(facts, expected_by_ticker, SEARCH_HINTS, collect_flags=quality_flags)
-
-    # --- Phase 2: yfinance fetch, timed per ticker ---
+    # --- Phase 1: yfinance fetch, timed per ticker ---
+    # Runs before EDGAR because the price response carries the corporate-action feed,
+    # and the parser needs it to put historical share counts on the current basis.
     yfinance_times = {}
     price_frames = []
     current_price_rows = []
@@ -1597,12 +1606,40 @@ def run_full_refresh():
     price_history["date"] = price_history["date"].dt.tz_localize(None).astype("datetime64[ns]")
     prices = pd.DataFrame(current_price_rows)
     prices["market_cap"] = prices["price"] * prices["shares_outstanding"]
+    splits = splits_by_ticker(price_history)
+
+    # --- Phase 2: EDGAR fetch, timed per ticker ---
+    mapping = fetch_or_cache(
+        url="https://www.sec.gov/files/company_tickers.json",
+        cache_path="cache/ticker_mapping.json",
+        headers={"User-Agent": EDGAR_USER_AGENT},
+    )
+    cik_mapping = build_ticker_to_cik(mapping)
+
+    edgar_times = {}
+    facts_frames = []
+    for ticker in active_tickers:
+        t0 = time.perf_counter()
+        concept_candidates = get_concept_candidates(ticker)
+        cik = get_cik(ticker, cik_mapping)
+        company_info = get_company_info(ticker, cik, EDGAR_USER_AGENT)
+        facts_frames.append(build_dataframe(ticker, company_info, concept_candidates, period=PERIOD,
+                                            splits=splits.get(ticker)))
+        edgar_times[ticker] = time.perf_counter() - t0
+    print(f"EDGAR fetch done: {sum(edgar_times.values()):.1f}s total.")
+
+    facts = pd.concat(facts_frames, ignore_index=True)
+    facts["end"] = pd.to_datetime(facts["end"]).astype("datetime64[ns]")
+
+    quality_flags = []
+    expected_by_ticker = {ticker: get_expected_concepts(ticker) for ticker in active_tickers}
+    print_data_quality(facts, expected_by_ticker, SEARCH_HINTS, collect_flags=quality_flags)
 
     # --- Phase 3: calculate (batch) + plot (per ticker) ---
     t0 = time.perf_counter()
     facts = add_derived_concepts(facts)
     facts = add_quarterly_derived_concepts(facts)
-    metrics = calculate_all_metrics(facts)
+    metrics = calculate_all_metrics(facts, price_history)
     quarterly_metrics = calculate_quarterly_metrics(facts)
     facts = add_as_concept(facts, metrics["fcf"], "fcf", "FCF_TTM")
     facts = add_as_concept(facts, metrics["ebitda"], "ebitda", "EBITDA_TTM")

@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-COMMON_SPLIT_FACTORS = [1, 2, 3, 4, 5, 6, 7, 8, 10, 15, 20, 25, 30, 40, 50]
 MIN_DENOMINATOR_SCALE_RATIO = 0.01
 MIN_OPERATING_LEVERAGE_REVENUE_GROWTH = 0.02
 MAX_OPERATING_LEVERAGE_ABS = 15
@@ -293,54 +292,14 @@ def add_as_concept(facts: pd.DataFrame, df: pd.DataFrame, value_col: str, concep
     return pd.concat([facts, new_concept], ignore_index=True)
 
   
-def _normalize_series(values: pd.Series, dates: pd.Series) -> pd.Series:
-    if len(values) < 2:
-        return values
-
-    anchor = values.iloc[-1]
-    if anchor <= 0 or pd.isna(anchor):
-        return values
-
-    normalized = []
-    for v in values:
-        if pd.isna(v) or v <= 0:
-            normalized.append(v)
-            continue
-
-        best = v
-        best_err = abs(np.log(v / anchor))
-
-        for f in COMMON_SPLIT_FACTORS:
-            for candidate in (v * f, v / f):
-                err = abs(np.log(candidate / anchor))
-                if err < best_err:
-                    best = candidate
-                    best_err = err
-
-        normalized.append(best)
-
-    return pd.Series(normalized, index=values.index)
- 
- 
-def normalize_split_adjusted(df: pd.DataFrame, concepts: list[str]) -> pd.DataFrame:
-    mask = df["concept"].isin(concepts)
-    target = df[mask].copy()
-    rest = df[~mask]
-
-    if target.empty:
-        return df
-
-    target = target.sort_values(["ticker", "concept", "end"])
-
-    normalized_parts = []
-    for _, group in target.groupby(["ticker", "concept"]):
-        group = group.copy()
-        group["value"] = _normalize_series(group["value"], group["end"])
-        normalized_parts.append(group)
-
-    target = pd.concat(normalized_parts, ignore_index=True)
-
-    return pd.concat([rest, target], ignore_index=True)
+# _normalize_series / normalize_split_adjusted stood here. They rescaled every
+# historical SharesOutstanding value by whichever factor from COMMON_SPLIT_FACTORS
+# brought it closest to the newest value -- share-count history pulled toward the
+# anchor, with no notion of when a split happened or whether one had. Of the 929
+# rescaling events it performed across 335 tickers, 7 were corroborated by an actual
+# corporate action. Split normalisation now lives in parse_edgar._apply_split_basis,
+# where the filing date of each fact and the corporate-action feed are both available
+# and no guessing is required.
 
 
  

@@ -1,158 +1,166 @@
-# Task: Sidebar — Data Freshness, Metric Encyclopedia, Profile Coverage
+# Task: `calculate_ttm` — Calendar-Aware Windows + Annual-Fact TTM Path
 
-**Depends on the app refinements task being complete and shipped.** Read
-`app_refinements_report.md`, `metrics_registry_report.md`, `data_tab_report.md`, if not available anymore recompute them via git, and the current
-`app.py`, `config.py`, `metrics.py`, `main.py` before changing anything.
+**Read first:** `tag_investigation_stock_sbc_report.md` (sections 6 and 8 are the direct input),
+`bugfixed_update_history.md`, `METRICS_REFERENCE.md`, and the current `calculate_ttm`,
+`decumulate_period_values` and `build_dataframe` code.
 
 ## Context
 
-The app now shows data and charts well. What a first-time visitor cannot do is answer two
-questions without reading the source: **what is this number and how was it computed**, and **why
-does this ticker show different metrics than that one**.
+`calculate_ttm` is `.rolling(window=4).sum()` **over the rows present in the series**, not over
+calendar quarters. On a sparse concept it therefore sums the last four *available* values, which
+may span several years, and labels the result "trailing twelve months".
 
-Both are core to this project's positioning. The differentiator over commercial providers is not
-having the numbers — it is being able to show exactly how they were derived. An encyclopedia that
-paraphrases a textbook would destroy that: it would describe metrics this pipeline does not
-compute the way it describes them.
+This was discovered as a side effect during the tag investigation: filling gaps in
+`ShareBasedCompensation` **changed** existing `owner_fcf` values for 20 tickers, 15 of which were
+never flagged — because adding data re-anchored the rolling window at nearer dates. One example
+from that report:
 
-**Explicitly NOT in this task:** no Phase 4 (cross-sectional/peer scatter), no `PROFILE_HIDDEN`
-structural refactor, no `V`/`STZ` `SharesOutstanding` fix, no `p_ffo`-in-snapshot fix, no changes
-to chart rendering or the data tab's contents, no deployment work.
+```
+SRE gained the 8 consecutive quarters 2016-03-31 … 2017-12-31,
+    which had been an unbroken two-year hole between 2015-12-31 and 2018-03-31.
+```
+
+Before the fill, SRE's "TTM" at points in that hole summed values spanning years. The number was
+wrong, produced no error, and fed `pfcf_ex_sbc` and every valuation denominator built on a `_TTM`
+concept.
+
+The defect affects **every thin concept**, not only the ones recently touched. Its failure mode is
+the one this project treats as most dangerous: a plausible number rather than an exception.
+
+A second, related finding from the same report: **31 flagged (ticker, concept) pairs are
+"annual-only"** — the filer discloses the item once a year at 12-month duration, so
+`decumulate_period_values` has nothing to decumulate and a quarterly pipeline gets zero. Eight of
+the 21 flagged utilities' `ShareBasedCompensation` cases are this. Example:
+
+```
+NEE  AllocatedShareBasedCompensationExpense: 48 facts, durations {12 months: 48}
+     annual values = 21, quarterly values = 0
+```
+
+These two things belong in one task because **a 12-month fact at a fiscal year end is, by
+definition, exactly the trailing-twelve-months value at that date** — not an approximation of it.
+Part 1 removes TTM values that were never really TTM; Part 2 adds TTM values that were there all
+along in a form the TTM layer did not read.
+
+**Explicitly NOT in this task:** no split-normalisation or `share_count_jump_flag` work (separate
+task), no further tag work, no new concepts or metrics, no `PROFILE_HIDDEN` refactor, no UI or
+chart changes.
 
 ---
 
-## Part 1 — Navigation and layout decision (make this first, everything else sits inside it)
+## Part 1 — Make the window calendar-aware
 
-The app is currently five tabs. This task adds four more surfaces (three encyclopedia sections
-and a profile-coverage page) that are **reference material, not analysis** — a user consults them
-occasionally, not per ticker.
+### Step 1.1 — Measure the actual span distribution first
 
-Decide how they are reached and state the reasoning. Options include a `st.sidebar` with a
-radio/selectbox switching between "Analysis" and the reference pages, Streamlit's native
-multipage structure, or simply more tabs. Constraints that should drive the choice:
+Before choosing any threshold, measure across all cached tickers and all `_TTM` concepts: for
+every window the current implementation forms, the **elapsed time between the first and fourth
+row** in it.
 
-- Nine tabs in one row is not navigable.
-- The reference pages are **ticker-independent** — putting them next to a ticker-specific tab set
-  invites the reader to assume they describe the selected ticker.
-- The existing prototype convention is "no multipage structure, no custom CSS". If you break that
-  convention, say why it is now worth breaking.
+Report the distribution. The expectation is a dense cluster near 365 days (52/53-week filers and
+shifted fiscal year ends spread it somewhat), a gap, then a tail of windows spanning multiple
+years. **The threshold should come out of that gap, not out of a round number.** If there is no
+clean gap, say so — that is a finding, and the threshold then has to be argued differently.
 
-Whatever you choose, the **ticker selector and the five existing tabs must keep working exactly
-as they do today** — this is an addition, not a restructuring of the analysis view.
+Also report, per concept, how many currently-produced TTM values fall in the tail. That number is
+the coverage cost of the fix and must be known before it is applied.
 
-## Part 2 — Move the freshness information
+### Step 1.2 — Implement and state the threshold
 
-The run timestamp from `meta.json` is currently an `st.caption`. Move it to a persistent position
-(top-left / sidebar) so it is visible regardless of which tab or page is open.
+Mask windows whose span exceeds the threshold, so an out-of-range window yields **no value**
+rather than a wrong one. State the tolerance chosen and the evidence for it, and handle the
+52/53-week and shifted-fiscal-year cases explicitly — a fix that silently drops legitimate retail
+filers' TTM values has traded one defect for another.
 
-Show at minimum the run date and the ticker count. Consider whether `tickers_without_data` from
-`meta.json` belongs here too — it is exactly the kind of honest-coverage signal this project
-surfaces elsewhere; if you include it, make sure an empty list renders as nothing rather than an
-empty label.
+Decide and state whether the threshold is global or per-concept. Prefer global unless the
+measurement shows a concept that genuinely cannot use it.
 
-Remove the old caption; do not leave the information in two places.
+### Step 1.3 — Report what disappears
 
-## Part 3 — Where encyclopedia content lives
+Per concept and per ticker: how many TTM values the mask removes, and spot-check several against
+the source rows to confirm they were genuinely spanning more than a year. Removing a correct
+value would be a regression; removing a wrong one is the point.
 
-Each entry needs, per metric: **what it is** (one or two sentences) and **how this pipeline
-computes it** (the actual formula/inputs). Short — this is not the repo's `METRICS_REFERENCE.md`
-re-hosted.
+## Part 2 — Derive TTM directly from annual facts
 
-Decide where the text lives and state the reasoning. Recommended: two new optional fields on the
-`Metric` dataclass (`description`, `formula`), keeping the registry as the single source of truth
-the way `label`, `percent` and `ref_line` already are — adding a metric then stays one line and
-cannot silently lack documentation. If that makes `config.py` unwieldy at 45 entries, a separate
-module keyed by metric id is acceptable, but then state how a metric without documentation is
-detected rather than silently rendering blank.
+### Step 2.1 — Establish the boundary against `decumulate_period_values` first
 
-Either way: **existing `Metric` fields and every derived structure must remain byte-identical.**
-New fields are optional with defaults; `FUNDAMENTALS_TO_PLOT` and friends must not change shape.
+This is the part most likely to go wrong. `decumulate_period_values` already derives Q4 as
+FY minus Q1+Q2+Q3 for filers that report year-to-date cumulatively — so for those filers a
+12-month fact is already consumed as an intermediate step.
 
-## Part 4 — Write the content, sourced from the code
+**Determine precisely which cases Part 2 applies to** and confirm it against real data before
+implementing: the target is the filer whose facts for a concept are **exclusively** 12-month
+duration, where nothing can be decumulated. Report how you distinguish the two cases in code, and
+verify no ticker/concept is handled by both paths. Two paths that can both write the same
+`_TTM` value at the same date is the failure this step exists to prevent.
 
-**This is the part where the task fails if done carelessly.** Every formula must be derived by
-**reading the actual implementation** in `metrics.py` / `main.py` / `parsers`, not from general
-financial knowledge. Where this pipeline's definition differs from the conventional one, the
-encyclopedia must state this pipeline's definition.
+### Step 2.2 — Implement
 
-Known example to check first, as a calibration case: **`peg_ratio` is computed from revenue
-growth, not earnings growth** — a conventional description would be wrong. Read the code and
-confirm; find and report any other metric whose implementation departs from the textbook
-definition. That list is itself a valuable output of this task.
+Where a concept has a 12-month fact at a period end, set `<concept>_TTM` at that date directly
+from it. Between fiscal year ends the value stays NaN — the disclosure cadence is annual, and the
+series should say so rather than interpolate.
 
-Requirements:
+Verify against the known cases: NEE should gain 21 `ShareBasedCompensation_TTM` points where it
+had none, and the other annual-only tickers listed in the tag report should behave equivalently.
 
-1. **Name the actual inputs.** "Computed from `NetIncomeLoss_TTM` and `StockholdersEquity`" is
-   useful; "net income divided by equity" is not, because it does not say which XBRL concept,
-   which period basis, or which of several possible equity figures.
-2. **State the period basis** — TTM, quarterly, or point-in-time — since the project computes
-   both TTM and quarterly variants of many things.
-3. **Growth entries share one mechanism**, so document it once and keep per-concept notes short:
-   `calculate_growth` uses a 4-quarter lag, requires both the current and prior value to be
-   positive, and applies a `min_base_ratio` guard (loosened by explicit override for a few
-   concepts). Those guards are why a user sees gaps — that explanation belongs in the growth
-   section, and it is one of the more persuasive things this app can say about itself.
-4. **Valuation entries: state the price input and the mean convention.** Which price, as of when,
-   and that some multiples use a harmonic rather than arithmetic mean for the reference line
-   (`HARMONIC_MEAN_CONCEPTS`) — read which, don't assume. Also note the snapshot marker's
-   meaning, since it now appears on these charts.
-5. **Language: pick one and apply it consistently.** Recommended English, matching the registry's
-   `LANGUAGE_PRIMARY` and the intended audience. Note that the app currently mixes German UI
-   strings ("Keine Daten", exclusion notes) with English labels — do **not** fix that here, but
-   report it as a known inconsistency so it can be handled deliberately later.
-6. **Where a metric's documentation cannot be written confidently from the code, leave it empty
-   and list it in the report.** An honest gap beats a plausible-sounding description of something
-   the code does differently. This is the same standard applied to `label_de`.
+### Step 2.3 — Mark provenance
 
-Render the three sections (fundamentals, valuation, growth) grouped sensibly, driven by the
-registry's `chart` field so a new metric appears automatically.
+Where a ticker reports partly quarterly and partly annually, `_TTM` values now arise two ways.
+Carry the provenance (a column, a flag, or whatever fits the existing frame conventions) so a
+series that looks uniform is not silently mixed.
 
-## Part 5 — The profile coverage page
+Decide whether this provenance surfaces in the app's data tab. Recommended: yes — it is exactly
+the kind of "here is how this number was derived" signal this project exists to show — but
+implementing the UI side is optional; **stating the decision is not.**
 
-A page showing, per profile (`standard`, `financial`, `insurance_life`, `reit`, …), which
-fundamentals and valuation metrics are computed and shown.
+### Step 2.4 — Consider the coverage threshold interaction
 
-**This must be generated from `is_hidden`, never hand-written.** A hand-maintained table would
-drift from the code within one task, and the whole point is that it is authoritative. Build it by
-evaluating visibility for every (profile, metric) pair.
+Some of the 31 annual-only pairs may now clear or change their quality flags. Report which, and
+whether the 50% coverage threshold still means what it should for a concept whose disclosure is
+legitimately annual. **Do not change the threshold logic in this task** — report the finding.
 
-Design points:
+---
 
-1. **`is_hidden` takes a ticker, not a profile.** Determine how to evaluate profile-level
-   visibility — a representative ticker per profile, or a path that resolves a profile directly.
-   State what you did and any caveat (e.g. `_DERIVED_CONCEPT_CONSUMERS` or ticker-level overrides
-   could make one ticker unrepresentative of its profile — check whether that actually happens
-   and report it).
-2. **24 profiles × 45 metrics is a large matrix.** Decide the presentation: a full matrix, a
-   per-profile view driven by a selector, or grouped by metric with the profiles listed. Pick
-   what is actually readable and justify it.
-3. **Show growth panels too** if the same generation works for them — they are registry entries
-   like the others.
-4. Make the profile a ticker belongs to visible somewhere in the analysis view as well, so a user
-   looking at JPM can connect it to the `financial` row here.
+## Part 3 — Non-regression, as two separate change groups
 
-## Part 6 — Verify
+Part 1 removes values and Part 2 adds them. If applied together the diffs cancel and become
+uninterpretable, so **measure each separately**, in this order: Part 1, diff, Part 2, diff.
 
-- **Nothing regressed:** the five existing tabs render as before, chart output is unchanged
-  (compare `build_*` output byte-for-byte against a pre-change baseline for three tickers across
-  profiles), and the derived config structures are byte-identical.
-- **Encyclopedia coverage is complete or explicitly listed:** assert every registry metric either
-  has documentation or appears in the report's gap list. No metric silently renders blank.
-- **The coverage matrix matches `is_hidden`** — verify a sample of cells programmatically against
-  `config.is_hidden` directly, including at least one metric hidden for most profiles
-  (`p_ffo`-like) and one visible for nearly all. A generated table that disagrees with the
-  function it claims to reflect is worse than no table.
-- **A new metric flows through automatically:** temporarily add a registry entry in the
-  verification run and confirm it appears in the encyclopedia and the coverage page without
-  touching either. Do not leave it behind.
-- **`app.py` still imports no pipeline module** and the page body runs to completion in bare mode,
-  as previous tasks verified. State honestly what was not verifiable without a browser.
+For each group, following the convention established in the tag investigation:
+
+1. Capture a before-state across **all** cached tickers — every `_TTM` concept, plus the
+   downstream quantities that consume them: `owner_fcf`, `pfcf_ex_sbc`, every valuation multiple
+   whose denominator is a `_TTM` concept, and the growth panels added recently (several are built
+   on `_TTM` series).
+2. Diff after, and account for **every** difference: appeared, changed, disappeared. In Part 1
+   disappearances are the intended effect and changes need justification; in Part 2 appearances
+   are the intended effect and changes need justification.
+3. Report the effect on `valuation_history` mean lines — those are the benchmark the app's charts
+   compare today's multiple against, so a changed history moves the reference a user reads.
+4. Re-measure the quality flags across all 501 tickers and report the delta per concept.
+5. Verify the specific cases named above: SRE and the other 19 tickers whose `owner_fcf` moved in
+   the tag investigation should now behave correctly; NEE and the annual-only list should gain
+   values.
+
+## Part 4 — Record
+
+Update `bugfixed_update_history.md` per convention, including the threshold and its evidence, and
+the boundary rule between the two TTM derivation paths.
 
 ## Output
 
-One file, `sidebar_encyclopedia_report.md`: the navigation decision with reasoning, where the
-documentation lives and why, **the list of metrics whose implementation departs from the
-conventional definition** (found in Part 4), any metric left undocumented and why, the coverage
-page's generation approach and its caveats, and the Part 6 verification results.
+One file, `ttm_window_report.md`:
+
+1. The Part 1.1 span distribution, the gap (or its absence), and the threshold with its evidence.
+2. What Part 1 removed, per concept, with spot-checks proving the removed values genuinely spanned
+   more than a year.
+3. The Part 2.1 boundary rule against `decumulate_period_values`, and the confirmation that no
+   ticker/concept is handled by both paths.
+4. What Part 2 added, including NEE and the annual-only list.
+5. The provenance mechanism and the decision on surfacing it in the app.
+6. Both diffs, separately, with every appeared/changed/disappeared value accounted for, plus the
+   valuation-history mean-line effect.
+7. Re-measured flag counts and the annual-only coverage-threshold finding.
+8. Anything deliberately not fixed, with reasoning.
 
 No scratch scripts left behind.

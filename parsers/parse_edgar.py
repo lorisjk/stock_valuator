@@ -77,6 +77,213 @@ def _normalize_scale_outliers(values: list[dict]) -> list[dict]:
     return corrected
 
 
+_EPS_TAGS = ("EarningsPerShareDiluted", "EarningsPerShareBasic")
+_SCALE_EVIDENCE_TOLERANCE = 0.35  # log10; a scale error is a whole power of ten
+
+
+def _facts_by_filing(us_gaap_data: dict, tags) -> dict:
+    """{(accn, start, end): [values]} -- keyed on the reporting period as well as the
+    filing, so a quarterly net income is never divided by a year-to-date share count."""
+    out = {}
+    for tag in tags:
+        concept = us_gaap_data.get(tag)
+        if not concept:
+            continue
+        for items in concept.get("units", {}).values():
+            for item in items:
+                if item.get("val") is not None:
+                    out.setdefault((item["accn"], item.get("start"), item["end"]), []).append(float(item["val"]))
+    return out
+
+
+def _scale_evidence(shares: dict, eps: dict, income: dict, end: str, value: float, factor: float) -> str:
+    """'supported' / 'refuted' / 'unknown' for one proposed power-of-ten correction.
+
+    Supported when the same period is reported elsewhere at value x factor, when the
+    period's net income is restated by that same factor (the whole filing was tagged
+    in thousands), or when the filing's own EPS arithmetic implies exactly it.
+    Refuted when that arithmetic says the value as filed is already right.
+    """
+    target = math.log10(factor)
+
+    for (_accn, _start, other_end), other in shares.items():
+        if other_end == end and any(v > 0 and abs((v / value) / factor - 1) < 0.02 for v in other):
+            return "supported"
+
+    errors = []
+    for (accn, start, other_end), reported in shares.items():
+        if other_end != end or not any(v and abs(v / value - 1) < 1e-9 for v in reported):
+            continue                                    # not a filing that reported this number
+        for own in income.get((accn, start, end), []):
+            for elsewhere in _income_for_period(income, start, end):
+                if own and abs((elsewhere / own) / factor - 1) < 0.02:
+                    return "supported"
+        for per_share in eps.get((accn, start, end), []):
+            for total in income.get((accn, start, end), []):
+                if abs(per_share) > 1e-6:
+                    errors.append(math.log10(abs((total / value) / per_share)))
+
+    if not errors:
+        return "unknown"
+    implied = sorted(errors)[len(errors) // 2]
+    if abs(implied - target) < _SCALE_EVIDENCE_TOLERANCE:
+        return "supported"
+    if abs(implied) < _SCALE_EVIDENCE_TOLERANCE:
+        return "refuted"
+    return "unknown"
+
+
+def _income_for_period(income: dict, start, end) -> list:
+    return [v for (_a, s, e), vals in income.items() if s == start and e == end for v in vals]
+
+
+def _corroborated_scale_correction(us_gaap_data: dict, share_tags, income_tags,
+                                   as_filed: list[dict], values: list[dict]) -> list[dict]:
+    """Run the outlier sweep, then drop the corrections the filings refute.
+
+    The sweep proposes a power-of-ten correction whenever a value sits far below its
+    neighbours -- a good detector, but neighbour distance alone cannot tell a mis-typed
+    scale from a real one. Chesapeake's post-reverse-split share counts are genuinely
+    ~9.8m against a ~1.4bn history, and the sweep multiplied ten of them by 100.
+    """
+    swept = _normalize_scale_outliers(values)
+    proposals = [i for i, (before, after) in enumerate(zip(values, swept))
+                 if before["value"] and after["value"] != before["value"]]
+    if not proposals:
+        return swept
+
+    shares = _facts_by_filing(us_gaap_data, share_tags)
+    eps = _facts_by_filing(us_gaap_data, _EPS_TAGS)
+    income = _facts_by_filing(us_gaap_data, income_tags)
+    filed_value = {v["end"]: v["value"] for v in as_filed}
+
+    out = list(swept)
+    for i in proposals:
+        end = values[i]["end"]
+        factor = swept[i]["value"] / values[i]["value"]
+        if _scale_evidence(shares, eps, income, end, filed_value.get(end), factor) == "refuted":
+            out[i] = values[i]
+    return out
+
+
+_SIBLING_MIN_LOG = 0.7      # ~5x; the share tags differ by a few percent, never by this
+_SIBLING_POWER_TOL = 0.05   # how far the ratio may sit off a whole power of ten
+_OUT_OF_LINE_LOG = 2.0      # a value this far from its own series' median is not drift
+
+
+def _series_median_log(values: list[dict], skip_end: str = None) -> float | None:
+    logs = [math.log10(abs(v["value"])) for v in values
+            if v["value"] and v["end"] != skip_end]
+    if len(logs) < 5:
+        return None
+    return sorted(logs)[len(logs) // 2]
+
+
+def _directional_scale_repair(us_gaap_data: dict, share_tags, income_tags,
+                              as_filed: list[dict], values: list[dict]) -> list[dict]:
+    """Repair values the upward sweep cannot reach, using evidence that names the culprit.
+
+    `net income / shares = EPS` fires equally hard whether the share count or the net
+    income is mis-scaled, so on its own it cannot decide anything. Two instruments do:
+
+      * a sibling share tag in the *same accession* reporting the same period a power
+        of ten away -- one filing, two share counts, only one of which matches the
+        company's own history. Taking the sibling is extraction, not correction.
+      * failing that, the value being orders of magnitude off its own series while the
+        period's net income sits squarely on its. Nothing then supplies a replacement,
+        so the row is dropped rather than passed through: Sherwin-Williams reporting
+        130,924,690,000 shares is not a better input than a gap.
+    """
+    if not values:
+        return values
+    median_log = _series_median_log(values)
+    if median_log is None:
+        return values
+
+    shares = _facts_by_filing(us_gaap_data, share_tags)
+    eps = _facts_by_filing(us_gaap_data, _EPS_TAGS)
+    income = _facts_by_filing(us_gaap_data, income_tags)
+    income_log = None
+    income_all = [abs(v) for vals in income.values() for v in vals if v]
+    if len(income_all) >= 5:
+        income_log = sorted(math.log10(v) for v in income_all)[len(income_all) // 2]
+    filed_value = {v["end"]: v["value"] for v in as_filed}
+
+    out = []
+    for value in values:
+        v, end = value["value"], value["end"]
+        filed = filed_value.get(end)
+        if not v or not filed or v <= 0:
+            out.append(value)
+            continue
+        own_median = _series_median_log(values, skip_end=end)
+        if own_median is None or abs(math.log10(v) - own_median) < _OUT_OF_LINE_LOG:
+            out.append(value)
+            continue
+
+        basis = v / filed          # whatever the split basis already applied
+        power = _sibling_scale_power(shares, end, filed, own_median, basis)
+        if power is not None:
+            # rescale in place rather than adopting the sibling's number: the sibling
+            # establishes the magnitude, but it is a different measure of the share
+            # count (period-end rather than weighted-average diluted) and swapping it
+            # in would put a 5-7% measurement step into the middle of the series.
+            out.append({**value, "value": v / (10 ** power)})
+            continue
+        if _income_is_sound(eps, income, income_log, shares, end, filed):
+            continue               # provably wrong, nothing to replace it with -> drop
+        out.append(value)
+    return out
+
+
+def _sibling_scale_power(shares: dict, end: str, filed: float, median_log: float, basis: float):
+    """How many powers of ten a same-accession sibling says this value is out by.
+
+    The sibling is a different measure of the same quantity -- period-end common
+    shares against a weighted average -- so it agrees on the magnitude and not on the
+    number. Only the exponent is taken from it.
+    """
+    accessions = {accn for (accn, _start, fact_end), reported in shares.items()
+                  if fact_end == end and any(s and abs(s / filed - 1) < 1e-9 for s in reported)}
+    if not accessions:
+        return None
+    for (accn, _start, other_end), others in shares.items():
+        if accn not in accessions or other_end != end:
+            continue
+        for candidate in others:
+            if candidate <= 0:
+                continue
+            gap = math.log10(filed / candidate)
+            if gap < _SIBLING_MIN_LOG or abs(gap - round(gap)) > _SIBLING_POWER_TOL:
+                continue
+            if abs(math.log10(candidate * basis) - median_log) < 1.0:
+                return int(round(gap))
+    return None
+
+
+def _income_is_sound(eps: dict, income: dict, income_log: float | None,
+                     shares: dict, end: str, filed: float) -> bool:
+    """The filing's EPS arithmetic fails and its net income is not what is off."""
+    if income_log is None:
+        return False
+    errors, totals = [], []
+    for (accn, start, fact_end), reported in shares.items():
+        if fact_end != end or not any(s and abs(s / filed - 1) < 1e-9 for s in reported):
+            continue
+        for per_share in eps.get((accn, start, end), []):
+            for total in income.get((accn, start, end), []):
+                if abs(per_share) > 1e-6 and total:
+                    errors.append(math.log10(abs((total / filed) / per_share)))
+                    totals.append(abs(total))
+    if not errors or not totals:
+        return False
+    implied = sorted(errors)[len(errors) // 2]
+    if abs(implied) < _OUT_OF_LINE_LOG:
+        return False
+    typical = sorted(totals)[len(totals) // 2]
+    return abs(math.log10(typical) - income_log) < 1.0
+
+
 def extract_merged_values(
     us_gaap_data: dict,
     candidate_tags: list[str],
@@ -536,11 +743,92 @@ def _mask_known_scope_mismatch_outliers(ticker: str, key: str, values: list[dict
     return [v for v in values if v["end"] not in bad_ends]
 
 
+_SPLIT_MATCH_TOLERANCE = 0.02  # log-space; a restated period differs by the ratio exactly
+# A split moves the share count by at least a quarter. Below this the feed is
+# reporting a stock dividend of a percent or two, where a 2% match tolerance is wider
+# than the effect itself and any small restatement would "confirm" it. Ignoring those
+# leaves the share count off by that percent -- an order of magnitude below the 15%
+# the jump flag is looking for.
+_MIN_SPLIT_LOG_MAGNITUDE = 0.182  # ln(1.2)
+
+
+def _restatements(us_gaap_data: dict, candidate_tags: list[str]) -> list[tuple]:
+    """(earlier_filed, later_filed, ratio) for every period a filer reported twice."""
+    out = []
+    for tag in candidate_tags:
+        concept = us_gaap_data.get(tag)
+        if not concept:
+            continue
+        for items in concept.get("units", {}).values():
+            by_end = {}
+            for item in items:
+                if item.get("val"):
+                    by_end.setdefault(item["end"], []).append((item["filed"], float(item["val"])))
+            for facts in by_end.values():
+                if len(facts) < 2:
+                    continue
+                facts.sort()
+                for (f1, v1), (f2, v2) in zip(facts, facts[1:]):
+                    if v1 > 0 and v2 > 0 and f1 != f2:
+                        out.append((f1, f2, v2 / v1))
+    return out
+
+
+def corroborated_split_events(us_gaap_data: dict, candidate_tags: list[str],
+                              splits: list[dict]) -> list[dict]:
+    """Keep only the split events the filer's own numbers confirm.
+
+    A share count is stated on the share basis in force when it was *filed*, so a
+    filer that splits restates the same period at the new basis in its next filing.
+    The same period reported at two filing dates that straddle a real split differs
+    by exactly the split ratio -- the underlying count is identical, so the tolerance
+    can be tight. A spin-off or stock-dividend ratio, which yfinance reports in the
+    same column, changes the price and not the share count, so it never corroborates.
+    That distinction cannot be made from the ratio's shape: Agilent's Keysight
+    spin-off is 1.398 and a 7:5 split would be 1.4.
+    """
+    if not splits:
+        return []
+    changes = _restatements(us_gaap_data, candidate_tags)
+    confirmed = []
+    for event in splits:
+        day, ratio = event["date"], float(event["ratio"])
+        if ratio <= 0 or abs(math.log(ratio)) < _MIN_SPLIT_LOG_MAGNITUDE:
+            continue
+        for earlier, later, observed in changes:
+            if not (earlier < day <= later):
+                continue
+            if abs(math.log(observed / ratio)) < _SPLIT_MATCH_TOLERANCE:
+                confirmed.append({"date": day, "ratio": ratio})
+                break
+    return confirmed
+
+
+def _apply_split_basis(values: list[dict], confirmed: list[dict]) -> list[dict]:
+    """Restate every value onto the current share basis, using only corroborated
+    splits. A value filed after the last split is already current and is left alone;
+    with no corroborating evidence the factor is 1 and the value passes through."""
+    if not confirmed:
+        return values
+
+    out = []
+    for v in values:
+        filed = v.get("filed")
+        factor = 1.0
+        if filed:
+            for event in confirmed:
+                if event["date"] > filed:
+                    factor *= event["ratio"]
+        out.append(v if factor == 1.0 else {**v, "value": v["value"] * factor})
+    return out
+
+
 def build_dataframe(
     ticker: str,
     company_info: dict,
     concept_candidates: dict,
     period: str = "annual",
+    splits: list[dict] | None = None,
 ) -> pd.DataFrame:
 
     us_gaap_data = company_info["facts"]["us-gaap"]
@@ -554,7 +842,25 @@ def build_dataframe(
             continue
 
         if key in _SCALE_CORRECTED_CONCEPTS:
-            values = _normalize_scale_outliers(values)
+            # split basis first, unit scale second: which basis a number is on is a
+            # property of the filing, whereas a scale error is a property of how it
+            # was typed. Reversed, the scale sweep absorbs the split with the wrong
+            # factor -- Chipotle's pre-split count is 50x low and the sweep, which
+            # only knows powers of ten, "fixes" it by 100x.
+            as_filed = values
+            values = _apply_split_basis(
+                values,
+                corroborated_split_events(us_gaap_data, cfg.get("tags", []), splits or []),
+            )
+            income_tags = concept_candidates.get("NetIncomeLoss", {}).get("tags", [])
+            values = _corroborated_scale_correction(
+                us_gaap_data, cfg.get("tags", []), income_tags, as_filed, values,
+            )
+            # the sweep only ever raises a value; this reaches the ones that are too
+            # large, which it cannot see at all
+            values = _directional_scale_repair(
+                us_gaap_data, cfg.get("tags", []), income_tags, as_filed, values,
+            )
 
         values = _mask_negative_flow_values(key, values, period)
         values = _mask_negative_balance_values(key, values)

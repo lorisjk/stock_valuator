@@ -127,6 +127,7 @@ CONCEPT_CANDIDATES = {
         "tags": [
             "ShareBasedCompensation",
             "AllocatedShareBasedCompensationExpense",
+            "AdjustmentsToAdditionalPaidInCapitalSharebasedCompensationRequisiteServicePeriodRecognitionValue",
         ],
         "point_in_time": False,
         "mode": "fallback",
@@ -160,10 +161,18 @@ CONCEPT_CANDIDATES = {
         "mode": "fallback",
     },
     "StockIssued": {
+
         "tags": [
             "ProceedsFromIssuanceOfCommonStock",
             "StockIssuedDuringPeriodValueNewIssues",
             "ProceedsFromIssuanceOrSaleOfEquity",
+            "ProceedsFromIssuanceOfSharesUnderIncentiveAndShareBasedCompensationPlansIncludingStockOptions",
+            "ProceedsFromStockPlans",
+            "ProceedsFromStockOptionsExercised",
+            "ProceedsFromIssuanceOfSharesUnderIncentiveAndShareBasedCompensationPlans",
+            "ProceedsFromSaleOfTreasuryStock",
+            "StockIssuedDuringPeriodValueStockOptionsExercised",
+            "StockIssuedDuringPeriodValueEmployeeStockPurchasePlan",
         ],
         "point_in_time": False,
         "mode": "fallback",
@@ -2245,8 +2254,10 @@ METRICS = [
     Metric("SharesOutstanding", CHART_GROWTH, "Shares Outstanding (Stock Dilution/Repurchase)", 0, percent=True,
            description="Change in the share count -- negative means buybacks, positive means "
                        "dilution. Every per-share figure moves with this line.",
-           formula="Point-in-time share count, normally the diluted weighted average, after "
-                   "normalize_split_adjusted has undone unadjusted historical split steps."),
+           formula="Point-in-time share count, normally the diluted weighted average, restated "
+                   "onto the current split basis by parse_edgar._apply_split_basis -- which "
+                   "applies only splits the corporate-action feed reports and the filer's own "
+                   "restatements confirm, so an uncorroborated period is left as filed."),
     Metric("EPS_TTM_CALC", CHART_GROWTH, "EPS Growth (TTM, YoY)", 0, percent=True,
            description="Growth in earnings per share on a trailing-twelve-month basis -- profit "
                        "growth and share-count change combined into the number that reaches the shareholder.",
