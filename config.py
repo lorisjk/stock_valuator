@@ -1999,6 +1999,17 @@ class Metric:
     quarterly: bool = False   # a <id>_quarterly series exists
     harmonic: bool = False    # mean line uses the harmonic mean
     label_de: str | None = None
+    # Encyclopedia text. Optional with a None default, so every structure derived
+    # from this class keeps its shape -- but optional means a new metric can
+    # silently arrive undocumented, which is what undocumented_metrics() below is
+    # for. `formula` names the actual concepts and period basis the pipeline uses,
+    # never the textbook definition: several of these deliberately differ.
+    description: str | None = None
+    formula: str | None = None
+
+    @property
+    def documented(self) -> bool:
+        return bool(self.description and self.formula)
 
     @property
     def id_namespace(self) -> str:
@@ -2023,50 +2034,195 @@ class Metric:
 
 METRICS = [
     # --- fundamentals: order is panel order ---
-    Metric("revenue_yoy_growth", CHART_FUNDAMENTALS, "Revenue growth", 0, percent=True),
-    Metric("income_yoy_growth", CHART_FUNDAMENTALS, "Income growth", 0, percent=True),
-    Metric("operating_margin", CHART_FUNDAMENTALS, "Operating Margin", None, percent=True, quarterly=True),
-    Metric("roe", CHART_FUNDAMENTALS, "Return on Equity", None, percent=True),
-    Metric("debt_to_equity", CHART_FUNDAMENTALS, "Debt-to-Equity Ratio", None),
-    Metric("payout_ratio", CHART_FUNDAMENTALS, "Payout Ratio", None, percent=True, quarterly=True),
-    Metric("fcf_margin", CHART_FUNDAMENTALS, "Free Cash Flow Margin", None, percent=True, quarterly=True),
-    Metric("net_debt_to_ebitda", CHART_FUNDAMENTALS, "Net Debt / EBITDA", 0),
-    Metric("rule_of_40", CHART_FUNDAMENTALS, "Rule of 40", 0.4, percent=True),
-    Metric("net_interest_margin", CHART_FUNDAMENTALS, "Net Interest Margin", None, percent=True),
-    Metric("efficiency_ratio", CHART_FUNDAMENTALS, "Efficiency Ratio", None, percent=True, quarterly=True),
-    Metric("roa", CHART_FUNDAMENTALS, "Return on Assets", None, percent=True),
-    Metric("equity_to_assets", CHART_FUNDAMENTALS, "Equity / Assets", None, percent=True),
-    Metric("provision_ratio", CHART_FUNDAMENTALS, "Provision/Revenue", 0, percent=True, quarterly=True),
-    Metric("combined_ratio", CHART_FUNDAMENTALS, "Combined Ratio", 1.0, percent=True, quarterly=True),
-    Metric("loss_ratio", CHART_FUNDAMENTALS, "Loss Ratio", None, percent=True, quarterly=True),
-    Metric("expense_ratio", CHART_FUNDAMENTALS, "Expense Ratio", None, percent=True, quarterly=True),
-    Metric("net_investment_yield", CHART_FUNDAMENTALS, "Net Investment Yield", None, percent=True),
-    Metric("reserve_growth", CHART_FUNDAMENTALS, "Reserve Growth", 0, percent=True),
-    Metric("inventory_turnover", CHART_FUNDAMENTALS, "Inventory Turnover (x/Year)", None),
-    Metric("dio", CHART_FUNDAMENTALS, "Days Inventory Outstanding", None),
-    Metric("dso", CHART_FUNDAMENTALS, "Days Sales Outstanding", None),
-    Metric("dpo", CHART_FUNDAMENTALS, "Days Payable Outstanding", None),
-    Metric("cash_conversion_cycle", CHART_FUNDAMENTALS, "Cash Conversion Cycle (Days)", 0),
-    Metric("rd_intensity", CHART_FUNDAMENTALS, "R&D Intensity (% Revenue)", None, percent=True, quarterly=True),
-    Metric("capex_intensity", CHART_FUNDAMENTALS, "CapEx Intensity (% Revenue)", None, percent=True, quarterly=True),
-    Metric("operating_leverage", CHART_FUNDAMENTALS, "Operating Leverage", 1.0),
-    Metric("operating_income_yoy_growth", CHART_FUNDAMENTALS, "Operating Income YOY Growth", 0, percent=True),
-    Metric("ffo_margin", CHART_FUNDAMENTALS, "FFO Margin (% Revenue)", None, percent=True, quarterly=True),
+    Metric("revenue_yoy_growth", CHART_FUNDAMENTALS, "Revenue growth", 0, percent=True,
+           description="How much larger trailing-twelve-month sales are than a year ago. "
+                       "The top line, and the number hardest to influence through accounting choices.",
+           formula="calculate_growth on `Revenue_TTM`, 4-quarter lag. `Revenue` is mapped "
+                   "per profile -- for `financial` it is RevenuesNetOfInterestExpense, not gross revenue."),
+    Metric("income_yoy_growth", CHART_FUNDAMENTALS, "Income growth", 0, percent=True,
+           description="The same year-over-year comparison applied to profit after everything.",
+           formula="calculate_growth on `NetIncomeLoss_TTM`, 4-quarter lag."),
+    Metric("operating_margin", CHART_FUNDAMENTALS, "Operating Margin", None, percent=True, quarterly=True,
+           description="Cents of operating profit per dollar of sales, before interest and tax.",
+           formula="`OperatingIncomeLoss_TTM` / `Revenue_TTM`. A self-relative scale guard blanks "
+                   "periods where Revenue_TTM falls below 10% of its own max over the surrounding "
+                   "±8 quarters, which suppresses ratios built on a partially-filed quarter."),
+    Metric("roe", CHART_FUNDAMENTALS, "Return on Equity", None, percent=True,
+           description="Profit earned per dollar of shareholders' equity.",
+           formula="`NetIncomeLoss_TTM` / `StockholdersEquity`. Equity is the point-in-time "
+                   "balance, NOT a period average. Requires positive equity, and equity of at "
+                   "least 1% of Revenue_TTM."),
+    Metric("debt_to_equity", CHART_FUNDAMENTALS, "Debt-to-Equity Ratio", None,
+           description="Long-term borrowings measured against the equity cushion beneath them.",
+           formula="`LongTermDebt` / `StockholdersEquity`, both point-in-time. Long-term debt "
+                   "only -- short-term borrowings are not included. Requires positive equity of "
+                   "at least 5% of LongTermDebt."),
+    Metric("payout_ratio", CHART_FUNDAMENTALS, "Payout Ratio", None, percent=True, quarterly=True,
+           description="The share of earnings paid out as dividends.",
+           formula="`DividendsPerShare_TTM` / `EPS_TTM_CALC`, requires a positive denominator. "
+                   "EPS_TTM_CALC is the pipeline's own figure (see P/E), not reported EPS."),
+    Metric("fcf_margin", CHART_FUNDAMENTALS, "Free Cash Flow Margin", None, percent=True, quarterly=True,
+           description="Cents of free cash flow per dollar of sales -- how much of the revenue "
+                       "actually becomes spendable cash.",
+           formula="(`OperatingCashFlow_TTM` − `Capex_TTM`) / `Revenue_TTM`, with the same "
+                   "±8-quarter self-relative revenue guard as the operating margin."),
+    Metric("net_debt_to_ebitda", CHART_FUNDAMENTALS, "Net Debt / EBITDA", 0,
+           description="Years of current earnings it would take to repay borrowings net of cash.",
+           formula="(`LongTermDebt` − `CashAndEquivalents`) / (`OperatingIncomeLoss_TTM` + "
+                   "`DepreciationAndAmortization_TTM`). Blanked when |EBITDA| < $10m or the "
+                   "result exceeds ±60."),
+    Metric("rule_of_40", CHART_FUNDAMENTALS, "Rule of 40", 0.4, percent=True,
+           description="Growth plus cash-flow margin, the software-industry trade-off between "
+                       "growing and being profitable. Above 40% is the convention.",
+           formula="`revenue_yoy_growth` + `fcf_margin`, both as fractions -- so the 0.4 "
+                   "reference line is the conventional 40%. Inherits the TTM basis of both."),
+    Metric("net_interest_margin", CHART_FUNDAMENTALS, "Net Interest Margin", None, percent=True,
+           description="A bank's spread: interest earned minus interest paid, per dollar of assets.",
+           formula="`NetInterestIncome_TTM` / `Assets`. Denominator is TOTAL assets at period "
+                   "end, not average earning assets, so the level runs below the conventional NIM."),
+    Metric("efficiency_ratio", CHART_FUNDAMENTALS, "Efficiency Ratio", None, percent=True, quarterly=True,
+           description="What a bank spends to earn a dollar of revenue. Lower is better; this "
+                       "is the one ratio where a falling line is the good news.",
+           formula="`NoninterestExpense_TTM` / `Revenue_TTM`. For the `financial` profile "
+                   "Revenue maps to RevenuesNetOfInterestExpense, which makes this close to the "
+                   "conventional bank efficiency ratio."),
+    Metric("roa", CHART_FUNDAMENTALS, "Return on Assets", None, percent=True,
+           description="Profit per dollar of assets, the return measure that ignores leverage.",
+           formula="`NetIncomeLoss_TTM` / `Assets`, assets point-in-time rather than averaged."),
+    Metric("equity_to_assets", CHART_FUNDAMENTALS, "Equity / Assets", None, percent=True,
+           description="The simple capital ratio: what fraction of the balance sheet is "
+                       "shareholders' money rather than borrowed.",
+           formula="`StockholdersEquity` / `Assets`, both point-in-time. Book equity, not a "
+                   "regulatory capital measure such as CET1."),
+    Metric("provision_ratio", CHART_FUNDAMENTALS, "Provision/Revenue", 0, percent=True, quarterly=True,
+           description="How much of revenue is being set aside against expected credit losses.",
+           formula="`ProvisionForCreditLosses_TTM` / `Revenue_TTM`. Denominator is revenue, not "
+                   "average loans, so this is not the conventional provisioning rate."),
+    Metric("combined_ratio", CHART_FUNDAMENTALS, "Combined Ratio", 1.0, percent=True, quarterly=True,
+           description="An insurer's claims and expenses per dollar of premium. Above 100% means "
+                       "underwriting loses money, and the investment income has to make up for it.",
+           formula="`BenefitsLossesAndExpenses_TTM` / `EarnedPremiums_TTM` -- a single reported "
+                   "aggregate over premiums, not losses and expenses summed separately."),
+    Metric("loss_ratio", CHART_FUNDAMENTALS, "Loss Ratio", None, percent=True, quarterly=True,
+           description="The claims half of the combined ratio: payouts per dollar of premium.",
+           formula="`IncurredLosses_TTM` / `EarnedPremiums_TTM`."),
+    Metric("expense_ratio", CHART_FUNDAMENTALS, "Expense Ratio", None, percent=True, quarterly=True,
+           description="The cost half of the combined ratio: what it costs to write the business.",
+           formula="`combined_ratio` − `loss_ratio`, so TTM like both of them. Obtained by "
+                   "subtraction, not from a reported expense figure, so it absorbs any "
+                   "difference in how the two source tags are drawn."),
+    Metric("net_investment_yield", CHART_FUNDAMENTALS, "Net Investment Yield", None, percent=True,
+           description="What an insurer earns on the float it holds between premium and claim.",
+           formula="`NetInvestmentIncome_TTM` / `Investments`, investments point-in-time."),
+    Metric("reserve_growth", CHART_FUNDAMENTALS, "Reserve Growth", 0, percent=True,
+           description="Year-over-year change in the reserve set aside for future claims.",
+           formula="calculate_growth on `ClaimsReserve`, 4-quarter lag, point-in-time balance."),
+    Metric("inventory_turnover", CHART_FUNDAMENTALS, "Inventory Turnover (x/Year)", None,
+           description="How many times a year the shelves are emptied and refilled.",
+           formula="`CostOfRevenue_TTM` / `Inventory`. Period-end inventory, not the average "
+                   "balance the textbook ratio uses."),
+    Metric("dio", CHART_FUNDAMENTALS, "Days Inventory Outstanding", None,
+           description="Days of stock on hand at the current rate of sale.",
+           formula="`Inventory` / `CostOfRevenue_TTM` × 365, period-end inventory."),
+    Metric("dso", CHART_FUNDAMENTALS, "Days Sales Outstanding", None,
+           description="Days between making a sale and being paid for it.",
+           formula="`AccountsReceivable` / `Revenue_TTM` × 365, period-end receivables."),
+    Metric("dpo", CHART_FUNDAMENTALS, "Days Payable Outstanding", None,
+           description="Days the company takes to pay its own suppliers.",
+           formula="`AccountsPayable` / `CostOfRevenue_TTM` × 365, period-end payables."),
+    Metric("cash_conversion_cycle", CHART_FUNDAMENTALS, "Cash Conversion Cycle (Days)", 0,
+           description="Days of cash tied up in working capital. Negative means suppliers "
+                       "finance the business -- customers pay before the bills come due.",
+           formula="`dio` + `dso` − `dpo`; inherits the period-end balances of all three."),
+    Metric("rd_intensity", CHART_FUNDAMENTALS, "R&D Intensity (% Revenue)", None, percent=True, quarterly=True,
+           description="The share of revenue reinvested into research and development.",
+           formula="`ResearchAndDevelopment_TTM` / `Revenue_TTM`."),
+    Metric("capex_intensity", CHART_FUNDAMENTALS, "CapEx Intensity (% Revenue)", None, percent=True, quarterly=True,
+           description="The share of revenue spent on property, plant and equipment.",
+           formula="`Capex_TTM` / `Revenue_TTM`."),
+    Metric("operating_leverage", CHART_FUNDAMENTALS, "Operating Leverage", 1.0,
+           description="How much faster operating profit moves than sales. Above 1 means growth "
+                       "is amplified on the way down as well as up.",
+           formula="`operating_income_yoy_growth` / `revenue_yoy_growth`, both TTM growth rates. "
+                   "Blanked when revenue growth is under ±2% (a near-zero denominator) or "
+                   "the result exceeds ±15."),
+    Metric("operating_income_yoy_growth", CHART_FUNDAMENTALS, "Operating Income YOY Growth", 0, percent=True,
+           description="Year-over-year change in operating profit.",
+           formula="calculate_growth on `OperatingIncomeLoss_TTM`, 4-quarter lag."),
+    Metric("ffo_margin", CHART_FUNDAMENTALS, "FFO Margin (% Revenue)", None, percent=True, quarterly=True,
+           description="Funds from operations per dollar of revenue -- the REIT profitability "
+                       "measure, since depreciation makes reported net income misleading for property.",
+           formula="`FFO_TTM` / `Revenue_TTM`, where FFO_TTM = `NetIncomeLoss_TTM` + "
+                   "`DepreciationAndAmortization_TTM` − `GainLossOnSaleOfProperties_TTM`. Total "
+                   "D&A is added back, not only real-estate depreciation as NAREIT specifies."),
 
     # --- valuation: order is panel order ---
-    Metric("pe_ratio", CHART_VALUATION, "P/E (TTM)", None, harmonic=True),
-    Metric("pb_ratio", CHART_VALUATION, "P/B", None),
-    Metric("pfcf_ratio", CHART_VALUATION, "P/FCF (TTM)", None, harmonic=True),
-    Metric("ev_fcf", CHART_VALUATION, "EV/FCF (TTM)", None),
-    Metric("pfcf_ex_sbc", CHART_VALUATION, "P/FCF ex-SBC (TTM)", None),
-    Metric("ev_ebitda", CHART_VALUATION, "EV/EBITDA", None, harmonic=True),
-    Metric("ev_sales", CHART_VALUATION, "EV/Sales", None),
-    Metric("dividend_yield", CHART_VALUATION, "dividend yield", None, percent=True),
-    Metric("p_tbv", CHART_VALUATION, "P/TBV", None, harmonic=True),
-    Metric("p_ppnr", CHART_VALUATION, "P/PPNR", None, harmonic=True),
-    Metric("p_core_earnings", CHART_VALUATION, "P/Core Earnings", None, harmonic=True),
-    Metric("p_ffo", CHART_VALUATION, "P/FFO (TTM)", None, harmonic=True),
-    Metric("pe_to_revenue_growth", CHART_VALUATION, "PE to Revenue Growth", None),
+    Metric("pe_ratio", CHART_VALUATION, "P/E (TTM)", None, harmonic=True,
+           description="Price per dollar of annual earnings -- the years of current profit you "
+                       "are paying for one share.",
+           formula="close / `EPS_TTM_CALC`, where EPS_TTM_CALC = `NetIncomeLoss_TTM` / "
+                   "`SharesOutstanding`. Computed, not the reported diluted EPS, and the share "
+                   "count is normally the diluted weighted average. Only positive EPS is plotted."),
+    Metric("pb_ratio", CHART_VALUATION, "P/B", None,
+           description="Market value per dollar of book equity.",
+           formula="market cap / `StockholdersEquity`, equity point-in-time at the period end, "
+                   "positive only. Additionally blanked when TangibleEquity is negative, since "
+                   "book value carried by goodwill is not a meaningful denominator."),
+    Metric("pfcf_ratio", CHART_VALUATION, "P/FCF (TTM)", None, harmonic=True,
+           description="Price per dollar of free cash flow -- the earnings equivalent that is "
+                       "harder to manipulate.",
+           formula="market cap / `FCF_TTM`, where FCF_TTM = `OperatingCashFlow_TTM` − `Capex_TTM`. "
+                   "Positive FCF only."),
+    Metric("ev_fcf", CHART_VALUATION, "EV/FCF (TTM)", None,
+           description="The same, but priced as if you bought the whole company including its debt.",
+           formula="EV / `FCF_TTM`, EV = market cap + `LongTermDebt` − `CashAndEquivalents`. "
+                   "Short-term debt, minority interest and preferred are not in this EV."),
+    Metric("pfcf_ex_sbc", CHART_VALUATION, "P/FCF ex-SBC (TTM)", None,
+           description="P/FCF after treating stock-based compensation as the real cost it is. "
+                       "The gap against plain P/FCF is how much of the cash flow is paid for in shares.",
+           formula="market cap / (`FCF_TTM` − `ShareBasedCompensation_TTM`)."),
+    Metric("ev_ebitda", CHART_VALUATION, "EV/EBITDA", None, harmonic=True,
+           description="Enterprise value per dollar of pre-depreciation operating profit; the "
+                       "standard cross-company multiple because it is indifferent to capital structure.",
+           formula="EV / `EBITDA_TTM`, EBITDA_TTM = `OperatingIncomeLoss_TTM` + "
+                   "`DepreciationAndAmortization_TTM` (built up from operating income, not from net income)."),
+    Metric("ev_sales", CHART_VALUATION, "EV/Sales", None,
+           description="Enterprise value per dollar of revenue -- the fallback multiple when a "
+                       "company has no profit to divide by.",
+           formula="EV / `Revenue_TTM`."),
+    Metric("dividend_yield", CHART_VALUATION, "dividend yield", None, percent=True,
+           description="Cash dividends over the last year as a percentage of the share price.",
+           formula="`DividendsPerShare_TTM` / close. Dividends declared per share; buybacks are "
+                   "not included."),
+    Metric("p_tbv", CHART_VALUATION, "P/TBV", None, harmonic=True,
+           description="Price per dollar of book value with goodwill stripped out -- the standard "
+                       "bank and insurer multiple, because acquired goodwill absorbs losses first.",
+           formula="market cap / (`StockholdersEquity` − `Goodwill`), both point-in-time at the "
+                   "period end. Only goodwill is removed; other intangibles stay in, so this "
+                   "sits above a strict tangible book value."),
+    Metric("p_ppnr", CHART_VALUATION, "P/PPNR", None, harmonic=True,
+           description="Price against a bank's earnings power before credit losses -- what it "
+                       "earns in a normal year, independent of where it is in the credit cycle.",
+           formula="market cap / `PPNR`, PPNR = `NetInterestIncome_TTM` + `NoninterestIncome_TTM` "
+                   "− `NoninterestExpense_TTM`."),
+    Metric("p_core_earnings", CHART_VALUATION, "P/Core Earnings", None, harmonic=True,
+           description="Price against insurance earnings with investment gains removed, since "
+                       "realised gains are a timing choice rather than underwriting performance.",
+           formula="market cap / `CoreOperatingEarnings`, = `NetIncomeLoss_TTM` − "
+                   "`RealizedInvestmentGains_TTM`. A subtraction of realised gains only."),
+    Metric("p_ffo", CHART_VALUATION, "P/FFO (TTM)", None, harmonic=True,
+           description="The REIT equivalent of P/E, using funds from operations because property "
+                       "depreciation is an accounting charge rather than an economic one.",
+           formula="market cap / `FFO_TTM` (see FFO Margin for the FFO build-up). No snapshot "
+                   "marker appears on this panel -- build_snapshot does not compute p_ffo."),
+    Metric("pe_to_revenue_growth", CHART_VALUATION, "PE to Revenue Growth", None,
+           description="A PEG-style ratio: the P/E divided by the growth rate that justifies it. "
+                       "Below 1 is the conventional 'growth is cheap' threshold.",
+           formula="`pe_ratio` / (revenue growth in percentage points). Uses REVENUE growth, not "
+                   "earnings growth as a textbook PEG does. That growth rate is also its own "
+                   "figure -- Revenue_TTM.pct_change(4) computed inside build_valuation_history, "
+                   "not the guarded calculate_growth used elsewhere. Requires growth above 2%; "
+                   "results beyond ±30 are dropped."),
 
     # --- growth: ids are XBRL concept names, values read from `yoy_growth`.
     #     ref_line/percent match what build_growth draws (a 0 line, percent axis).
@@ -2079,17 +2235,95 @@ METRICS = [
     #     the two insurance profiles. Registering the raw sector tags instead
     #     (NetInterestIncome_TTM, EarnedPremiums_TTM, ...) would have cost 22-23
     #     hide entries each, since PROFILE_HIDDEN is a negative list.
-    Metric("Revenue", CHART_GROWTH, "Revenue growth (Quartal, YoY)", 0, percent=True),
-    Metric("NetIncomeLoss", CHART_GROWTH, "Net Income Growth (Quartal, YoY)", 0, percent=True),
-    Metric("SharesOutstanding", CHART_GROWTH, "Shares Outstanding (Stock Dilution/Repurchase)", 0, percent=True),
-    Metric("EPS_TTM_CALC", CHART_GROWTH, "EPS Growth (TTM, YoY)", 0, percent=True),
-    Metric("FCF_TTM", CHART_GROWTH, "Free Cash Flow Growth (TTM, YoY)", 0, percent=True),
-    Metric("OperatingIncomeLoss_TTM", CHART_GROWTH, "Operating Income Growth (TTM, YoY)", 0, percent=True),
-    Metric("StockholdersEquity", CHART_GROWTH, "Equity Growth (Quartal, YoY)", 0, percent=True),
-    Metric("PPNR", CHART_GROWTH, "PPNR Growth (TTM, YoY)", 0, percent=True),
-    Metric("CoreOperatingEarnings", CHART_GROWTH, "Core Operating Earnings Growth (TTM, YoY)", 0, percent=True),
-    Metric("FFO_TTM", CHART_GROWTH, "FFO Growth (TTM, YoY)", 0, percent=True),
+    Metric("Revenue", CHART_GROWTH, "Revenue growth (Quartal, YoY)", 0, percent=True,
+           description="Sales in this quarter against the same quarter a year earlier.",
+           formula="Single quarter as filed, against the quarter ~365 days earlier."),
+    Metric("NetIncomeLoss", CHART_GROWTH, "Net Income Growth (Quartal, YoY)", 0, percent=True,
+           description="Quarterly profit against the same quarter a year earlier. Gappy by "
+                       "design: a loss quarter on either side produces no value at all.",
+           formula="Single quarter as filed."),
+    Metric("SharesOutstanding", CHART_GROWTH, "Shares Outstanding (Stock Dilution/Repurchase)", 0, percent=True,
+           description="Change in the share count -- negative means buybacks, positive means "
+                       "dilution. Every per-share figure moves with this line.",
+           formula="Point-in-time share count, normally the diluted weighted average, after "
+                   "normalize_split_adjusted has undone unadjusted historical split steps."),
+    Metric("EPS_TTM_CALC", CHART_GROWTH, "EPS Growth (TTM, YoY)", 0, percent=True,
+           description="Growth in earnings per share on a trailing-twelve-month basis -- profit "
+                       "growth and share-count change combined into the number that reaches the shareholder.",
+           formula="`NetIncomeLoss_TTM` / `SharesOutstanding`, the pipeline's own EPS."),
+    Metric("FCF_TTM", CHART_GROWTH, "Free Cash Flow Growth (TTM, YoY)", 0, percent=True,
+           description="Growth in trailing free cash flow.",
+           formula="`OperatingCashFlow_TTM` − `Capex_TTM`."),
+    Metric("OperatingIncomeLoss_TTM", CHART_GROWTH, "Operating Income Growth (TTM, YoY)", 0, percent=True,
+           description="Growth in trailing operating profit, before interest and tax.",
+           formula="`OperatingIncomeLoss_TTM`. Hidden for `financial`: banks do not file an "
+                   "operating-income line, so the panel would always be empty."),
+    Metric("StockholdersEquity", CHART_GROWTH, "Equity Growth (Quartal, YoY)", 0, percent=True,
+           description="Growth in book equity -- retained profit less dividends and buybacks. "
+                       "The compounding measure for a bank or insurer.",
+           formula="Point-in-time `StockholdersEquity`."),
+    Metric("PPNR", CHART_GROWTH, "PPNR Growth (TTM, YoY)", 0, percent=True,
+           description="Growth in a bank's pre-provision earnings power.",
+           formula="`NetInterestIncome_TTM` + `NoninterestIncome_TTM` − `NoninterestExpense_TTM`."),
+    Metric("CoreOperatingEarnings", CHART_GROWTH, "Core Operating Earnings Growth (TTM, YoY)", 0, percent=True,
+           description="Growth in insurance earnings excluding realised investment gains.",
+           formula="`NetIncomeLoss_TTM` − `RealizedInvestmentGains_TTM`."),
+    Metric("FFO_TTM", CHART_GROWTH, "FFO Growth (TTM, YoY)", 0, percent=True,
+           description="Growth in a REIT's funds from operations.",
+           formula="`NetIncomeLoss_TTM` + `DepreciationAndAmortization_TTM` − "
+                   "`GainLossOnSaleOfProperties_TTM`."),
 ]
+
+# Documented once and referenced by every growth panel, rather than repeated on ten
+# entries. Read off calculate_growth() and main.add_growth_column().
+GROWTH_MECHANISM_NOTE = """
+Every growth panel is produced by the same function, and its guards are the reason
+you see gaps rather than nonsense.
+
+- **4-quarter lag.** Each period is compared against the observation closest to
+  365 days earlier (tolerance ±45 days), so a quarterly series is compared like
+  for like -- Q3 against Q3 -- and seasonality is not what you are looking at.
+- **Both values must be positive.** If either the current or the prior figure is
+  zero or negative, no growth value is produced. A percentage change across zero
+  has no meaning, so the pipeline declines to invent one. This is why loss-making
+  quarters leave holes in the net-income and cash-flow panels.
+- **A minimum-base guard.** The prior value must be at least 33% of the current
+  one, which caps a reported growth rate at about +200% and suppresses the
+  explosions that come from a near-zero base. Seven balance-sheet concepts --
+  Capex, Goodwill, CashAndEquivalents, Inventory, LongTermDebt,
+  ProvisionForCreditLosses and TangibleEquity -- loosen this to 5%, because
+  those legitimately grow from a small base.
+- **TTM versus quarterly.** Panels labelled *TTM* run on a rolling four-quarter
+  sum; those labelled *Quartal* run on the single quarter as filed. Measured
+  across this ticker set, a quarterly growth series is roughly 1.1--2.2x more
+  volatile than the TTM series of the same concept.
+- Two concepts are excluded from growth entirely -- GainLossOnSaleOfProperties
+  and RealizedInvestmentGains -- because their level swings sign freely.
+"""
+
+VALUATION_MECHANISM_NOTE = """
+All valuation multiples share one price convention and one averaging convention.
+
+- **Which price.** Each period end is matched to the most recent daily close at
+  or before it (a backward as-of join on the yfinance history), so the multiple
+  is what the market was charging on the day the period closed -- not today's
+  price applied to an old balance sheet.
+- **Market cap and enterprise value.** Market cap is that close times the share
+  count from EDGAR, falling back to yfinance where EDGAR reports none.
+  EV = market cap + LongTermDebt − CashAndEquivalents. Short-term debt, minority
+  interest and preferred stock are *not* in this enterprise value.
+- **The mean line.** Multiples that compound multiplicatively use a **harmonic**
+  mean, which is the correct average for a ratio and is not dragged upward by a
+  few expensive quarters; the rest use an arithmetic mean. The harmonic set is
+  read from the registry, not hardcoded. Only positive observations enter either.
+- **The green marker** is the current value: today's price against the latest
+  available fundamentals. It is a separate trace, deliberately excluded from the
+  mean line so the historical benchmark is not contaminated by the value being
+  judged against it, and it is hidden when an as-of date earlier than the
+  snapshot is selected.
+- **A scale guard** blanks any multiple whose denominator falls below 0.1% of
+  Revenue_TTM, which removes the ratios that explode on a near-zero denominator.
+"""
 
 
 def _index_metrics(metrics: list[Metric]) -> dict[str, Metric]:
@@ -2115,6 +2349,43 @@ METRICS_BY_ID = _index_metrics(METRICS)
 
 def _metrics_for(chart: str) -> list[Metric]:
     return [m for m in METRICS if m.chart == chart]
+
+
+def undocumented_metrics() -> list[str]:
+    """Registry ids missing a description or a formula.
+
+    The documentation fields are optional so that adding a metric cannot break
+    any derived structure -- but optional means a new metric can arrive
+    undocumented and render blank. This is what makes that detectable instead:
+    the app lists these honestly rather than showing an empty section, and the
+    verification asserts against it.
+    """
+    return [m.id for m in METRICS if not m.documented]
+
+
+def profile_visibility(chart: str | None = None) -> dict[str, dict[str, bool]]:
+    """{profile: {metric_id: visible}} for every profile, straight from is_hidden.
+
+    Generated, never hand-maintained: a written-down table would drift from the
+    code within one change, and the point of this mapping is that it is
+    authoritative.
+
+    is_hidden takes a ticker, but it uses that ticker only to look up its
+    profile -- PROFILE_HIDDEN and _DERIVED_CONCEPT_CONSUMERS are both keyed by
+    profile, and there is no per-ticker override in that path. So a synthetic
+    ticker name that is absent from TICKER_PROFILES cannot be used (it would
+    resolve to DEFAULT_PROFILE); a representative real ticker per profile is
+    used instead, and every ticker of a profile provably gives the same answer.
+    """
+    metrics = [m for m in METRICS if chart is None or m.chart == chart]
+    representative = {}
+    for ticker, profile in TICKER_PROFILES.items():
+        representative.setdefault(profile, ticker)
+    representative.setdefault(DEFAULT_PROFILE, next(iter(TICKER_PROFILES)))
+    return {
+        profile: {m.id: not is_hidden(ticker, m.id) for m in metrics}
+        for profile, ticker in sorted(representative.items())
+    }
 
 
 def get_plottable_metrics(

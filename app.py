@@ -47,6 +47,22 @@ CHART_LABELS = {
 DEFAULT_TABLE_PERIODS = 16
 DEFAULT_COPY_PERIODS = 8
 
+# Reference material is reached from the sidebar rather than from more tabs. Nine
+# tabs in one row is not navigable, and -- the deciding reason -- these pages are
+# ticker-independent: sitting them next to a ticker-specific tab set would invite
+# the reader to assume they describe the selected ticker. Switching away from
+# Analysis also hides the ticker controls, so there is nothing to misread.
+VIEW_ANALYSIS = "Analysis"
+VIEW_ENCYCLOPEDIA = "Metric encyclopedia"
+VIEW_COVERAGE = "Profile coverage"
+VIEWS = [VIEW_ANALYSIS, VIEW_ENCYCLOPEDIA, VIEW_COVERAGE]
+
+CHART_SECTIONS = [
+    (config.CHART_FUNDAMENTALS, "Fundamentals", "What the business does, independent of its share price."),
+    (config.CHART_VALUATION, "Valuation", "What the market charges for a claim on that business."),
+    (config.CHART_GROWTH, "Growth", "Year-over-year change in the underlying filed figures."),
+]
+
 
 # --- loading -----------------------------------------------------------------
 # Dataframes are cached, figures never are: building a figure is cheap, and a
@@ -423,6 +439,113 @@ def render_data_tab(ticker: str) -> None:
     render_snapshot_section(load_frame(DATA_FILES["snapshot"]), ticker)
 
 
+# --- reference pages ---------------------------------------------------------
+
+def render_freshness(meta: dict) -> None:
+    """Run provenance, in the sidebar so it survives every tab and page switch."""
+    run_date = meta.get("run_start", "")[:10]
+    st.caption(
+        f"**Data as of {run_date}**  \n"
+        f"{meta['tickers_with_data']} of {meta['tickers_requested']} tickers produced data  \n"
+        f"period `{meta['period']}`"
+    )
+    # only when non-empty: an empty list must render as nothing, not an empty label
+    if meta.get("tickers_without_data"):
+        st.caption(f"No data this run: {', '.join(meta['tickers_without_data'])}")
+
+
+def render_encyclopedia() -> None:
+    st.header("Metric encyclopedia")
+    st.write(
+        "Every metric this pipeline computes, with the formula it actually uses. "
+        "These are read off the implementation, not from a textbook — where the two "
+        "differ, what is written here is what the code does."
+    )
+    missing = config.undocumented_metrics()
+    if missing:
+        st.warning("Undocumented metrics: " + ", ".join(f"`{m}`" for m in missing))
+
+    query = st.text_input("Filter", placeholder="e.g. margin, EBITDA, p_tbv").strip().lower()
+
+    tabs = st.tabs([title for _, title, _ in CHART_SECTIONS])
+    for tab, (chart, title, blurb) in zip(tabs, CHART_SECTIONS):
+        with tab:
+            st.caption(blurb)
+            if chart == config.CHART_GROWTH:
+                st.markdown(config.GROWTH_MECHANISM_NOTE)
+                st.divider()
+            elif chart == config.CHART_VALUATION:
+                st.markdown(config.VALUATION_MECHANISM_NOTE)
+                st.divider()
+
+            # driven by the registry's chart field, so a new metric appears here
+            # without anyone editing this function
+            entries = [m for m in config.METRICS if m.chart == chart]
+            if query:
+                entries = [m for m in entries
+                           if query in m.id.lower() or query in m.label.lower()
+                           or query in (m.description or "").lower()
+                           or query in (m.formula or "").lower()]
+            if not entries:
+                st.info("Nothing matches that filter in this section.")
+                continue
+            for metric in entries:
+                st.markdown(f"#### {metric.label}")
+                st.caption(f"`{metric.id}`")
+                if metric.documented:
+                    st.markdown(metric.description)
+                    st.markdown(f"**How it is computed:** {metric.formula}")
+                else:
+                    st.warning("Not documented yet — see the report's gap list.")
+                st.divider()
+
+
+def render_coverage() -> None:
+    st.header("Profile coverage")
+    st.write(
+        "Which metrics each business profile shows, and which it suppresses. A bank "
+        "has no inventory and a REIT is not valued on earnings, so showing every "
+        "metric for every company would mean showing numbers that do not mean "
+        "anything. **This table is generated from `config.is_hidden` on every "
+        "render** — it cannot drift from what the charts actually do."
+    )
+
+    visibility = config.profile_visibility()
+    profiles = sorted(visibility)
+    by_id = {m.id: m for m in config.METRICS}
+
+    profile = st.selectbox("Profile", profiles,
+                           index=profiles.index("standard") if "standard" in profiles else 0)
+    shown_total = sum(visibility[profile].values())
+    st.caption(f"`{profile}` shows {shown_total} of {len(by_id)} registered metrics.")
+
+    for chart, title, _ in CHART_SECTIONS:
+        ids = [m.id for m in config.METRICS if m.chart == chart]
+        shown = [i for i in ids if visibility[profile][i]]
+        hidden = [i for i in ids if not visibility[profile][i]]
+        st.subheader(f"{title} — {len(shown)} of {len(ids)}")
+        if shown:
+            st.markdown("**Shown:** " + ", ".join(f"`{by_id[i].label}`" for i in shown))
+        if hidden:
+            st.markdown("**Hidden for this profile:** "
+                        + ", ".join(f"`{by_id[i].label}`" for i in hidden))
+
+    st.divider()
+    st.subheader("Full matrix")
+    st.caption(
+        f"{len(by_id)} metrics × {len(profiles)} profiles. The per-profile view above answers "
+        "\"what does this company show\"; this answers \"who sees this metric\", which is the "
+        "question the matrix is uniquely good at. Scrolls horizontally."
+    )
+    rows = []
+    for metric in config.METRICS:
+        row = {"metric": metric.label, "chart": metric.chart,
+               "profiles": sum(visibility[p][metric.id] for p in profiles)}
+        row.update({p: "✓" if visibility[p][metric.id] else "·" for p in profiles})
+        rows.append(row)
+    st.dataframe(pd.DataFrame(rows).set_index("metric"), width="stretch")
+
+
 # --- page --------------------------------------------------------------------
 
 def main() -> None:
@@ -449,29 +572,50 @@ def main() -> None:
     universe = load_frame("universe.parquet")
 
     st.caption(
-        f"Data exported {meta['exported_at']} · run started {meta['run_start']} · "
-        f"{meta['tickers_with_data']} of {meta['tickers_requested']} tickers produced data · "
-        f"period `{meta['period']}`"
+        "This pipeline uniquely fetches SEC EDGAR 10k and 10q filings, extracts the XBRL "
+        "facts, computes derived metrics, and links them to yfinance course data. "
+        "This data stream is as pure as possible."
     )
-    if meta.get("tickers_without_data"):
-        st.caption(f"No data in this run: {', '.join(meta['tickers_without_data'])}")
 
     tickers = universe["ticker"].tolist()
     profiles = dict(zip(universe["ticker"], universe["profile"]))
 
     with st.sidebar:
-        st.header("Ticker")
-        ticker = st.selectbox(
-            "Ticker", tickers,
-            format_func=lambda t: f"{t} — {profiles.get(t, '')}",
-        )
-        st.caption(f"Profile: `{profiles.get(ticker, '')}`")
-        as_of_enabled = st.checkbox("Use an as-of date for valuation", value=False)
-        as_of = None
-        if as_of_enabled:
-            as_of = pd.Timestamp(st.date_input("As of", value=pd.Timestamp.today().date()))
-            st.caption("The valuation window runs backwards from this date and stops there.")
+        # Freshness first and always, so it survives every tab and page switch.
+        render_freshness(meta)
+        st.divider()
+        view = st.radio("View", VIEWS, key="view")
+        st.divider()
+        if view == VIEW_ANALYSIS:
+            st.header("Ticker")
+            ticker = st.selectbox(
+                "Ticker", tickers,
+                format_func=lambda t: f"{t} — {profiles.get(t, '')}",
+            )
+            st.caption(f"Profile: `{profiles.get(ticker, '')}` — see **{VIEW_COVERAGE}** "
+                       "for what this profile shows and hides.")
+            as_of_enabled = st.checkbox("Use an as-of date for valuation", value=False)
+            as_of = None
+            if as_of_enabled:
+                as_of = pd.Timestamp(st.date_input("As of", value=pd.Timestamp.today().date()))
+                st.caption("The valuation window runs backwards from this date and stops there.")
+        else:
+            # The ticker controls are deliberately absent here: these pages describe
+            # the pipeline, not a company, and a visible selector would imply otherwise.
+            st.caption("Reference pages describe the pipeline itself and do not "
+                       "depend on the selected ticker.")
 
+    if view == VIEW_ENCYCLOPEDIA:
+        render_encyclopedia()
+        return
+    if view == VIEW_COVERAGE:
+        render_coverage()
+        return
+
+    render_analysis(ticker, as_of, tickers, profiles)
+
+
+def render_analysis(ticker: str, as_of, tickers: list[str], profiles: dict) -> None:
     # Data first: the app opens on what was extracted, and the charts follow.
     # The `with` blocks below fill named containers, so their order in the source
     # is independent of the order the tabs render in -- only this list decides.

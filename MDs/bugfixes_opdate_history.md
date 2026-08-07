@@ -6,6 +6,57 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-08-07 — Sidebar navigation, a metric encyclopedia written from the code, and a generated coverage matrix
+
+Reference pages reached from a **sidebar view switch**, not more tabs. Tab count was
+the stated constraint but not the deciding one: the reference pages are
+ticker-independent, so the switch also **hides the ticker controls** when one is
+open. Nothing on screen to misattribute beats a disclaimer next to a live selector.
+Details in `sidebar_encyclopedia_report.md`.
+
+Documentation lives on the `Metric` dataclass (`description`, `formula`, both
+optional). **The usual argument for that — "then a metric cannot silently lack
+documentation" — is false**, and worth not relying on: the fields must default to
+None or every derived structure changes shape, so a new metric arrives undocumented
+from any location. The guarantee comes from `undocumented_metrics()`, which the app
+renders as a warning and the tests assert against.
+
+**Every formula was read off the implementation, and two-thirds of the metrics would
+be mis-described by a textbook.** The calibration case is worse than expected:
+`pe_to_revenue_growth` departs from a conventional PEG **twice** — it divides by
+revenue growth rather than earnings growth, *and* that growth rate is computed inline
+in `build_valuation_history` as `Revenue_TTM.pct_change(4)`, skipping the
+positive-value and `min_base_ratio` guards every other growth figure passes through.
+The Revenue growth panel and this panel are two differently-computed numbers.
+
+Other departures found (full table in the report): EV excludes short-term debt,
+minority interest and preferred; `debt_to_equity` uses long-term debt only; `p_tbv`
+subtracts only goodwill; FFO adds back **total** D&A rather than real-estate
+depreciation; `net_interest_margin` divides by total assets; `provision_ratio` by
+revenue; seven ratios use period-end rather than average balances; `pb_ratio` is
+additionally blanked when tangible equity is negative; EPS is computed from
+`NetIncomeLoss_TTM / SharesOutstanding`, not reported diluted EPS.
+
+**Dead input found:** `RealEstateDepreciation` is fetched and TTM'd every run and has
+**zero consumers** — it is exactly the input NAREIT FFO needs, and FFO is built from
+total D&A instead. Reported, not changed: that is a modelling decision.
+
+The coverage page is generated from `is_hidden`. Checking rather than assuming that a
+representative ticker per profile is valid: `is_hidden` uses the ticker only to look
+up its profile, and **all 501 tickers × 52 metrics agree with their profile's
+representative, zero disagreements**. A synthetic ticker name would *not* work — it
+resolves to DEFAULT_PROFILE silently.
+
+**Non-regression, stated honestly.** Only 9 of 24 rebuilt figures are byte-identical
+to the baseline; the other 15 differ because `figures.py`'s German UI strings were
+translated in between. Rather than assert that, the check collects **every differing
+leaf value** and requires each to be explained by an enumerated translation list — so
+a genuine label or numeric change would still surface. Result: 0 unexplained
+differences. The "formula states its period basis" assertion also caught five real
+omissions in my own documentation, which were fixed rather than the check relaxed.
+
+---
+
 ## 2026-08-06 (later) — App refinements: a namespace collision, growth ×3, and the current multiple on the chart
 
 Four independent changes. Details in `app_refinements_report.md`.

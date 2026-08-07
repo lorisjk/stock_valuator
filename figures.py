@@ -47,7 +47,7 @@ def _output_paths(output_path: str) -> tuple[str, str]:
 
 def _write_figure(fig: go.Figure, output_path: str) -> None:
     html_path, json_path = _output_paths(output_path)
-    fig.write_html(html_path, include_plotlyjs=True, full_html=True)
+    #fig.write_html(html_path, include_plotlyjs=True, full_html=True)
     fig.write_json(json_path)
 
 

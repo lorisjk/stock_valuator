@@ -1,216 +1,158 @@
-# Task: App Refinements — Tab Order, Format Bug, Growth Expansion, Snapshot-in-Chart
+# Task: Sidebar — Data Freshness, Metric Encyclopedia, Profile Coverage
 
-**Depends on the data inspection layer being complete and shipped.** Read `data_tab_report.md`,
-`metrics_registry_report.md`, `app_export_layer_report.md` and the current `app.py`, `figures.py`,
-`config.py`, `main.py` before changing anything.
+**Depends on the app refinements task being complete and shipped.** Read
+`app_refinements_report.md`, `metrics_registry_report.md`, `data_tab_report.md`, if not available anymore recompute them via git, and the current
+`app.py`, `config.py`, `metrics.py`, `main.py` before changing anything.
 
-This task has four independent parts, ordered by risk. **Parts 1 and 2 are small and should be
-finished and verified before starting 3 and 4.** Parts 3 and 4 both touch `config.py` and
-`figures.py`, which have been stable for several tasks — treat them accordingly.
+## Context
+
+The app now shows data and charts well. What a first-time visitor cannot do is answer two
+questions without reading the source: **what is this number and how was it computed**, and **why
+does this ticker show different metrics than that one**.
+
+Both are core to this project's positioning. The differentiator over commercial providers is not
+having the numbers — it is being able to show exactly how they were derived. An encyclopedia that
+paraphrases a textbook would destroy that: it would describe metrics this pipeline does not
+compute the way it describes them.
 
 **Explicitly NOT in this task:** no Phase 4 (cross-sectional/peer scatter), no `PROFILE_HIDDEN`
-structural refactor, no `SharesOutstanding` fix for `V`/`STZ`, no deployment work, no restyling
-beyond what each part requires.
+structural refactor, no `V`/`STZ` `SharesOutstanding` fix, no `p_ffo`-in-snapshot fix, no changes
+to chart rendering or the data tab's contents, no deployment work.
 
 ---
 
-## Part 1 — Reorder the tabs
+## Part 1 — Navigation and layout decision (make this first, everything else sits inside it)
 
-The data tab is currently last. Move it first, so the app opens on the data and the charts follow.
-This is a presentation change only: no change to what each tab renders, no change to which tab is
-selected by default beyond it now being the data tab.
+The app is currently five tabs. This task adds four more surfaces (three encyclopedia sections
+and a profile-coverage page) that are **reference material, not analysis** — a user consults them
+occasionally, not per ticker.
 
-Confirm nothing depends on tab order (e.g. index-based `st.tabs` unpacking elsewhere in the file).
+Decide how they are reached and state the reasoning. Options include a `st.sidebar` with a
+radio/selectbox switching between "Analysis" and the reference pages, Streamlit's native
+multipage structure, or simply more tabs. Constraints that should drive the choice:
 
----
+- Nine tabs in one row is not navigable.
+- The reference pages are **ticker-independent** — putting them next to a ticker-specific tab set
+  invites the reader to assume they describe the selected ticker.
+- The existing prototype convention is "no multipage structure, no custom CSS". If you break that
+  convention, say why it is now worth breaking.
 
-## Part 2 — Fix the percent-formatting bug in the facts table
+Whatever you choose, the **ticker selector and the five existing tabs must keep working exactly
+as they do today** — this is an addition, not a restructuring of the analysis view.
 
-**Symptom:** in the raw facts table, `Revenue` and `SharesOutstanding` render as percentages
-(e.g. an absolute dollar figure shown as `9,400,000,000.00%`) instead of scaled absolute values.
+## Part 2 — Move the freshness information
 
-**Diagnosed cause — verify this before fixing, don't take it on faith.** `format_for_display`
-resolves `percent` from `config.METRICS_BY_ID[concept].percent` as its first rule. The three
-`CHART_GROWTH` registry entries are keyed by **XBRL concept name** — `Revenue`, `NetIncomeLoss`,
-`SharesOutstanding` — and carry `percent=True`, correctly, because the growth charts plot YoY
-percentages. The facts frame contains columns with those same three names holding **absolute
-values**. The registry lookup therefore returns the growth metric's formatting for the raw fact.
-`NetIncomeLoss` should be affected identically — check it and say so either way.
+The run timestamp from `meta.json` is currently an `st.caption`. Move it to a persistent position
+(top-left / sidebar) so it is visible regardless of which tab or page is open.
 
-**The fix must address the namespace collision, not just the three symptoms.** A hardcoded
-exception list for these three names would break again the moment a growth metric is added in
-Part 3. The registry already distinguishes namespaces (`CHART_SPECS[...]["id_namespace"]` is
-`"metric"` for fundamentals/valuation and `"xbrl_concept"` for growth) and each `Metric` exposes
-`value_column`. Use that structure: the registry's `percent` flag describes a metric in the
-**metric frames**, and must not be applied to a concept read from the **facts frame**.
+Show at minimum the run date and the ticker count. Consider whether `tickers_without_data` from
+`meta.json` belongs here too — it is exactly the kind of honest-coverage signal this project
+surfaces elsewhere; if you include it, make sure an empty list renders as nothing rather than an
+empty label.
 
-Decide and state how the formatter learns which frame it is formatting (an explicit argument at
-the call site is likely cleanest — the caller always knows). Facts columns then fall through to
-the existing magnitude-based rule, which already renders `Assets` as `4.90T` correctly.
+Remove the old caption; do not leave the information in two places.
 
-Verify with real values, comparing displayed strings against the source: `Revenue`,
-`NetIncomeLoss` and `SharesOutstanding` in the facts table render as scaled absolutes; the same
-three concepts still render as percentages in the **growth chart** axis; and metrics whose
-registry `percent` flag is genuinely correct (e.g. `operating_margin`, `roe`) are unaffected in
-the metrics table. Include a per-share concept (`EPS_TTM_CALC`) to confirm the magnitude fallback
-still gives it decimals rather than a scaled unit.
+## Part 3 — Where encyclopedia content lives
 
----
+Each entry needs, per metric: **what it is** (one or two sentences) and **how this pipeline
+computes it** (the actual formula/inputs). Short — this is not the repo's `METRICS_REFERENCE.md`
+re-hosted.
 
-## Part 3 — Expand growth coverage
+Decide where the text lives and state the reasoning. Recommended: two new optional fields on the
+`Metric` dataclass (`description`, `formula`), keeping the registry as the single source of truth
+the way `label`, `percent` and `ref_line` already are — adding a metric then stays one line and
+cannot silently lack documentation. If that makes `config.py` unwieldy at 45 entries, a separate
+module keyed by metric id is acceptable, but then state how a metric without documentation is
+detected rather than silently rendering blank.
 
-**The problem:** the pipeline computes `yoy_growth` for far more concepts than it plots. The facts
-frame carries 69 concepts with a `yoy_growth` column, and the growth chart shows **three**
-(`Revenue`, `NetIncomeLoss`, `SharesOutstanding`). Growth in EPS, FCF, operating income, equity
-and the sector-specific aggregates is computed and then discarded at render time.
+Either way: **existing `Metric` fields and every derived structure must remain byte-identical.**
+New fields are optional with defaults; `FUNDAMENTALS_TO_PLOT` and friends must not change shape.
 
-### Step 3.1 — Survey what is actually available and reliable
+## Part 4 — Write the content, sourced from the code
 
-Before proposing anything, measure across a real multi-profile ticker set (at minimum one
-`standard`, one `financial`, one `insurance`, one `reit`, one retail/`industrial`):
+**This is the part where the task fails if done carelessly.** Every formula must be derived by
+**reading the actual implementation** in `metrics.py` / `main.py` / `parsers`, not from general
+financial knowledge. Where this pipeline's definition differs from the conventional one, the
+encyclopedia must state this pipeline's definition.
 
-- For every concept in the facts frame, how many tickers have usable `yoy_growth` (non-null
-  count, and how far back the series runs).
-- Which concepts are **TTM** vs. **quarterly** vs. raw — growth on a raw quarterly figure is
-  seasonal noise for most businesses, growth on a `_TTM` series is the meaningful comparison.
-  State this explicitly per candidate rather than treating all concepts alike.
-- Which concepts produce **structurally unstable growth**: a series that crosses zero makes
-  percentage growth meaningless or explosive (`NetIncomeLoss` for a company with a loss quarter,
-  `FCF` likewise). Identify which candidates have this property and how often it actually bites
-  in the real data — this is the single most likely way an expanded growth chart produces a
-  plausible-looking but worthless panel.
+Known example to check first, as a calibration case: **`peg_ratio` is computed from revenue
+growth, not earnings growth** — a conventional description would be wrong. Read the code and
+confirm; find and report any other metric whose implementation departs from the textbook
+definition. That list is itself a valuable output of this task.
 
-Report the survey as a table. **Confirmed-not-suitable is a fully successful outcome for a
-candidate** — this project prefers an honest gap to a forced panel.
+Requirements:
 
-### Step 3.2 — Propose the expansion, with per-profile assignment
+1. **Name the actual inputs.** "Computed from `NetIncomeLoss_TTM` and `StockholdersEquity`" is
+   useful; "net income divided by equity" is not, because it does not say which XBRL concept,
+   which period basis, or which of several possible equity figures.
+2. **State the period basis** — TTM, quarterly, or point-in-time — since the project computes
+   both TTM and quarterly variants of many things.
+3. **Growth entries share one mechanism**, so document it once and keep per-concept notes short:
+   `calculate_growth` uses a 4-quarter lag, requires both the current and prior value to be
+   positive, and applies a `min_base_ratio` guard (loosened by explicit override for a few
+   concepts). Those guards are why a user sees gaps — that explanation belongs in the growth
+   section, and it is one of the more persuasive things this app can say about itself.
+4. **Valuation entries: state the price input and the mean convention.** Which price, as of when,
+   and that some multiples use a harmonic rather than arithmetic mean for the reference line
+   (`HARMONIC_MEAN_CONCEPTS`) — read which, don't assume. Also note the snapshot marker's
+   meaning, since it now appears on these charts.
+5. **Language: pick one and apply it consistently.** Recommended English, matching the registry's
+   `LANGUAGE_PRIMARY` and the intended audience. Note that the app currently mixes German UI
+   strings ("Keine Daten", exclusion notes) with English labels — do **not** fix that here, but
+   report it as a known inconsistency so it can be handled deliberately later.
+6. **Where a metric's documentation cannot be written confidently from the code, leave it empty
+   and list it in the report.** An honest gap beats a plausible-sounding description of something
+   the code does differently. This is the same standard applied to `label_de`.
 
-Propose which concepts become growth panels, and for which profiles. Growth panels are not
-universal: a bank's meaningful growth series is not a software company's. Concretely worth
-evaluating (not a mandate — evaluate against Step 3.1's data):
+Render the three sections (fundamentals, valuation, growth) grouped sensibly, driven by the
+registry's `chart` field so a new metric appears automatically.
 
-- `EPS_TTM_CALC` growth — explicitly requested, and likely the single most useful addition
-- `FCF_TTM`, `OperatingCashFlow_TTM`, `OperatingIncomeLoss_TTM` growth
-- `StockholdersEquity` growth (already a `GROWTH_BASE_PANELS` name — see the note below)
-- sector aggregates for `financial` / `insurance` / `reit` profiles
+## Part 5 — The profile coverage page
 
-**Note the dead-code precedent.** `config.py` contains `GROWTH_BASE_PANELS`, `GROWTH_PROFILE_EXTRA`
-and `get_growth_panels()` — a per-profile growth panel mechanism with **zero consumers**, confirmed
-in the Phase 1 report. It names concepts like `fcf_growth` and `nii_growth`, i.e. someone already
-sketched this expansion. Read it, say what it intended, and state explicitly whether your design
-supersedes it (in which case propose deleting it) or revives it. Do not leave a third parallel
-mechanism behind.
+A page showing, per profile (`standard`, `financial`, `insurance_life`, `reit`, …), which
+fundamentals and valuation metrics are computed and shown.
 
-### Step 3.3 — Implement via the registry
+**This must be generated from `is_hidden`, never hand-written.** A hand-maintained table would
+drift from the code within one task, and the whole point is that it is authoritative. Build it by
+evaluating visibility for every (profile, metric) pair.
 
-New growth panels are new `METRICS` entries with `chart=CHART_GROWTH`. That is the whole point of
-the registry — adding a metric should be one line.
+Design points:
 
-Two constraints:
+1. **`is_hidden` takes a ticker, not a profile.** Determine how to evaluate profile-level
+   visibility — a representative ticker per profile, or a path that resolves a profile directly.
+   State what you did and any caveat (e.g. `_DERIVED_CONCEPT_CONSUMERS` or ticker-level overrides
+   could make one ticker unrepresentative of its profile — check whether that actually happens
+   and report it).
+2. **24 profiles × 45 metrics is a large matrix.** Decide the presentation: a full matrix, a
+   per-profile view driven by a selector, or grouped by metric with the profiles listed. Pick
+   what is actually readable and justify it.
+3. **Show growth panels too** if the same generation works for them — they are registry entries
+   like the others.
+4. Make the profile a ticker belongs to visible somewhere in the analysis view as well, so a user
+   looking at JPM can connect it to the `financial` row here.
 
-1. **Per-profile visibility runs through `is_hidden`, as everywhere else.** Do not build a second
-   visibility mechanism for growth.
-2. **Report the `PROFILE_HIDDEN` cost.** It is a negative list: every growth metric that applies to
-   only some profiles needs hide entries for all the others. Count how many entries your proposal
-   adds. If it adds a disproportionate number, **say so and flag it** — that is direct evidence for
-   the known "negative list will not scale" problem, and a measured number is more useful than the
-   general worry. Do not refactor `PROFILE_HIDDEN` here; report the number.
+## Part 6 — Verify
 
-New growth panels appear in both the growth chart and the data tab automatically if both read the
-registry. Confirm that they do, and fix the one that does not rather than special-casing.
-
-### Step 3.4 — Verify
-
-- Non-regression: the three existing growth panels render byte-identically for a ticker whose
-  profile gains no new panels.
-- Each new panel renders real data for the profiles it targets, and is correctly absent for the
-  profiles it does not.
-- At least one new panel checked numerically against the source frame's `yoy_growth` values.
-- The data tab picks up the new concepts without a change there.
-
----
-
-## Part 4 — The current snapshot as the final point in valuation charts
-
-**Goal:** the user should see the current multiple against its own history without leaving the
-chart — `build_snapshot()` already computes it, and `valuation_history` ends at the last period
-end, so the most decision-relevant number is currently the one that is missing from the picture.
-
-This is the most design-sensitive part of the task. Get the following right.
-
-### 4.1 — The snapshot point must not enter the mean
-
-`build_valuation` draws a mean line (harmonic for `HARMONIC_MEAN_CONCEPTS`, arithmetic otherwise)
-over the plotted series. **The mean is the historical benchmark the current value is judged
-against.** If the snapshot point is folded into the same series, it contaminates the very
-comparison the feature exists to enable.
-
-Implement it so the mean is computed over the historical series only, and prove it numerically:
-the mean line's value and label must be **identical** with and without the snapshot point.
-
-### 4.2 — It must be visually distinguishable from a filed period
-
-A snapshot point is a different kind of observation: current market price against the latest
-available fundamentals, not a value at a completed fiscal period end. Render it so a reader cannot
-mistake it for a filed data point (separate trace with its own marker style and legend entry is the
-obvious approach — state what you chose). Its hover text should say what it is and carry its
-as-of date.
-
-### 4.3 — Concept alignment must be verified, not assumed
-
-Confirm that the snapshot frame's concept names match `valuation_history`'s for the plotted
-multiples (`pe_ratio`, `p_tbv`, `p_ffo`, `ev_ebitda`, `dividend_yield`, …). The data-tab report
-found the snapshot carries 76 concepts across 8 tickers including non-valuation ones like
-`shares_basis`. Report the actual overlap. Any valuation concept **without** a snapshot
-counterpart simply gets no extra point — that panel renders exactly as today.
-
-### 4.4 — Interaction with `as_of`
-
-`build_valuation` accepts `as_of` for historical windows. The snapshot is as of the pipeline run
-date. Appending a run-date point to a chart windowed to a past date would show the user data that
-date could not have known — the exact error `as_of` exists to prevent.
-
-Decide and state the rule; the recommended one is: **suppress the snapshot point whenever `as_of`
-is set to a date earlier than the snapshot's own date.** Verify it.
-
-### 4.5 — Where the data comes from
-
-`build_valuation`'s signature currently takes `valuation_history`. Decide how the snapshot reaches
-it — an optional `snapshot: pd.DataFrame | None = None` parameter is the natural shape, keeping the
-default behaviour (no parameter → no extra point → today's output exactly). State the choice, and
-update both callers: `app.py`, which has the snapshot frame loaded already, and `main.py`'s
-pipeline path, where you should decide whether the written chart files include the point (they are
-snapshots of a moment either way — say what you chose and why).
-
-### 4.6 — Comparison charts
-
-`build_ticker_comparison` also plots valuation concepts. State whether the snapshot point applies
-there too. Implementing it is optional; **deciding and stating it is not** — leaving the two chart
-types silently inconsistent is the failure mode here.
-
-### 4.7 — Verify
-
-- Mean line identical with and without the snapshot point (4.1), numerically, for both a harmonic
-  and an arithmetic concept.
-- The extra point's value equals the snapshot frame's value for that ticker/concept, and its x
-  position is the snapshot date.
-- A valuation concept absent from the snapshot renders unchanged versus today.
-- `as_of` suppression behaves as designed.
-- Default call (no snapshot passed) produces **byte-identical** output to before this part, for
-  three tickers across profiles.
-
----
+- **Nothing regressed:** the five existing tabs render as before, chart output is unchanged
+  (compare `build_*` output byte-for-byte against a pre-change baseline for three tickers across
+  profiles), and the derived config structures are byte-identical.
+- **Encyclopedia coverage is complete or explicitly listed:** assert every registry metric either
+  has documentation or appears in the report's gap list. No metric silently renders blank.
+- **The coverage matrix matches `is_hidden`** — verify a sample of cells programmatically against
+  `config.is_hidden` directly, including at least one metric hidden for most profiles
+  (`p_ffo`-like) and one visible for nearly all. A generated table that disagrees with the
+  function it claims to reflect is worse than no table.
+- **A new metric flows through automatically:** temporarily add a registry entry in the
+  verification run and confirm it appears in the encyclopedia and the coverage page without
+  touching either. Do not leave it behind.
+- **`app.py` still imports no pipeline module** and the page body runs to completion in bare mode,
+  as previous tasks verified. State honestly what was not verifiable without a browser.
 
 ## Output
 
-One file, `app_refinements_report.md`, with a section per part:
-1. The tab reorder and what you confirmed did not depend on order.
-2. The percent bug: confirmation of the diagnosed cause (including `NetIncomeLoss`), the
-   namespace-aware fix, and the verification.
-3. The growth survey table, the expansion proposal with per-profile reasoning, what was
-   implemented, the `PROFILE_HIDDEN` entry count, the verdict on `GROWTH_BASE_PANELS` /
-   `get_growth_panels()`, and any candidate you rejected with the reason.
-4. The snapshot-point design decisions (4.1–4.6) with reasoning, and the verification results
-   including the mean-line invariance proof.
+One file, `sidebar_encyclopedia_report.md`: the navigation decision with reasoning, where the
+documentation lives and why, **the list of metrics whose implementation departs from the
+conventional definition** (found in Part 4), any metric left undocumented and why, the coverage
+page's generation approach and its caveats, and the Part 6 verification results.
 
 No scratch scripts left behind.
