@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from config import (
-    is_hidden, FUNDAMENTALS_TO_PLOT, QUARTERLY_COUNTERPART, GROWTH_PANELS,
+    get_concept_candidates, is_hidden, FUNDAMENTALS_TO_PLOT, QUARTERLY_COUNTERPART, GROWTH_PANELS,
     VALUATIONS_TO_PLOT, HARMONIC_MEAN_CONCEPTS, TICKER_PROFILES, DEFAULT_PROFILE,
     METRICS_BY_ID, CHART_VALUATION, CHART_RAW_FACTS, CHART_GROWTH
 )
@@ -839,34 +839,48 @@ def plot_ticker_comparison(
         return
     _write_figure(fig, output_path)
 
+def available_raw_concepts(
+    ticker: str,
+    facts: pd.DataFrame,
+    include_derived: bool = False,
+) -> list[str]:
+    """Concepts that actually have data for this ticker.
+
+    facts_full is already post-filter_hidden_rows, so profile visibility
+    is respected without consulting is_hidden here.
+    """
+    rows = facts[(facts["ticker"] == ticker)].dropna(subset=["value"])
+    concepts = set(rows["concept"].unique())
+
+    if not include_derived:
+        queried = set(get_concept_candidates(ticker))   # aus config
+        concepts &= queried
+
+    return sorted(concepts)
 
 def build_raw_facts(
     ticker: str,
     facts: pd.DataFrame,
     concepts: list[str] | None = None,
+    include_derived: bool = False,
     width: int | None = KEEP,
     height: int | None = KEEP,
 ) -> go.Figure | None:
-    """Build the raw facts grid. None when there is nothing to draw.
 
-    `concepts` narrows the panel set (None = everything the config shows).
-    `width`/`height` keep the historical 500*cols / 330*rows unless given; pass
-    width=None for a figure with no width in its layout, which is what a
-    responsive frontend needs.
-    """
+    available = available_raw_concepts(ticker, facts, include_derived)
+    if concepts is not None:
+        available = [c for c in available if c in set(concepts)]
 
-    concepts_to_plot = _select_concepts(ticker, CHART_RAW_FACTS, concepts)
-
-    if not concepts_to_plot:
+    if not available:
         print(f"[build_raw_facts] {ticker}: no visible panels, nothing to build.")
         return None
 
-    rows, cols = _make_grid(len(concepts_to_plot))
-    fig = _make_subplot_figure(rows, cols, [c[0] for c in concepts_to_plot])
+    rows, cols = _make_grid(len(available))
+    fig = _make_subplot_figure(rows, cols, available)
 
-    for idx, (concept, ylabel) in enumerate(concepts_to_plot):
+    for idx, concept in enumerate(available):
         r, c = idx // cols + 1, idx % cols + 1
-        plot_metric(fig, r, c, facts, ticker, concept, ylabel)
+        plot_metric(fig, r, c, facts, ticker, concept, ylabel=concept)
 
     fig.update_layout(
         title_text=f"Raw Facts {ticker}",

@@ -15,6 +15,7 @@ import streamlit as st
 import config
 import figures
 
+
 # Same location main.export_for_app writes to. Derived from config.DATA_DIR
 # rather than imported from main, to keep the import direction one-way.
 APP_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -38,6 +39,7 @@ CHART_LABELS = {
     "fundamentals": "Fundamentals",
     "growth": "Growth (YoY)",
     "valuation": "Valuation",
+    "raw_facts": "Raw facts",
 }
 
 # How many period columns the table and the copy block show by default. The
@@ -61,6 +63,7 @@ CHART_SECTIONS = [
     (config.CHART_FUNDAMENTALS, "Fundamentals", "What the business does, independent of its share price."),
     (config.CHART_VALUATION, "Valuation", "What the market charges for a claim on that business."),
     (config.CHART_GROWTH, "Growth", "Year-over-year change in the underlying filed figures."),
+    (config.CHART_RAW_FACTS, "Raw Facts", "Underlying financial data for the selected ticker."),
 ]
 
 
@@ -696,9 +699,9 @@ def render_analysis(ticker: str, as_of, tickers: list[str], profiles: dict) -> N
     # Data first: the app opens on what was extracted, and the charts follow.
     # The `with` blocks below fill named containers, so their order in the source
     # is independent of the order the tabs render in -- only this list decides.
-    tab_data, tab_fund, tab_growth, tab_val, tab_cmp = st.tabs(
+    tab_data, tab_fund, tab_growth, tab_val, tab_cmp, tab_raw = st.tabs(
         ["Data", CHART_LABELS["fundamentals"], CHART_LABELS["growth"],
-         CHART_LABELS["valuation"], "Comparison"]
+         CHART_LABELS["valuation"], "Comparison", "Raw Facts"]
     )
 
     with tab_data:
@@ -770,7 +773,24 @@ def render_analysis(ticker: str, as_of, tickers: list[str], profiles: dict) -> N
             for dropped, reason in excluded:
                 st.warning(f"**{dropped}** not shown — {reason}")
             render(fig, "Pick at least two tickers that can show this metric.")
+    with tab_raw:
+            st.write("Concepts as filed, before any metric is computed.")
+            facts_full = load_frame(DATA_FILES["facts"])
 
+            show_derived = st.checkbox(
+                "Include derived concepts (_TTM, _QUARTERLY, …)",
+                value=False, key="raw_derived",
+            )
+            options = figures.available_raw_concepts(ticker, facts_full, show_derived)
+            default = [c for c in ("Revenue", "NetIncomeLoss", "Assets", "StockholdersEquity")
+                    if c in options]
+
+            chosen = st.multiselect("Concepts", options, default=default, key="raw_concepts")
+            render(
+                figures.build_raw_facts(ticker, facts_full, concepts=chosen,
+                                        include_derived=show_derived, width=None),
+                "Nothing selected, or no raw facts for this ticker.",
+            )
 
 if __name__ == "__main__":
     main()
