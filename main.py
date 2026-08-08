@@ -991,6 +991,15 @@ def build_snapshot(
     equity_to_assets = get_latest_row(metrics["equity_to_assets"])
     provision_ratio = get_latest_row(metrics["provision_ratio"])
     ppnr_latest = get_latest_value(facts, "PPNR").rename(columns={"value": "ppnr_ttm"})
+    # FFO_TTM is added to `facts` by add_derived_concepts, well before build_snapshot
+    # runs, so nothing was missing -- p_ffo was simply never added here. Read from the
+    # same column build_valuation_history reads, which is what keeps the snapshot marker
+    # and the historical line the same quantity. That inherits the fillna(0) on the
+    # real-estate gains term in add_derived_concepts, deliberately: the two must agree,
+    # and fixing that expression is a separate change that fixes both at once.
+    ffo_latest = get_latest_value(facts, "FFO_TTM").rename(columns={"value": "ffo_ttm"})
+    sbc_latest = get_latest_value(facts, "ShareBasedCompensation_TTM").rename(
+        columns={"value": "sbc_ttm"})
     combined_ratio = get_latest_row(metrics["combined_ratio"])
     loss_ratio = get_latest_row(metrics["loss_ratio"])
     expense_ratio = get_latest_row(metrics["expense_ratio"])
@@ -1030,6 +1039,8 @@ def build_snapshot(
         (net_investment_yield, ["ticker", "net_investment_yield"]),
         (reserve_growth, ["ticker", "reserve_growth"]),
         (core_earnings_latest, ["ticker", "core_earnings_ttm"]),
+        (ffo_latest, ["ticker", "ffo_ttm"]),
+        (sbc_latest, ["ticker", "sbc_ttm"]),
         (inventory_turnover, ["ticker", "inventory_turnover"]),
         (dio, ["ticker", "dio"]),
         (dso, ["ticker", "dso"]),
@@ -1083,6 +1094,28 @@ def build_snapshot(
     )
     snap["p_ppnr"] = snap["market_cap"] / snap["ppnr_ttm"]
     snap["p_core_earnings"] = snap["market_cap"] / snap["core_earnings_ttm"]
+
+    # The three valuation panels that had no snapshot marker. Each mirrors
+    # build_valuation_history's expression exactly -- same positivity mask, same scale
+    # guard against Revenue at MIN_VALUATION_DENOMINATOR_SCALE_RATIO -- so the marker
+    # and the line it sits on are the same quantity, computed at a newer price.
+    # p_ffo is the one that matters: a REIT had a marker on p_tbv but not on the
+    # multiple its whole profile is built around.
+    snap["p_ffo"] = apply_denominator_scale_guard(
+        snap["market_cap"] / snap["ffo_ttm"].where(snap["ffo_ttm"] > 0),
+        snap["ffo_ttm"], snap["revenue_ttm"], MIN_VALUATION_DENOMINATOR_SCALE_RATIO
+    )
+    snap["ev_fcf"] = apply_denominator_scale_guard(
+        snap["ev"] / snap["fcf_ttm"].where(snap["fcf_ttm"] > 0),
+        snap["fcf_ttm"], snap["revenue_ttm"], MIN_VALUATION_DENOMINATOR_SCALE_RATIO
+    )
+    owner_fcf = snap["fcf_ttm"] - snap["sbc_ttm"]
+    snap["pfcf_ex_sbc"] = apply_denominator_scale_guard(
+        snap["market_cap"] / owner_fcf.where(owner_fcf > 0),
+        owner_fcf, snap["revenue_ttm"], MIN_VALUATION_DENOMINATOR_SCALE_RATIO
+    )
+    snap = snap.drop(columns=["ffo_ttm", "sbc_ttm"])
+
     snap = snap.rename(columns={"pe_ttm": "pe_ratio", "pfcf_ttm": "pfcf_ratio"})
 
     value_cols = [c for c in snap.columns if c != "ticker"]
@@ -1294,7 +1327,14 @@ def build_snapshot_as_of(
     return build_snapshot(facts_cut, metrics_cut, prices_cut, rolling_multiples_cut, as_of=cutoff_date)
 
 
-def main():
+def main(write_charts: bool = True, write_html: bool = False):
+    """The local development run: TICKERS (not the full universe), CSVs, and charts.
+
+    write_charts defaults to True here and False in run_full_refresh, because the two
+    entry points have different jobs. This one exists to look at output; the nightly
+    one exists to feed the app, which reads data/app/*.parquet and never opens a
+    chart file.
+    """
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(FIGURE_DIR, exist_ok=True)
 
@@ -1375,10 +1415,14 @@ def main():
 
     print(price_summary(snapshot))
 
-    for ticker in TICKERS:
-        plot_fundamentals(ticker, metrics_long, os.path.join(FIGURE_DIR, f"{ticker}_fundamentals"))
-        plot_valuation(ticker, valuation_history, os.path.join(FIGURE_DIR, f"{ticker}_valuation"))
-        plot_growth(ticker, facts, os.path.join(FIGURE_DIR, f"{ticker}_growth"))
+    if write_charts:
+        for ticker in TICKERS:
+            plot_fundamentals(ticker, metrics_long, os.path.join(FIGURE_DIR, f"{ticker}_fundamentals"),
+                              write_html=write_html)
+            plot_valuation(ticker, valuation_history, os.path.join(FIGURE_DIR, f"{ticker}_valuation"),
+                           write_html=write_html)
+            plot_growth(ticker, facts, os.path.join(FIGURE_DIR, f"{ticker}_growth"),
+                        write_html=write_html)
 
 
 def delete_cached_facts(tickers: list[str]) -> list[str]:
@@ -1413,6 +1457,8 @@ def write_full_refresh_report(
     calc_time: float,
     plot_times: dict,
     quality_flags: list[dict],
+    charts_written: bool = True,
+    html_written: bool = False,
 ) -> None:
     edgar = _timing_summary(edgar_times)
     yfin = _timing_summary(yfinance_times)
@@ -1458,11 +1504,22 @@ def write_full_refresh_report(
         f"for the batch, a change to how the calculation runs rather than pure "
         f"instrumentation): {calc_time:.1f}s"
     )
-    lines.append(f"- Plot (per ticker, all three charts): total {plot['total']:.1f}s "
-                  f"across {plot['n']} tickers, average {plot['average']:.2f}s/ticker")
-    lines.append("- Slowest 10 tickers (plotting):")
-    for t, s in plot["slowest"]:
-        lines.append(f"  - {t}: {s:.2f}s")
+    if charts_written:
+        lines.append(f"- Plot (per ticker, all three charts, "
+                     f"{'JSON + HTML' if html_written else 'JSON only'}): "
+                     f"total {plot['total']:.1f}s across {plot['n']} tickers, "
+                     f"average {plot['average']:.2f}s/ticker")
+        lines.append("- Slowest 10 tickers (plotting):")
+        for t, s in plot["slowest"]:
+            lines.append(f"  - {t}: {s:.2f}s")
+    else:
+        # An explicit "skipped" rather than a 0.0s total, which would read as
+        # "plotting was free" instead of "plotting did not happen".
+        lines.append("- Plot: **skipped** (`write_charts=False`). No figures were built "
+                     "and no chart files were written. Nothing downstream depends on "
+                     "them -- the app renders from `data/app/*.parquet`, exported "
+                     "either way. Re-run with `run_full_refresh(write_charts=True)` "
+                     "to produce `figures/` again.")
     lines.append("")
 
     lines.append("## Data quality flags\n")
@@ -1588,7 +1645,15 @@ def export_for_app(
     return meta
 
 
-def run_full_refresh():
+def run_full_refresh(write_charts: bool = False, write_html: bool = False):
+    """The nightly run: full universe, CSVs, and the app's Parquet exports.
+
+    write_charts defaults to False. Chart files cost 34.6% of the last full run's
+    wall clock (732.9s of 2118.7s, ~1.46s/ticker for 1,503 files) and nothing reads
+    them: the app renders from data/app/*.parquet, built by export_for_app, which
+    runs either way. A parameter rather than a commented-out call, so that wanting a
+    chart file back is a keyword argument instead of an edit.
+    """
     run_start = datetime.now()
 
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -1692,17 +1757,22 @@ def run_full_refresh():
     snapshot.to_csv(os.path.join(DATA_DIR, "current_snapshot.csv"), index=False)
 
     plot_times = {}
-    for ticker in active_tickers:
-        t0 = time.perf_counter()
-        plot_fundamentals(ticker, metrics_long, os.path.join(FIGURE_DIR, f"{ticker}_fundamentals"))
-        # snapshot passed: these files are written in the same run that computed
-        # the snapshot, so the extra point is exactly as fresh as the rest of the
-        # chart. A standalone HTML then shows the same picture as the app.
-        plot_valuation(ticker, valuation_history, os.path.join(FIGURE_DIR, f"{ticker}_valuation"),
-                       snapshot=snapshot)
-        plot_growth(ticker, facts_out, os.path.join(FIGURE_DIR, f"{ticker}_growth"))
-        plot_times[ticker] = time.perf_counter() - t0
-    print(f"Calculate + plot done: {calc_time + sum(plot_times.values()):.1f}s total.")
+    if write_charts:
+        for ticker in active_tickers:
+            t0 = time.perf_counter()
+            plot_fundamentals(ticker, metrics_long, os.path.join(FIGURE_DIR, f"{ticker}_fundamentals"),
+                              write_html=write_html)
+            # snapshot passed: these files are written in the same run that computed
+            # the snapshot, so the extra point is exactly as fresh as the rest of the
+            # chart. A standalone HTML then shows the same picture as the app.
+            plot_valuation(ticker, valuation_history, os.path.join(FIGURE_DIR, f"{ticker}_valuation"),
+                           snapshot=snapshot, write_html=write_html)
+            plot_growth(ticker, facts_out, os.path.join(FIGURE_DIR, f"{ticker}_growth"),
+                        write_html=write_html)
+            plot_times[ticker] = time.perf_counter() - t0
+        print(f"Calculate + plot done: {calc_time + sum(plot_times.values()):.1f}s total.")
+    else:
+        print(f"Calculate done: {calc_time:.1f}s total. Charts skipped (write_charts=False).")
 
     export_for_app(metrics_long, valuation_history, facts_out, snapshot,
                    active_tickers, run_start)
@@ -1713,6 +1783,7 @@ def run_full_refresh():
     write_full_refresh_report(
         report_path, run_start, run_end, active_tickers, deleted,
         edgar_times, yfinance_times, calc_time, plot_times, quality_flags,
+        charts_written=write_charts, html_written=write_charts and write_html,
     )
     print(f"Full refresh complete. Report: {report_path}")
 

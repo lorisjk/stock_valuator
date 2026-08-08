@@ -45,9 +45,23 @@ def _output_paths(output_path: str) -> tuple[str, str]:
     return stem + ".html", stem + ".json"
 
 
-def _write_figure(fig: go.Figure, output_path: str) -> None:
+def _write_figure(fig: go.Figure, output_path: str, write_html: bool = False) -> None:
+    """Write one chart's files. JSON always, HTML on request.
+
+    The two are not the same kind of artifact. The JSON is the interface -- ~20-50KB,
+    what `from_json` reads back and what a JS frontend would consume. The HTML is a
+    standalone viewer with plotly.js inlined, ~5MB, which is ~7.5GB across a full
+    501-ticker run. So JSON is unconditional and HTML is opt-in, rather than the two
+    sharing one switch.
+
+    The "both files or neither" guarantee is about a *single chart's pair*, and it is
+    kept here: one call derives both names from one stem and decides both, so a chart
+    can never get a JSON from this configuration and an HTML from a different one
+    within the same run.
+    """
     html_path, json_path = _output_paths(output_path)
-    #fig.write_html(html_path, include_plotlyjs=True, full_html=True)
+    if write_html:
+        fig.write_html(html_path, include_plotlyjs=True, full_html=True)
     fig.write_json(json_path)
 
 
@@ -208,8 +222,8 @@ def _snapshot_point(
     """The current value for one panel as (date, value), or None.
 
     None when there is no snapshot, when this concept has no snapshot counterpart
-    (build_snapshot computes 10 of the 13 valuation panels -- ev_fcf, pfcf_ex_sbc
-    and p_ffo simply have none, and those panels then render exactly as before),
+    (build_snapshot now computes all 13 valuation panels; a concept the ticker's
+    profile hides still has no row, and that panel renders without a marker),
     or when `as_of` predates the snapshot: appending a run-date point to a window
     that ends earlier would put data on the chart that the chosen date could not
     have known, which is the error `as_of` exists to prevent.
@@ -483,12 +497,13 @@ def plot_fundamentals(
     metrics_long: pd.DataFrame,
     output_path: str,
     concepts: list[str] | None = None,
+    write_html: bool = False,
 ) -> None:
     """File-writing wrapper around build_fundamentals."""
     fig = build_fundamentals(ticker, metrics_long, concepts)
     if fig is None:
         return
-    _write_figure(fig, output_path)
+    _write_figure(fig, output_path, write_html)
 
 
 def build_growth(
@@ -554,12 +569,13 @@ def plot_growth(
     output_path: str,
     growth_column: str = "yoy_growth",
     concepts: list[str] | None = None,
+    write_html: bool = False,
 ) -> None:
     """File-writing wrapper around build_growth."""
     fig = build_growth(ticker, facts, growth_column, concepts)
     if fig is None:
         return
-    _write_figure(fig, output_path)
+    _write_figure(fig, output_path, write_html)
 
 
 def build_valuation(
@@ -622,12 +638,13 @@ def plot_valuation(
     concepts: list[str] | None = None,
     as_of: pd.Timestamp | None = None,
     snapshot: pd.DataFrame | None = None,
+    write_html: bool = False,
 ) -> None:
     """File-writing wrapper around build_valuation."""
     fig = build_valuation(ticker, valuation_history, years, concepts, as_of, snapshot)
     if fig is None:
         return
-    _write_figure(fig, output_path)
+    _write_figure(fig, output_path, write_html)
 
 
 def _concept_plot_spec(concept: str):

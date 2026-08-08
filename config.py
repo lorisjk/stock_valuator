@@ -2314,6 +2314,17 @@ you see gaps rather than nonsense.
   sum; those labelled *Quartal* run on the single quarter as filed. Measured
   across this ticker set, a quarterly growth series is roughly 1.1--2.2x more
   volatile than the TTM series of the same concept.
+- **Annual-cadence series.** Some filers disclose an item only once a year --
+  share-based compensation and pre-tax income are the common cases. There is then
+  nothing quarterly to sum, so the pipeline reads the 12-month fact as filed
+  instead, and the series carries one point per year. Its growth panel therefore
+  shows one value per year too. **That is complete coverage of what the filer
+  published, not missing data**, and it is the distinction the marked columns in
+  the data tab exist to make: a column marked *annual cadence* is sparse by the
+  filer's choice, an unmarked sparse column is a gap. Which path produced each
+  value is recorded per row in the facts frame's `ttm_source` column
+  (`quarterly_rolling` / `annual_fact`); the two are disjoint by construction, so
+  no series mixes them.
 - Two concepts are excluded from growth entirely -- GainLossOnSaleOfProperties
   and RealizedInvestmentGains -- because their level swings sign freely.
 """

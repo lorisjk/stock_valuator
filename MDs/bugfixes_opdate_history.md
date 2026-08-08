@@ -6,6 +6,57 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-08-13 — Product-side cleanup: `ttm_source` rendering, `write_charts`, `p_ffo` snapshot
+
+Three independent product items, no parse-layer change. Full detail in `product_cleanup_report.md`.
+
+**`ttm_source` now renders, marked per column rather than per cell — because provenance does not
+vary within a column.** 5,836 `(ticker, concept)` series carry a `ttm_source` and **0 carry both
+labels**, which follows from `calculate_ttm` and `annual_ttm_values` being disjoint by construction.
+So a one-character header marker (`ᵃ`) plus a legend naming the concepts in full, rather than a
+per-cell suffix that would cost readability in every row of an already 37-column table. The mixed
+case is still computed rather than assumed away, and flips the marker to `ᵐ` when injected. Derived
+TTMs (`FCF_TTM`, `EBITDA_TTM`, `FFO_TTM`, `EPS_TTM_CALC`) stay unmarked — their `ttm_source` set is
+empty and inventing a marker would assert something the pipeline never established.
+
+**The brief's verification ticker does not work, and that is the finding.** NEE
+`ShareBasedCompensation_TTM` has 18 annual values in the pipeline and **zero** in
+`facts_full.parquet`: the TTM report counted on the unfiltered frame, the export is written after
+`filter_hidden_rows`, and the `utilities` profile hides the concept. DAL/COP/OXY (18 each), MCD
+`PretaxIncome_TTM` (18) and L `DepreciationAndAmortization_TTM` (19) are the working substitutes.
+
+**`write_charts` replaces a commented-out `write_html` call, with defaults split by entry point:**
+`run_full_refresh(write_charts=False)` because the app renders from `data/app/*.parquet` and never
+opens a chart file, `main(write_charts=True)` because looking at output is why that entry point
+exists. HTML and JSON get **different** switches, not one: measured, JSON is 16–53 KB per chart and
+HTML 4.87–4.91 MB — **155×**, ~7.4 GB across a full run. The run report now prints
+"Plot: **skipped**" instead of a 0.0s total that would read as "plotting was free".
+
+**Byte-identical exports needed the flag isolated, and the reason is worth recording: the pipeline
+is not bit-reproducible across runs.** Two full runs differed on `current_snapshot` and
+`valuation_history` (861 of 1,697 rows, all at the last ulp) — because two consecutive
+`get_price_history("AAPL")` calls return closes differing by up to **9.155e-05**. With one fetch and
+one calculation, all six exports are byte-identical with and without plotting, and the plot loop
+provably does not mutate any frame it reads.
+
+**`p_ffo` is now in `build_snapshot`, and nothing had been missing.** Re-measured against the current
+registry: 10 of 13 valuation panels had a snapshot counterpart, the three without still exactly
+`ev_fcf`, `pfcf_ex_sbc`, `p_ffo`. `FFO_TTM` is added by `add_derived_concepts` long before
+`build_snapshot` and is present for **29 of 29 REITs** — it was simply never added. All three
+implemented, mirroring `build_valuation_history`'s expressions including the scale guard, so the
+marker and the line are the same quantity: **13 of 13**. Hand-checked: AMT 16.1842 and O 16.3412 from
+price × shares ÷ `FFO_TTM`, exact. ARE (negative FFO) and AVB (trailing NaN rows) correctly get no
+marker.
+
+**Left standing:** `get_latest_value` returns the newest *row* even when its value is NaN (AVB's
+case, general to every snapshot input); the snapshot guards `pb_ratio`/`p_tbv` at 0.01 while the
+history guards them at 0.001, so for those two the marker and the line are not strictly the same
+quantity; `app.py` reaches `metrics` through `figures.py:13`, so "imports no pipeline module" is not
+literally true; 24 stale `.html` and 995 stale `.png` files in `figures/`; and `MDs/figures.md` still
+describes a matplotlib/PNG implementation that no longer exists.
+
+---
+
 ## 2026-08-12 — Row-based windows, one layer up: the five-year means and the growth comparison
 
 The TTM task established that a window counted in rows rather than calendar time yields a number

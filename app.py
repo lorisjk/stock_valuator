@@ -184,6 +184,64 @@ def order_fact_columns(ticker: str, concepts) -> list[str]:
     return sorted(concepts, key=lambda c: (fact_base(c), fact_is_derived(ticker, c), c))
 
 
+# Marks a column whose _TTM values were read from 12-month facts rather than summed
+# from four quarters. A single character because the facts table is already tight at
+# ~37 columns; the legend underneath names the concepts in full.
+ANNUAL_CADENCE_MARKER = "ᵃ"      # modifier letter small a
+MIXED_CADENCE_MARKER = "ᵐ"       # modifier letter small m
+
+
+def cadence_markers(frame: pd.DataFrame, ticker: str) -> tuple[dict[str, str], str]:
+    """(concept -> marker, legend text) from the facts frame's `ttm_source` column.
+
+    Marked per column rather than per cell, and that is a measurement rather than a
+    convenience: `calculate_ttm` and `parse_edgar.annual_ttm_values` are disjoint by
+    construction -- the annual path runs only where the quarterly extraction produced
+    nothing -- so provenance is a property of the series. 0 of 5,836 series in the
+    exported frame carry both labels. A per-cell suffix would cost readability in
+    every row to express something that never varies within a column.
+
+    The mixed case is still detected rather than assumed away: a marker that quietly
+    rounded a mixed series to "annual" would assert something the pipeline has not
+    established. Rows with no value carry `ttm_source = None` and contribute nothing,
+    so an empty cell is never claimed to have a provenance.
+    """
+    if "ttm_source" not in frame.columns:
+        return {}, ""
+    sub = frame.loc[(frame["ticker"] == ticker) & frame["ttm_source"].notna(),
+                    ["concept", "ttm_source"]]
+    if sub.empty:
+        return {}, ""
+    sources = sub.groupby("concept")["ttm_source"].agg(set)
+    annual = sorted(c for c, s in sources.items() if s == {"annual_fact"})
+    mixed = sorted(c for c, s in sources.items() if len(s) > 1)
+    if not annual and not mixed:
+        return {}, ""
+
+    markers = {c: ANNUAL_CADENCE_MARKER for c in annual}
+    markers.update({c: MIXED_CADENCE_MARKER for c in mixed})
+    parts = []
+    if annual:
+        parts.append(
+            f"{ANNUAL_CADENCE_MARKER} **annual cadence** — {', '.join(f'`{c}`' for c in annual)}. "
+            "This filer discloses the item once a year, so the value is the 12-month "
+            "figure taken as filed rather than four quarters summed. One point a year "
+            "is complete coverage of what was published, not a gap."
+        )
+    if mixed:
+        parts.append(
+            f"{MIXED_CADENCE_MARKER} **mixed cadence** — {', '.join(f'`{c}`' for c in mixed)}: "
+            "some periods summed from quarters, others read from a 12-month fact."
+        )
+    parts.append(
+        "Unmarked `_TTM` columns are summed from four quarters. `FCF_TTM`, `EBITDA_TTM`, "
+        "`FFO_TTM` and `EPS_TTM_CALC` are built from other columns further down the "
+        "pipeline and carry no provenance of their own — theirs is their inputs', "
+        "visible in this same table."
+    )
+    return markers, "  \n".join(parts)
+
+
 # --- display formatting ------------------------------------------------------
 # Kept strictly apart from the numbers: format_for_display returns a frame of
 # strings that is only ever handed to st.dataframe. Downloads and copy blocks
@@ -269,8 +327,16 @@ def to_csv_text(wide: pd.DataFrame) -> str:
 
 def render_data_section(title: str, wide: pd.DataFrame, ticker: str, slug: str,
                         periods: int, copy_periods: int, caption: str = "",
-                        value_column: str = "value") -> None:
-    """One section of the data tab: table, download, copy block."""
+                        value_column: str = "value",
+                        column_markers: "dict[str, str] | None" = None,
+                        marker_legend: str = "") -> None:
+    """One section of the data tab: table, download, copy block.
+
+    `column_markers` annotates the on-screen header of individual columns. It is
+    applied to the display frame only, so downloads and the copy block keep clean
+    concept names at full precision -- the same numbers/strings split the rest of
+    this module observes.
+    """
     st.subheader(title)
     if caption:
         st.caption(caption)
@@ -285,7 +351,15 @@ def render_data_section(title: str, wide: pd.DataFrame, ticker: str, slug: str,
         + (f" · {empty_columns} null in every period shown — kept on purpose, "
            "an empty column is a finding" if empty_columns else "")
     )
-    st.dataframe(format_for_display(shown, value_column), width="stretch")
+    display = format_for_display(shown, value_column)
+    if column_markers:
+        display = display.rename(columns={
+            concept: f"{concept} {marker}"
+            for concept, marker in column_markers.items() if concept in display.columns
+        })
+    st.dataframe(display, width="stretch")
+    if marker_legend and column_markers and any(c in shown.columns for c in column_markers):
+        st.caption(marker_legend)
 
     st.download_button(
         "Download CSV", to_csv_text(shown), file_name=f"{ticker}_{slug}.csv",
@@ -404,16 +478,19 @@ def render_data_tab(ticker: str) -> None:
     if not show_all:
         st.caption(f"Showing the most recent {DEFAULT_TABLE_PERIODS} periods.")
 
-    facts = pivot_ticker(load_frame(DATA_FILES["facts"]), ticker)
+    facts_frame = load_frame(DATA_FILES["facts"])
+    facts = pivot_ticker(facts_frame, ticker)
     if not facts.empty:
         keep = [c for c in facts.columns
                 if fact_filter == "All"
                 or (fact_filter == "Derived only") == fact_is_derived(ticker, c)]
         facts = facts[order_fact_columns(ticker, keep)]
+    markers, legend = cadence_markers(facts_frame, ticker)
     render_data_section(
         "Raw & derived facts", facts, ticker, "facts", periods, DEFAULT_COPY_PERIODS,
         caption="Straight from EDGAR, plus what the pipeline built on top. "
                 "`Revenue` next to `Revenue_TTM` is the TTM derivation, auditable.",
+        column_markers=markers, marker_legend=legend,
     )
 
     metrics = pivot_ticker(load_frame(DATA_FILES["metrics"]), ticker)
