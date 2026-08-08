@@ -4,7 +4,9 @@ from fetchers.edgar import (
     extract_summed_annual_values,
     extract_summed_values,
 )
+from config import TTM_SOURCE_ANNUAL
 
+from datetime import date
 import math
 import pandas as pd
 _SCALE_CORRECTED_CONCEPTS = {"SharesOutstanding"}
@@ -823,20 +825,99 @@ def _apply_split_basis(values: list[dict], confirmed: list[dict]) -> list[dict]:
     return out
 
 
+_DUPLICATE_END_MAX_GAP = 7
+
+
+def merge_duplicate_period_ends(values: list[dict]) -> list[dict]:
+    """One reporting period tagged under two calendars is one period.
+
+    A 52/53-week filer's quarter ends on a weekday near the month end, and many
+    such filers tag the same quarter twice -- once on the fiscal end, once on the
+    calendar end. `extract_period_values` keys on `(end, days)` and
+    `decumulate_period_values` keys on `end`, so both survive and the series
+    carries the quarter twice:
+
+        WAT Revenue  2024-03-31 -> 2024-06-29  and  2024-04-01 -> 2024-06-30
+                     both 90 days, both 708,529,000
+
+    Seven days is the mechanism's own bound: a fiscal period end is the chosen
+    weekday nearest the month end, so it can sit at most six days from it. The
+    next phenomenon up the scale is a month apart (the 28-31 day cluster), which
+    is a different period and is left alone.
+
+    The later end survives. The two candidates are equally good as a step
+    boundary -- measured, 419 of 452 windows are quarter-length either way -- so
+    the deciding argument is the anchor invariant: keeping the later end can only
+    leave a series' newest period where it is or move it forward, never back.
+    """
+    if len(values) < 2:
+        return values
+
+    ordered = sorted(values, key=lambda v: v["end"])
+    kept = [ordered[0]]
+    for v in ordered[1:]:
+        gap = (date.fromisoformat(v["end"]) - date.fromisoformat(kept[-1]["end"])).days
+        if gap <= _DUPLICATE_END_MAX_GAP:
+            kept[-1] = v
+        else:
+            kept.append(v)
+    return kept
+
+
+def annual_ttm_values(us_gaap_data: dict, cfg: dict, quarterly_values: list[dict]) -> list[dict]:
+    """The 12-month facts of a filer that discloses this item only once a year.
+
+    A 12-month fact at a fiscal year end *is* the trailing-twelve-month value at
+    that date -- not an approximation of it -- so it is taken as filed.
+
+    The boundary against `decumulate_period_values`: this runs only where the
+    quarterly extraction produced nothing at all. Such a filer has no sub-annual
+    year-to-date point to difference, which is both why the quarterly pipeline
+    gets zero and why the rolling window has no rows to roll over. The two paths
+    are therefore disjoint by construction rather than by a runtime check --
+    neither can write a value at a date the other reaches.
+    """
+    if quarterly_values:
+        return []
+    return merge_duplicate_period_ends(extract_with_mode(us_gaap_data, cfg, "annual"))
+
+
 def build_dataframe(
     ticker: str,
     company_info: dict,
     concept_candidates: dict,
     period: str = "annual",
     splits: list[dict] | None = None,
+    annual_ttm_concepts: list[str] | None = None,
 ) -> pd.DataFrame:
 
     us_gaap_data = company_info["facts"]["us-gaap"]
     us_gaap_data = _drop_known_bad_facts(ticker, us_gaap_data)
     rows = []
+    annual_ttm = set(annual_ttm_concepts or ())
 
     for key, cfg in concept_candidates.items():
         values = extract_with_mode(us_gaap_data, cfg, period)
+        # after the tag merge and after decumulation, because both can regenerate
+        # a twin the other dropped: the fiscal end arrives from the year-to-date
+        # ladder and the calendar end from a discrete quarterly fact
+        values = merge_duplicate_period_ends(values)
+
+        if key in annual_ttm:
+            # before the `not values` skip below: an empty quarterly extraction
+            # is exactly the case this path exists for. The masks further down
+            # are not applied -- they guard decumulation artefacts, and an
+            # as-filed annual fact was never decumulated.
+            for v in annual_ttm_values(us_gaap_data, cfg, values):
+                rows.append(
+                    {
+                        "ticker": ticker,
+                        "concept": f"{key}_TTM",
+                        "end": v["end"],
+                        "value": v["value"],
+                        "ttm_source": TTM_SOURCE_ANNUAL,
+                    }
+                )
 
         if not values:
             continue
@@ -874,6 +955,7 @@ def build_dataframe(
                     "concept": key,
                     "end": v["end"],
                     "value": v["value"],
+                    "ttm_source": None,
                 }
             )
 

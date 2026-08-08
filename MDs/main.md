@@ -129,6 +129,12 @@ After the arithmetic, `melt` reverses the operation — the inverse of `pivot_ta
 
 `.dropna(subset=["value"])` at the end removes rows where a multiple could not be computed (masked denominators, missing inputs), so they simply don't appear rather than showing up as gaps.
 
+**A pivot row is not a quarter.** A row exists wherever *any* of the fourteen needed concepts reported, and a filer can end one concept's period a day or two from another's — CAT tags `StockholdersEquity` at 2017-01-01 and nine other concepts at 2016-12-31. That is 193 extra rows across 102 tickers, and it is why nothing downstream may count rows: `revenue_yoy_growth` and the `avg_*_5y` means both used to, and both were reaching the wrong period. See `rolling_window_report.md`.
+
+### `revenue_yoy_growth`
+
+Computed by `calculate_growth(facts, "Revenue_TTM", 4, ...)` — the same date-based lookup behind the Revenue growth panel and the snapshot's PEG, so the history's `pe_to_revenue_growth` and the snapshot's are built from one number rather than two. It used to be `Revenue_TTM.pct_change(periods=4)`, which counted rows *and* silently forward-filled a missing base (pandas' `fill_method="ffill"` default). It is the only input to `pe_to_revenue_growth` and is not itself emitted.
+
 ---
 
 ## Masked denominators

@@ -27,7 +27,8 @@ The functions are deliberately generic. There is no `calculate_operating_margin(
 | Function | What it does |
 |---|---|
 | `calculate_ttm` | Rolling four-quarter sum |
-| `calculate_rolling_average` | Rolling mean over *n* periods |
+| `calculate_rolling_harmonic_stats` | Harmonic mean, median and count over a calendar window |
+| `calculate_rolling_average` | Rolling mean over *n* periods — no callers |
 
 ### Selection and reshaping
 
@@ -67,6 +68,8 @@ A growth rate is `(new / old) - 1`. When `old` is negative or near zero, the for
 
 `.where(cond)` keeps values where the condition holds and sets the rest to `NaN`. The subsequent division propagates the `NaN`, and matplotlib draws a gap in the line. That is more honest than a spike that looks like a signal.
 
+The prior value is found **by date**, not by position: `merge_asof` against `end − periods × 365.25/4` with a tolerance of `periods × 45/4` days and `direction="nearest"`, returning nothing when no observation falls inside. The bound is on the lag between two *observation dates* four quarters apart — 365.2 days — which is a different measurement from `calculate_ttm`'s window span (273.9 days, three steps rather than four). ±45 cannot reach three quarters (273.9) or five (456.6), each 91 days away. This is the only growth convention in the project; `build_valuation_history` used to carry a second, row-based one.
+
 ### `calculate_ratio` with `require_positive_denominator`
 
 Same idea, but optional — because it is not always appropriate.
@@ -81,7 +84,7 @@ The distinction is whether a broken **denominator** makes the metric undefined, 
 
 ## `calculate_ttm` and why it matters
 
-A rolling four-quarter sum. This is not a cosmetic smoothing choice — it changes which numbers are usable at all.
+A rolling four-quarter sum **that checks it is looking at four quarters**. This is not a cosmetic smoothing choice — it changes which numbers are usable at all.
 
 Microsoft's Q4 2012 was a loss (the aQuantive goodwill write-off). Computed on that single quarter:
 - income growth: **-1100%**
@@ -94,6 +97,39 @@ Every ratio metric in this project is therefore built on `_TTM` concepts. The ex
 
 **`calculate_ttm` must never be applied to per-share values or balance-sheet positions.** Summing four quarterly equity balances gives four times the equity. Summing four quarterly EPS figures breaks across stock splits. See `config.py` for why `EPS` is absent from `TTM_CONCEPTS`.
 
+**`.rolling(4)` sums four *rows*, and four rows are twelve months only if the series has no hole.** On a thin concept the four nearest available values can span years — JBL once had a `StockIssued_TTM` built from ends 2013-08-31 / 2014-05-31 / 2015-05-31 / 2016-05-31. So the window is checked against the calendar before the sum is kept: the outer ends must be 248–333 days apart and every step between adjacent rows 76–137 days. Both bounds are the midpoint of an empty run in the measured distribution of all 333,737 windows — the band is wide enough for 52/53-week filers (12- and 16-week quarters, 53-week years) and fiscal-year-end changes, and 58 days clear of the nearest window that skips a quarter. A window that fails yields no value rather than a wrong one; 4.4% of them do. Derivation in `ttm_window_report.md`.
+
+**A 12-month fact at a fiscal year end is the TTM value at that date, not an approximation of it.** For a filer that discloses an item only once a year there is nothing for `decumulate_period_values` to difference, so the quarterly pipeline gets zero and the rolling window has no rows at all. `parse_edgar.annual_ttm_values` takes such facts directly. It runs *only* where the quarterly extraction produced nothing, which is what keeps the two paths from ever writing the same date — disjoint by construction rather than by a runtime check. Which path produced a value is recorded in the facts frame's `ttm_source` column (`quarterly_rolling` / `annual_fact`), so a series that mixes cadences does not look uniform.
+
+---
+
+## `calculate_rolling_harmonic_stats`: five years means five years
+
+The `avg_*_5y` lines the snapshot compares today's multiple against. Harmonic rather than
+arithmetic because every one of them is a price-over-something ratio, and averaging ratios
+arithmetically overweights the expensive periods.
+
+**The window is a calendar span, not a row count** (`AVG_5Y_WINDOW = "1826D"` in `main.py`): every
+observation whose end falls in `(end − 1826 days, end]`. Twenty rows are five years only on a series
+with no hole and no extra row, and the valuation history has both. Twenty consecutive quarters span
+**1,735 days between their outer ends**, not 1,826 — the same three-versus-four-step arithmetic as
+`calculate_ttm`'s 273 — and measured over the 23,734 windows the frame forms, **12.3% reached back
+more than five years (up to 11.2) and 8.8% covered less than 4.65**. Unlike the TTM window there is
+no empty run to derive a threshold from, which is exactly why the fix defines the window directly
+instead of masking a bad one. Derivation in `rolling_window_report.md`.
+
+Two consequences worth knowing:
+
+- **The observation count is no longer fixed at twenty.** `_n` reports what was actually available,
+  and `avg_*_5y_history_too_short` marks `_n < MIN_AVG_5Y_OBSERVATIONS`. A mean is still published
+  from a single observation, as before — the window says which observations belong, not how many are
+  required.
+- **A row with no usable value displaces nothing**, because it occupies no time. Under the row
+  window a masked multiple consumed a slot, and since the seven multiples share one pivot row set,
+  one quarter missing from any of the fourteen needed concepts cost all seven means a slot.
+
+`calculate_rolling_average` is the arithmetic sibling and has no callers.
+
 ---
 
 ## Pandas patterns worth remembering
@@ -105,6 +141,8 @@ Both `shift` and `rolling` must be grouped by ticker. Without the `groupby`, `sh
 ### `.reset_index(level=0, drop=True)` after a grouped rolling
 
 `groupby(...).rolling(...)` returns a result with a MultiIndex (ticker + original row index). Assigning that back as a column requires stripping the outer ticker level first. This is a Pandas quirk, not something derivable from first principles — just a pattern to copy.
+
+**With `on=` it is a different MultiIndex and the pattern does not work.** `groupby("ticker").rolling(window="1826D", on="end")` returns `(ticker, end)` — the original row index is gone, and stripping the ticker level leaves `end`, which is not unique across tickers. `calculate_rolling_harmonic_stats` therefore assigns positionally (`.to_numpy()`), which is valid only because the frame is sorted by ticker then end and `groupby` walks the tickers in that same order. That assumption is checked in `rolling_window_report.md` against an independent recomputation of all 232,365 rows rather than taken on trust.
 
 ### `.transform("max")` vs `.max()`
 

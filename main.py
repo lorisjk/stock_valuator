@@ -96,7 +96,8 @@ def load_facts(splits: dict = None) -> pd.DataFrame:
         cik = get_cik(ticker, cik_mapping)
         company_info = get_company_info(ticker, cik, EDGAR_USER_AGENT)
         all_dfs.append(build_dataframe(ticker, company_info, concept_candidates, period=PERIOD,
-                                       splits=(splits or {}).get(ticker)))
+                                       splits=(splits or {}).get(ticker),
+                                       annual_ttm_concepts=TTM_CONCEPTS))
 
     df = pd.concat(all_dfs, ignore_index=True)
     df["end"] = pd.to_datetime(df["end"]).astype("datetime64[ns]")
@@ -673,9 +674,15 @@ def build_metrics_long(metrics: dict, quarterly_metrics: dict = None) -> pd.Data
 MIN_VALUATION_DENOMINATOR_SCALE_RATIO = 0.001
 
 
-AVG_5Y_WINDOW = 20
-MIN_AVG_5Y_DIVERGENCE = 0.20   
-MIN_AVG_5Y_OBSERVATIONS = 12   
+# Five years of calendar, not twenty rows. 5 x 365.25 = 1,826 days, measured back from
+# each row's own end date; an observation exactly five years old falls outside, which
+# leaves a clean quarterly series with the same twenty observations it had before.
+AVG_5Y_WINDOW = "1826D"
+MIN_AVG_5Y_DIVERGENCE = 0.20
+# A mean is still published from a single observation, as before -- the window says which
+# observations belong, not how many are required. `avg_*_5y_n` reports the count and
+# `avg_*_5y_history_too_short` marks a thin one; there is no second notion of "too thin".
+MIN_AVG_5Y_OBSERVATIONS = 12
 
 AVG_5Y_FIELD_NAMES = {
     "pe_ratio": "avg_pe_5y",
@@ -800,7 +807,14 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame, pr
         by="ticker",
         direction="backward",
     )
-    wide["revenue_yoy_growth"] = wide.groupby("ticker")["Revenue_TTM"].pct_change(periods=4)
+    # Four quarters back by calendar, not four rows back. pct_change(periods=4) counted
+    # rows -- and the pivot's rows are not quarters, because a filer can end one concept's
+    # period a day away from another's -- and pandas' default fill_method="ffill" bridged a
+    # missing Revenue_TTM so the base silently became some other date's value. calculate_growth
+    # is the same date-based lookup metrics["revenue_growth"] and the snapshot's PEG already
+    # use; this was the one place computing the quantity a second, different way.
+    growth = calculate_growth(facts, "Revenue_TTM", 4, "revenue_yoy_growth")
+    wide = wide.merge(growth[["ticker", "end", "revenue_yoy_growth"]], on=["ticker", "end"], how="left")
 
     shares_outstanding_count = wide.groupby("ticker")["SharesOutstanding"].transform("count")
     shares_fallback = wide["ticker"].map(prices.set_index("ticker")["shares_outstanding"])
@@ -1624,7 +1638,8 @@ def run_full_refresh():
         cik = get_cik(ticker, cik_mapping)
         company_info = get_company_info(ticker, cik, EDGAR_USER_AGENT)
         facts_frames.append(build_dataframe(ticker, company_info, concept_candidates, period=PERIOD,
-                                            splits=splits.get(ticker)))
+                                            splits=splits.get(ticker),
+                                            annual_ttm_concepts=TTM_CONCEPTS))
         edgar_times[ticker] = time.perf_counter() - t0
     print(f"EDGAR fetch done: {sum(edgar_times.values()):.1f}s total.")
 

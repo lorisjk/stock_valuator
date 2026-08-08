@@ -1,5 +1,8 @@
 import pandas as pd
 import numpy as np
+
+from config import TTM_SOURCE_ROLLING
+
 MIN_DENOMINATOR_SCALE_RATIO = 0.01
 MIN_OPERATING_LEVERAGE_REVENUE_GROWTH = 0.02
 MAX_OPERATING_LEVERAGE_ABS = 15
@@ -10,6 +13,24 @@ REVENUE_SELF_SCALE_WINDOW = 8
 MIN_REVENUE_SELF_SCALE_RATIO = 0.10
 MIN_PEG_REVENUE_GROWTH = 0.02
 MAX_PEG_RATIO_ABS = 30
+
+# calculate_ttm sums four *rows*, which are only four quarters if the series has
+# no holes. Every bound below is the midpoint of an empty run measured over the
+# 333,737 windows the implementation forms across all 501 tickers and 24 TTM
+# concepts -- not a round number chosen in advance. See ttm_window_report.md.
+#
+#   window span = end[i] - end[i-3]
+#     245 |  gap 246..250  | 251 ... 304 |  gap 305..362  | 363
+#     ^ four rows that do not tile a year   ^ legitimate,   ^ a quarter is missing
+#                                            incl. 52/53-week and fiscal-year changes
+_TTM_WINDOW_MIN_DAYS = 248
+_TTM_WINDOW_MAX_DAYS = 333
+#
+#   step between adjacent rows inside the window
+#     72 |  gap 73..80  | 81 ... 121 |  gap 122..152  | 153
+#                         ^ 12-week to 17-week fiscal quarters
+_TTM_STEP_MIN_DAYS = 76
+_TTM_STEP_MAX_DAYS = 137
 
 
 def apply_denominator_scale_guard(
@@ -211,6 +232,28 @@ def calculate_ttm(df: pd.DataFrame, concept: str, result_name: str) -> pd.DataFr
         .reset_index(level=0, drop=True)
     )
 
+    # The sum above is over four rows. Four rows are twelve months only when the
+    # series has no hole in it -- on a thin concept they can span years, and the
+    # result is then labelled "trailing twelve months" while being nothing of the
+    # kind. A window that does not cover a year yields no value rather than a
+    # wrong one.
+    ends = filtered_df.groupby("ticker")["end"]
+    step = (filtered_df["end"] - ends.shift(1)).dt.days
+    span = (filtered_df["end"] - ends.shift(3)).dt.days
+
+    step_ok = step.between(_TTM_STEP_MIN_DAYS, _TTM_STEP_MAX_DAYS)
+    by_ticker = step_ok.groupby(filtered_df["ticker"])
+    # all three steps inside the window, not just the newest one: a window can
+    # span the right number of days while double-counting one quarter and
+    # skipping another.
+    covers_year = (
+        step_ok
+        & by_ticker.shift(1, fill_value=False).astype(bool)
+        & by_ticker.shift(2, fill_value=False).astype(bool)
+        & span.between(_TTM_WINDOW_MIN_DAYS, _TTM_WINDOW_MAX_DAYS)
+    )
+    filtered_df.loc[~covers_year, result_name] = np.nan
+
     return filtered_df[["ticker", "end", result_name]]
 
 
@@ -236,23 +279,40 @@ def harmonic_mean(values: pd.Series) -> float:
 
 
 def calculate_rolling_harmonic_stats(
-    df: pd.DataFrame, value_col: str, window: int, result_prefix: str
+    df: pd.DataFrame, value_col: str, window: str, result_prefix: str
 ) -> pd.DataFrame:
+    """Harmonic mean, median and observation count over a *calendar* window.
 
+    `window` is a pandas offset string, not a row count: the window holds every
+    observation whose end falls in `(end - window, end]`. A row count is not the
+    same measurement. Twenty consecutive quarters span nineteen quarter-steps --
+    1,735 days between the outer end dates, not 1,826 -- and only a series with no
+    hole and no extra row lands there. Measured over the 23,734 windows the
+    valuation history forms, 12.3% reached back more than five years (up to 11.2)
+    and 8.8% covered less than 4.65, so 21% of the five-year means were an average
+    over some other period. See rolling_window_report.md.
+
+    The count is not fixed at twenty, deliberately: five years of history with a
+    gap in it is still five years, and `_n` reports how many observations were
+    actually available. A row that carries no usable value now displaces nothing,
+    because it occupies no time.
+    """
     df = df.sort_values(["ticker", "end"]).copy()
     positive = df[value_col].where(df[value_col] > 0)
 
-    inv_mean = (1 / positive).groupby(df["ticker"]).transform(
-        lambda s: s.rolling(window=window, min_periods=1).mean()
-    )
-    df[result_prefix] = 1 / inv_mean
-    df[f"{result_prefix}_median"] = positive.groupby(df["ticker"]).transform(
-        lambda s: s.rolling(window=window, min_periods=1).median()
-    )
+    work = df[["ticker", "end"]].copy()
+    work["_value"] = positive.to_numpy()
+    work["_inverse"] = 1 / positive.to_numpy()
 
-    df[f"{result_prefix}_n"] = positive.groupby(df["ticker"]).transform(
-        lambda s: s.rolling(window=window, min_periods=1).count()
-    )
+    # groupby(...).rolling(on=...) returns a (ticker, end) MultiIndex, which cannot be
+    # aligned back onto df by index. The frame is sorted by ticker then end and groupby
+    # walks the tickers in that same order, so the rows come back in the order they went
+    # in -- positional assignment is the alignment.
+    rolling = work.groupby("ticker").rolling(window=window, on="end", min_periods=1)
+
+    df[result_prefix] = 1 / rolling["_inverse"].mean().to_numpy()
+    df[f"{result_prefix}_median"] = rolling["_value"].median().to_numpy()
+    df[f"{result_prefix}_n"] = rolling["_value"].count().to_numpy()
 
     return df[["ticker", "end", result_prefix, f"{result_prefix}_median", f"{result_prefix}_n"]]
 
@@ -279,7 +339,9 @@ def add_ttm_concepts(df: pd.DataFrame, concepts: list[str]) -> pd.DataFrame:
     for concept in concepts:
         ttm = calculate_ttm(df, concept, "value")
         ttm["concept"] = f"{concept}_TTM"
-        ttm_frames.append(ttm[["ticker", "end", "concept", "value"]])
+        # only a row that carries a number claims a derivation
+        ttm["ttm_source"] = np.where(ttm["value"].notna(), TTM_SOURCE_ROLLING, None)
+        ttm_frames.append(ttm[["ticker", "end", "concept", "value", "ttm_source"]])
 
     if not ttm_frames:
         return df

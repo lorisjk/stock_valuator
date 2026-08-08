@@ -165,6 +165,33 @@ def get_latest_filed_period(submissions: dict) -> str | None:
     return max(periods) if periods else None
 
 
+# A quarter is not 13 weeks for every filer. Measured over the 622,845 differences
+# decumulate_period_values forms across all 501 tickers (decumulation_window_report.md):
+#
+#   80..100   604,683   the calendar quarter (89-92) and the 12-week quarter (83-84)
+#   101..105        0   empty
+#   106..120    1,625   the 16-week (111/112) and 17-week (118/119) fiscal quarter
+#   121..160      112   merger, spin-off, IPO and fiscal-year-change stubs
+#   161..200    9,307   two quarters, one of the filer's points missing
+#
+# 120 days is 17 weeks plus a day: the longest quarter any fiscal calendar has.
+_QUARTER_MIN_DAYS = 80
+_QUARTER_MAX_DAYS = 100
+_LONG_QUARTER_MAX_DAYS = 120
+# The 106..120 band still mixes the two: eight 52/53-week filers (AZO, COST, DPZ,
+# PEP, KR, YUM, HST, MAR) and eight one-off stubs. They are told apart by
+# repetition rather than by length -- the eight filers produce 15-29 such periods
+# per concept, every stub exactly one. Three keeps Marriott's and Host's
+# short-lived 52/53-week era and admits no stub.
+_MIN_LONG_QUARTER_PERIODS = 3
+
+
+def _is_quarter_length(days: int, long_quarters_ok: bool = False) -> bool:
+    if _QUARTER_MIN_DAYS <= days <= _QUARTER_MAX_DAYS:
+        return True
+    return long_quarters_ok and _QUARTER_MAX_DAYS < days <= _LONG_QUARTER_MAX_DAYS
+
+
 def extract_period_values(concept_data: dict, is_point_in_time: bool = False, period: str = "annual") -> list[dict]:
     values = {}
 
@@ -195,7 +222,11 @@ def extract_period_values(concept_data: dict, is_point_in_time: bool = False, pe
                 if days_diff is None:
                     is_valid = True
                 else:
-                    is_valid = (80 <= days_diff <= 100) or (350 <= days_diff <= 380)
+                    # a weighted-average share count carries the duration of the
+                    # period it averages, so a 16-week quarter's count is 111 days
+                    is_valid = _is_quarter_length(days_diff, long_quarters_ok=True) or (
+                        350 <= days_diff <= 380
+                    )
             else:
                 raise ValueError(f"Unbekannter period-Wert: {period}")
         else:
@@ -254,7 +285,7 @@ def decumulate_period_values(period_values: list[dict]) -> list[dict]:
     quarter_starts = set()
     for v in entries:
         days = (date.fromisoformat(v["end"]) - date.fromisoformat(v["start"])).days
-        if 80 <= days <= 100:
+        if _is_quarter_length(days, long_quarters_ok=True):
             quarter_starts.add(v["start"])
 
     cleaned = []
@@ -268,13 +299,16 @@ def decumulate_period_values(period_values: list[dict]) -> list[dict]:
     if not entries:
         return []
 
-    quarters = {}
     annuals = []
-
     by_start = {}
     for v in entries:
         by_start.setdefault(v["start"], []).append(v)
 
+    # First pass: every difference this function can form, with the length it
+    # covers. Acceptance needs the whole set, because whether a 16-week
+    # difference is a fiscal quarter or a one-off stub is decided by how often
+    # this filer produces one -- see _MIN_LONG_QUARTER_PERIODS.
+    candidates = []
     for start_str, group in by_start.items():
         start = date.fromisoformat(start_str)
         group_sorted = sorted(group, key=lambda x: x["end"])
@@ -283,31 +317,34 @@ def decumulate_period_values(period_values: list[dict]) -> list[dict]:
         prev_days = 0
         for v in group_sorted:
             days = (date.fromisoformat(v["end"]) - start).days
+            is_annual_point = 350 <= days <= 380
 
-            if 350 <= days <= 380:
+            if is_annual_point:
                 annuals.append({"end": v["end"], "value": v["value"], "filed": v["filed"]})
-                if prev_days > 0 and 80 <= (days - prev_days) <= 100:
-                    quarters[v["end"]] = {
-                        "end": v["end"],
-                        "value": v["value"] - prev_value,
-                        "filed": v["filed"],
-                    }
-                prev_value = v["value"]
-                prev_days = days
-                continue
 
-            quarter_value = v["value"] - prev_value
-            quarter_len = days - prev_days
-
-            if 80 <= quarter_len <= 100:
-                quarters[v["end"]] = {
+            # an annual point with nothing before it is a whole year, not a quarter
+            if prev_days > 0 or not is_annual_point:
+                candidates.append({
+                    "start": start_str,
                     "end": v["end"],
-                    "value": quarter_value,
+                    "value": v["value"] - prev_value,
                     "filed": v["filed"],
-                }
+                    "length": days - prev_days,
+                })
 
             prev_value = v["value"]
             prev_days = days
+
+    long_periods = {
+        (c["start"], c["end"]) for c in candidates
+        if _QUARTER_MAX_DAYS < c["length"] <= _LONG_QUARTER_MAX_DAYS
+    }
+    long_quarters_ok = len(long_periods) >= _MIN_LONG_QUARTER_PERIODS
+
+    quarters = {}
+    for c in candidates:
+        if _is_quarter_length(c["length"], long_quarters_ok):
+            quarters[c["end"]] = {"end": c["end"], "value": c["value"], "filed": c["filed"]}
 
     quarters_sorted = sorted(quarters.values(), key=lambda x: x["end"])
 

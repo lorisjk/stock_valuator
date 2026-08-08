@@ -207,6 +207,12 @@ TTM_CONCEPTS = [
     "StockIssued",
 ]
 
+# How a <concept>_TTM value was derived. A series that mixes the two is not
+# uniform and should not look uniform, so the label travels with the value in
+# the facts frame's `ttm_source` column.
+TTM_SOURCE_ROLLING = "quarterly_rolling"   # four consecutive quarters summed
+TTM_SOURCE_ANNUAL = "annual_fact"          # one 12-month fact, taken as filed
+
 SEARCH_HINTS = {
     "Revenue": ["revenue", "salesrevenue"],
     "NetIncomeLoss": ["netincome"],

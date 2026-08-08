@@ -1,166 +1,183 @@
-# Task: `calculate_ttm` — Calendar-Aware Windows + Annual-Fact TTM Path
+# Task: Row-Based Windows — `calculate_rolling_harmonic_stats` and `pct_change`
 
-**Read first:** `tag_investigation_stock_sbc_report.md` (sections 6 and 8 are the direct input),
-`bugfixed_update_history.md`, `METRICS_REFERENCE.md`, and the current `calculate_ttm`,
-`decumulate_period_values` and `build_dataframe` code.
+**Read first:** `duplicate_period_ends_report.md` (section 6's first two entries are the direct
+input, and the TSLA case in section 4 is the cleanest demonstration), `ttm_window_report.md`
+(section 1 is the methodological model — this task is the same fix one layer up), and the current
+`calculate_rolling_harmonic_stats`, `build_valuation_history` and the `pct_change` call sites.
 
 ## Context
 
-`calculate_ttm` is `.rolling(window=4).sum()` **over the rows present in the series**, not over
-calendar quarters. On a sparse concept it therefore sums the last four *available* values, which
-may span several years, and labels the result "trailing twelve months".
+The TTM task established that a rolling window counted in **rows** rather than **calendar time**
+silently produces a value that is not what its name claims. It fixed `calculate_ttm`. Two more
+places carry the same defect, and both feed things the app puts in front of a user as its central
+claim.
 
-This was discovered as a side effect during the tag investigation: filling gaps in
-`ShareBasedCompensation` **changed** existing `owner_fcf` values for 20 tickers, 15 of which were
-never flagged — because adding data re-anchored the rolling window at nearer dates. One example
-from that report:
+### 1. The five-year mean lines
 
-```
-SRE gained the 8 consecutive quarters 2016-03-31 … 2017-12-31,
-    which had been an unbroken two-year hole between 2015-12-31 and 2018-03-31.
-```
+`calculate_rolling_harmonic_stats` uses a **20-row** window. On a series with any hole, twenty rows
+span more than five years, and the "five-year average" is an average over whatever period those
+rows happen to cover.
 
-Before the fill, SRE's "TTM" at points in that hole summed values spanning years. The number was
-wrong, produced no error, and fed `pfcf_ex_sbc` and every valuation denominator built on a `_TTM`
-concept.
-
-The defect affects **every thin concept**, not only the ones recently touched. Its failure mode is
-the one this project treats as most dangerous: a plausible number rather than an exception.
-
-A second, related finding from the same report: **31 flagged (ticker, concept) pairs are
-"annual-only"** — the filer discloses the item once a year at 12-month duration, so
-`decumulate_period_values` has nothing to decumulate and a quarterly pipeline gets zero. Eight of
-the 21 flagged utilities' `ShareBasedCompensation` cases are this. Example:
+The duplicate-period-ends task produced the clean demonstration, because it removed rows without
+changing any value:
 
 ```
-NEE  AllocatedShareBasedCompensationExpense: 48 facts, durations {12 months: 48}
-     annual values = 21, quarterly values = 0
+TSLA  lost exactly one row (SharesOutstanding 2021-12-30, twin at 2021-12-31 survived)
+      no TSLA value changed
+      avg_p_ffo_5y_n   19 -> 20 observations
+      avg_p_ffo_5y     68.67 -> 70.73
 ```
 
-These two things belong in one task because **a 12-month fact at a fiscal year end is, by
-definition, exactly the trailing-twelve-months value at that date** — not an approximation of it.
-Part 1 removes TTM values that were never really TTM; Part 2 adds TTM values that were there all
-along in a form the TTM layer did not read.
+Across that task's diff, **2–5% of all mean-line points moved** for this reason alone. These lines
+are the reference the valuation charts draw and the snapshot marker is compared against — "current
+multiple versus its own five-year history" is the product's core proposition, and the denominator
+of that comparison is currently not a five-year history.
 
-**Explicitly NOT in this task:** no split-normalisation or `share_count_jump_flag` work (separate
-task), no further tag work, no new concepts or metrics, no `PROFILE_HIDDEN` refactor, no UI or
-chart changes.
+### 2. The growth comparisons
+
+`wide.groupby("ticker")["Revenue_TTM"].pct_change(periods=4)` has **two** defects in one call:
+
+- **It counts rows.** Four rows back is four quarters back only if no quarter is missing. Every one
+  of the 90 changed values in the duplicate-ends diff ran through this path.
+- **`fill_method="ffill"` is pandas' default**, so a hole is silently bridged by the previous value
+  and the comparison base is a date other than the one intended. The decumulation report recorded
+  this; the TTM report traced 26 appeared and 121 changed `pe_to_revenue_growth` values to it.
+
+The second is also the source of the `FutureWarning` the pipeline currently emits.
+
+Both feed `pe_to_revenue_growth` and all seven growth panels, and interact with
+`MIN_PEG_REVENUE_GROWTH` — the TTM and decumulation reports each traced a blanked or unblanked PEG
+value to a growth figure moving across the 2% floor because its base shifted.
+
+**Explicitly NOT in this task:** no `calculate_ttm` changes (shipped, evidence-backed), no
+`extract_period_values` / `decumulate_period_values` changes (both shipped), no split/scale/tag
+work, no `apply_denominator_scale_guard` or `ffo.fillna(0)` fix (those are a different species —
+"a missing default treated as a pass" — and get their own task), no coverage-flag semantics, no UI
+or chart changes, no new metrics.
 
 ---
 
-## Part 1 — Make the window calendar-aware
+## Part 1 — The rolling window
 
-### Step 1.1 — Measure the actual span distribution first
+### Step 1.1 — Measure the span distribution
 
-Before choosing any threshold, measure across all cached tickers and all `_TTM` concepts: for
-every window the current implementation forms, the **elapsed time between the first and fourth
-row** in it.
+Follow the TTM task's method exactly, one layer up. For every 20-row window
+`calculate_rolling_harmonic_stats` currently forms, across all 501 tickers and every concept it
+covers, measure the **elapsed time between the first and last row**.
 
-Report the distribution. The expectation is a dense cluster near 365 days (52/53-week filers and
-shifted fiscal year ends spread it somewhat), a gap, then a tail of windows spanning multiple
-years. **The threshold should come out of that gap, not out of a round number.** If there is no
-clean gap, say so — that is a finding, and the threshold then has to be argued differently.
+Report the distribution day by day around each cluster, and identify the **empty runs** bracketing
+the legitimate region. For twenty consecutive calendar quarters the span between outer end dates is
+nineteen quarters ≈ 1,734 days, not 1,826 — state the expected figure from the arithmetic before
+looking, so the measurement can confirm or contradict it rather than being fitted to it.
 
-Also report, per concept, how many currently-produced TTM values fall in the tail. That number is
-the coverage cost of the fix and must be known before it is applied.
+Report the tail: how many windows currently span materially more than five years, on how many
+tickers and concepts. That is the size of the defect.
 
-### Step 1.2 — Implement and state the threshold
+### Step 1.2 — Decide the rule
 
-Mask windows whose span exceeds the threshold, so an out-of-range window yields **no value**
-rather than a wrong one. State the tolerance chosen and the evidence for it, and handle the
-52/53-week and shifted-fiscal-year cases explicitly — a fix that silently drops legitimate retail
-filers' TTM values has traded one defect for another.
+A five-year window differs from the TTM window in one important way: **a TTM window must contain
+exactly four quarters, but a five-year window does not need exactly twenty observations.** A ticker
+with a genuine gap should still get a mean over the observations it does have within the window —
+just not over observations from outside it.
 
-Decide and state whether the threshold is global or per-concept. Prefer global unless the
-measurement shows a concept that genuinely cannot use it.
+So there are two candidate shapes, and the choice must be stated:
 
-### Step 1.3 — Report what disappears
+1. **Filter by date, keep whatever falls inside** — take all observations within five years of the
+   window's end date, however many that is. Natural, and it composes with the existing `_n` and
+   short-history machinery.
+2. **Keep the row window but mask it when its span is wrong** — the TTM task's shape.
 
-Per concept and per ticker: how many TTM values the mask removes, and spot-check several against
-the source rows to confirm they were genuinely spanning more than a year. Removing a correct
-value would be a regression; removing a wrong one is the point.
+Recommended: option 1, because the quantity being computed is genuinely "the average over the last
+five years", not "the average of twenty observations". But state the reasoning and the failure mode
+either way.
 
-## Part 2 — Derive TTM directly from annual facts
+Whichever is chosen, decide and state:
 
-### Step 2.1 — Establish the boundary against `decumulate_period_values` first
+- **The minimum observation count** for a mean to be published at all. The snapshot already carries
+  `avg_*_5y_n` and short-history flags — read what those currently mean and keep them coherent
+  rather than introducing a second, parallel notion of "not enough history".
+- **The window's anchor.** Five years back from the row's own date, or from a fixed reference. The
+  former is what a rolling mean means.
+- Whether the harmonic/arithmetic split (`HARMONIC_MEAN_CONCEPTS`) is affected at all — it should
+  not be, but confirm rather than assume.
 
-This is the part most likely to go wrong. `decumulate_period_values` already derives Q4 as
-FY minus Q1+Q2+Q3 for filers that report year-to-date cumulatively — so for those filers a
-12-month fact is already consumed as an intermediate step.
+### Step 1.3 — Verify the arithmetic independently
 
-**Determine precisely which cases Part 2 applies to** and confirm it against real data before
-implementing: the target is the filer whose facts for a concept are **exclusively** 12-month
-duration, where nothing can be decumulated. Report how you distinguish the two cases in code, and
-verify no ticker/concept is handled by both paths. Two paths that can both write the same
-`_TTM` value at the same date is the failure this step exists to prevent.
+For several tickers, recompute a mean by hand from the calendar-filtered series and compare against
+the function's output. Internal consistency proves the code does what it says; this proves the
+window contains what it claims.
 
-### Step 2.2 — Implement
+Include TSLA specifically — the reported 68.67 → 70.73 move should resolve to whichever value the
+correct window produces, and the report should say which and why.
 
-Where a concept has a 12-month fact at a period end, set `<concept>_TTM` at that date directly
-from it. Between fiscal year ends the value stays NaN — the disclosure cadence is annual, and the
-series should say so rather than interpolate.
+## Part 2 — The growth comparison
 
-Verify against the known cases: NEE should gain 21 `ShareBasedCompensation_TTM` points where it
-had none, and the other annual-only tickers listed in the tag report should behave equivalently.
+### Step 2.1 — Fix both defects together
 
-### Step 2.3 — Mark provenance
+They are in the same call and fixing one without the other leaves the same class of error in place.
 
-Where a ticker reports partly quarterly and partly annually, `_TTM` values now arise two ways.
-Carry the provenance (a column, a flag, or whatever fits the existing frame conventions) so a
-series that looks uniform is not silently mixed.
+- Replace the row-offset comparison with a **date-based** one: the value four quarters back by
+  calendar, not four rows back. Reuse the tolerance logic established in the TTM task rather than
+  inventing a second convention — state which bounds you use and why they are the right ones for a
+  four-quarter lag between *observation dates* (which is a different measurement from the TTM
+  window's span between the outer rows of a four-row window; be explicit about which quantity you
+  are bounding).
+- Set `fill_method=None` explicitly, or drop `pct_change` in favour of the date-based lookup, so a
+  hole produces no growth figure rather than a silently bridged one. Confirm the `FutureWarning`
+  is gone.
 
-Decide whether this provenance surfaces in the app's data tab. Recommended: yes — it is exactly
-the kind of "here is how this number was derived" signal this project exists to show — but
-implementing the UI side is optional; **stating the decision is not.**
+### Step 2.2 — Report the coverage cost
 
-### Step 2.4 — Consider the coverage threshold interaction
+Growth values will disappear where the base is genuinely missing. Report, per concept and per
+ticker, how many — and check the interaction with `MIN_PEG_REVENUE_GROWTH`: a growth figure that
+moves across the 2% floor changes whether PEG is published, and both previous reports traced values
+to exactly that. Report the PEG delta separately from the growth delta.
 
-Some of the 31 annual-only pairs may now clear or change their quality flags. Report which, and
-whether the 50% coverage threshold still means what it should for a concept whose disclosure is
-legitimately annual. **Do not change the threshold logic in this task** — report the finding.
+## Part 3 — Non-regression, all 501 tickers
 
----
+Apply Part 1 and Part 2 as **separate change groups**, diffing after each. They both move the same
+downstream quantities, and a combined diff would be unattributable.
 
-## Part 3 — Non-regression, as two separate change groups
+For each group:
 
-Part 1 removes values and Part 2 adds them. If applied together the diffs cancel and become
-uninterpretable, so **measure each separately**, in this order: Part 1, diff, Part 2, diff.
-
-For each group, following the convention established in the tag investigation:
-
-1. Capture a before-state across **all** cached tickers — every `_TTM` concept, plus the
-   downstream quantities that consume them: `owner_fcf`, `pfcf_ex_sbc`, every valuation multiple
-   whose denominator is a `_TTM` concept, and the growth panels added recently (several are built
-   on `_TTM` series).
-2. Diff after, and account for **every** difference: appeared, changed, disappeared. In Part 1
-   disappearances are the intended effect and changes need justification; in Part 2 appearances
-   are the intended effect and changes need justification.
-3. Report the effect on `valuation_history` mean lines — those are the benchmark the app's charts
-   compare today's multiple against, so a changed history moves the reference a user reads.
-4. Re-measure the quality flags across all 501 tickers and report the delta per concept.
-5. Verify the specific cases named above: SRE and the other 19 tickers whose `owner_fcf` moved in
-   the tag investigation should now behave correctly; NEE and the annual-only list should gain
-   values.
+1. Capture a before-state across all cached tickers: base facts, `_TTM` concepts, `metrics_long`,
+   every `valuation_history` multiple, **every `avg_*_5y` line and its `_n` companion**, and the
+   snapshot.
+2. Diff and account for every appeared, changed and disappeared value.
+   - Part 1 should change **no base fact and no single-period multiple** — only the rolling
+     aggregates and anything downstream of them. If a base value moves, something is wrong.
+   - Part 2's disappearances are the intended effect where a base is missing; changes need
+     justification.
+3. **Anchor and snapshot invariants**, per the precedent now established over seven tasks: the
+   newest value per ticker/concept unchanged, or any exception named. Note that this task changes
+   snapshot `avg_*` fields **by design** — that is the point — so state the expected exception up
+   front rather than reporting it as a surprise.
+4. **Report the mean-line effect plainly and prominently.** The TTM task moved ~25% of points, the
+   decumulation task 0.2–0.6%, the duplicate-ends task 2–5%. State where this one lands, per line.
+   This is the number that matters most in this task, because these lines *are* the benchmark.
+5. **Independent plausibility check**: for several tickers, verify that the new five-year mean is
+   computed over observations that actually fall within five years — list the observation dates for
+   one window and confirm the span.
+6. Re-measure all quality flags and report the delta.
 
 ## Part 4 — Record
 
-Update `bugfixed_update_history.md` per convention, including the threshold and its evidence, and
-the boundary rule between the two TTM derivation paths.
+Update `bugfixed_update_history.md` per convention, including the window rule, the minimum-count
+decision, and the growth-lag convention.
 
 ## Output
 
-One file, `ttm_window_report.md`:
+One file, `rolling_window_report.md`:
 
-1. The Part 1.1 span distribution, the gap (or its absence), and the threshold with its evidence.
-2. What Part 1 removed, per concept, with spot-checks proving the removed values genuinely spanned
-   more than a year.
-3. The Part 2.1 boundary rule against `decumulate_period_values`, and the confirmation that no
-   ticker/concept is handled by both paths.
-4. What Part 2 added, including NEE and the annual-only list.
-5. The provenance mechanism and the decision on surfacing it in the app.
-6. Both diffs, separately, with every appeared/changed/disappeared value accounted for, plus the
-   valuation-history mean-line effect.
-7. Re-measured flag counts and the annual-only coverage-threshold finding.
+1. The Part 1.1 span distribution, expected figure stated before measuring, empty runs, and the
+   size of the tail.
+2. The window rule chosen with reasoning and the failure mode of the alternative, plus the
+   minimum-count decision and how it composes with the existing `_n` and short-history fields.
+3. The Part 2 fix, the tolerance convention used, and confirmation the `FutureWarning` is gone.
+4. The two diffs, separately, with every appeared/changed/disappeared value accounted for.
+5. **The per-line mean-line effect**, stated plainly.
+6. The independent checks, including TSLA.
+7. Re-measured flag counts.
 8. Anything deliberately not fixed, with reasoning.
 
 No scratch scripts left behind.

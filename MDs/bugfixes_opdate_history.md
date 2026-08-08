@@ -6,6 +6,306 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-08-12 — Row-based windows, one layer up: the five-year means and the growth comparison
+
+The TTM task established that a window counted in rows rather than calendar time yields a number
+that is not what its name says, and fixed `calculate_ttm`. Two places still carried it, both
+feeding what the app puts in front of a user as its central claim. Fixed as two separate change
+groups with a diff after each. Full derivation in `rolling_window_report.md`.
+
+**The five-year mean was a mean over 1,735 days only when nothing was wrong.** Twenty consecutive
+quarters span nineteen quarter-steps — 1,734.9 days between the outer end dates, stated from the
+arithmetic before measuring and confirmed by the mode (1,734/1,735/1,736 = 72.9% of windows). Over
+the 23,734 windows the valuation history forms, **12.3% reached back more than five years — EXE to
+11.25 — and 8.8% covered less than 4.65. 21% were not five-year windows.**
+
+**There is no empty run here either, and this time it decides the rule rather than merely being
+reported.** Between 1,600 and 2,600 days the distribution is a continuum with forty-five holes of
+3–29 days; nothing brackets the legitimate region, because a five-year window is broken by whatever
+gaps a ten-year history happens to contain and those come in every size. So the fix defines the
+window directly — `AVG_5Y_WINDOW = "1826D"`, every observation in `(end − 1826 days, end]` — rather
+than masking a row window against a threshold that could not have been derived.
+
+**The short windows were the surprise, and they have their own cause: a pivot row is not a quarter.**
+`build_valuation_history` creates a row wherever any of the fourteen needed concepts reported, and a
+filer can end one concept's period a day from another's — CAT tags `StockholdersEquity` at
+2017-01-01 and nine other concepts at 2016-12-31; WAT splits 2025-06-28 and 2025-06-30. **193 such
+rows across 102 tickers.** This is a different population from the duplicated period ends fixed
+yesterday — those were within a concept, these are across concepts — and it made Waters' twenty-row
+window cover 1,095 days, three years sold as five.
+
+**`min_periods=1` and `MIN_AVG_5Y_OBSERVATIONS = 12` are unchanged, deliberately.** A five-year
+window with a gap in it is still five years; `_n` reports what was available and
+`avg_*_5y_history_too_short` already means "not enough history". Adding a hard cut-off would have
+been a second, parallel notion of the same thing.
+
+**Part 1 moved 11–15% of the points on six of the seven mean lines** (`avg_p_ppnr_5y` 15.5%,
+`avg_pe_5y` 12.2%, `avg_p_tbv_5y` 12.0%, `avg_p_ffo_5y` 11.8%, `avg_pfcf_5y` 11.2%,
+`avg_ev_ebitda_5y` 11.1%; `avg_p_core_earnings_5y` 2.9%, 15 insurers with unbroken histories) —
+between the TTM task's ~25% and the duplicate-ends task's 2–5%. **And nothing else moved at all:
+0 base facts, 0 facts, 0 metrics_long, 0 single-period multiples, 0 anchor moves.** HBAN's
+`avg_pe_5y` at 2018-03-31 goes 7.68 → 8.36 by dropping four quarters of 2012; WAT's at 2021-12-31
+goes 26.93 → 33.21 by gaining eight it should always have had.
+
+**TSLA resolves to 70.73.** The duplicate-ends task moved it 68.67 → 70.73 with no TSLA value
+changing; the correct calendar window produces 70.7318, so that move was the correction. TSLA does
+not move in this diff — the point is that it can no longer move for that reason.
+
+**Part 2: `Revenue_TTM.pct_change(periods=4)` had two defects and was also a second implementation.**
+It counted rows — 787 growth values on 130 tickers had a base that was not four quarters old, and
+almost all of them were too *recent* (673 at three quarters), the extra-row population again — and
+pandas' `fill_method="ffill"` default bridged a missing base on 845 values across 157 tickers.
+`metrics["revenue_growth"]` has done this by date since 2026-07-27, so the Revenue growth panel and
+the snapshot's PEG were already correct and only the history's copy was not. Replaced with a call to
+`calculate_growth`, reusing its ±45-day tolerance (which bounds the lag between two observation
+dates, 365.2 days — *not* the TTM window's 273.9-day span between the outer rows of a four-row
+window).
+
+**Part 2 touched exactly one concept:** `pe_to_revenue_growth`, 23 appeared / 232 changed / 179
+disappeared over 122 tickers, one ticker (VTRS) losing it entirely; 0 changes everywhere else,
+including `metrics_long` — the confirmation that the panel was already right. The growth delta and
+the PEG delta are far apart (742 vs 179) because growth only reaches PEG where a `pe_ratio` exists
+and the figure clears the 2% floor; **359 values crossed that floor downward, 28 upward.**
+CIEN 2020-05-02 is the clean case: four rows back was 184 days — two quarters — so a 2.3% half-year
+change was published as annual growth; by date the base is 364 days back and the figure is 17.6%,
+moving PEG 9.59 → 1.27.
+
+**Verified against an implementation sharing no code:** a naive per-ticker loop recomputed the
+harmonic mean, median and count for **all 232,365 rows with 0 mismatches**, which also discharges
+the positional-alignment assumption `groupby(...).rolling(on=...)` forces. The two PEG series now
+reconcile exactly — rebuilding the history's PEG from the panel's growth gave 229 disagreements
+before and **0** after. The `FutureWarning` the pipeline emitted was measured with the same
+instrument before (1) and after (0). Coverage flags 737 → 737, `share_count_jump_flag` 718 → 718,
+`buyback_distortion_flag` 635 → 635.
+
+**Left standing, and now the only place this defect can surface: the 193 cross-concept extra rows
+themselves.** Both consumers count days now, so neither is affected, but a ticker still gets two
+`pe_ratio` points a day apart for one quarter, priced at two different closes. That needs a
+cross-concept end alignment in the parser and its own diff.
+
+---
+
+## 2026-08-11 — One quarter, two calendars, two rows: the duplicated period ends
+
+`extract_period_values` keys on `(end, days)` and `decumulate_period_values` on `end`, so a filer
+that tags one reporting period twice — once on its fiscal end, once on the calendar end — got two
+rows. The same quarter appeared twice in the data tab, and `calculate_ttm`'s step rule correctly
+refused every window that stepped across the pair. Full derivation in
+`duplicate_period_ends_report.md`.
+
+**There is no empty run this time, and that is the finding.** The gap distribution over 503,581
+consecutive period pairs is a continuum — 1 day (334), 2 (136), 3 (114), then a scatter — with a
+second population at **28–31 days (240 pairs)** that is a month apart and genuinely different
+dates. The only empty runs between 1 and 120 days are 67–68 and 99–109. So unlike the TTM and
+decumulation windows, the bound had to be argued from the mechanism: **a 52/53-week period end is
+the chosen weekday nearest the month end and can sit at most six days from it, so seven days.** The
+data agrees — 435 of the 461 value-identical pairs are at a gap of ≤ 7 and the next is at 9.
+
+**Value agreement is the wrong test, in both directions.** It admits mergers and spin-offs (VTRS
+0 → 2,619m, JCI 0 of 46 pairs identical) and it rejects real duplicates, because the twins' values
+*should* differ by the calendar offset: Motorola's 2010 Q2 is 1,936m ending 2010-06-30 and 1,869m
+ending 2010-07-03 — **3.5% apart, which is exactly three days out of ninety**. Structural signals
+fail too: "same start" catches 139 of 400 duplicates with 32 false positives, and 197 duplicates
+have neither the same start nor an aligned shift, because both ends move under the two calendars.
+
+**The rule: ends within 7 days are one period, the later one survives.** The step-ladder test is
+neutral — 419 of 452 windows are quarter-length either way — so the deciding argument is the anchor
+invariant: keeping the later end can only leave a series' newest period where it is or move it
+forward, never back.
+
+**The fix lives in `build_dataframe` after `extract_with_mode`, not in the `(end, days)` key.**
+Changing the key does not work, for a measurable reason: **decumulation regenerates the twin.**
+Waters tags the same quarter as `2024-03-31 → 2024-06-29` and `2024-04-01 → 2024-06-30`; different
+starts put them in different year-to-date groups and each emits a quarter at its own end. Placing
+the pass after the tag merge also catches twins contributed by different tags, and leaves the key's
+shorter-duration-wins preference — load-bearing for point-in-time concepts, per the decumulation
+report's COST case — untouched and verified unchanged.
+
+**721 rows removed, 0 added, and not one fact value changed.** The population is wider than the TTM
+report's narrower measurement suggested: **136 tickers, not 33**, split almost evenly between
+duration concepts (234 pairs) and point-in-time ones (190) — `CashAndEquivalents` 110 rows,
+`StockholdersEquity` 94, `Revenue` 84, `SharesOutstanding` 76. Every removed row has a surviving
+partner within 7 days; 433 carried an identical value, and the largest disagreements are
+pre-combination placeholders the merge deletes (VTRS 0 → 2,948m, ROP 138.8m → 13,476m).
+
+Downstream: **1,091 `_TTM` values appear** — the recovered windows, WAT 244, CIEN 114, TER 78,
+DE 78 — and 1,222 rows disappear, accounting exactly as 720 base rows plus 502 derived ones. All
+90 changed values in metrics and valuation history are **row-position-dependent quantities**
+(`pct_change` over rows and the flags built on it); nothing computed from a single period moved.
+Quarter pairs ≤ 7 days apart go **740 → 0**.
+
+**Two anchor exceptions, both named.** Eleven newest dates move *forward* — Waters' whole trailing
+block gains three quarters of reach, from 2025-06-28 to 2026-04-04. Two move backwards: Johnson
+Controls' `EBITDA_QUARTERLY` and `EBITDA_TTM`, because JCI tagged both calendars for D&A but not
+for operating income during the Tyco transition, so keeping the later end put the two on different
+calendars and the join broke. No value was lost; 2 of ~33,000 pairs.
+
+**Rolling five-year means moved 2–5% of points per line**, and the mechanism is worth naming:
+`calculate_rolling_harmonic_stats` uses a **20-row** window, not 20 calendar quarters — the same
+row-versus-calendar weakness the TTM task fixed in `calculate_ttm`, still standing here. TSLA lost
+exactly one row and no values, and its `avg_p_ffo_5y` still moved 68.67 → 70.73 because the window
+gained an observation. Recorded, not fixed.
+
+**Corroborated against the filers' own annual facts** — a separate filing, not built from the four
+quarters: of 28 recovered `Revenue_TTM` values landing on a fiscal year end, **22 are within 0.1%
+and 16 exact to the dollar**. The three misses are the Motorola Mobility separation (annual fact
+restated to continuing operations) and a Ciena 53-week year.
+
+Flags: `share_count_jump_flag` 734 → 718 (the 16 that go were created by a twin's share-count
+offset reading as a jump), coverage flags 741 → 737.
+
+---
+
+## 2026-08-10 — Kroger's Q1 is 16 weeks, and the decumulator threw it away every year
+
+`decumulate_period_values` accepted a derived quarter only when the year-to-date difference fell
+in **80–100 days**. That window encodes a 13-week calendar. The previous task's calendar-aware TTM
+window then refused to sum across the resulting holes, and Kroger — an S&P 500 constituent — went
+to **zero valuation multiples**: no P/E, no EV/EBITDA, no P/FCF, nothing. Full derivation in
+`decumulation_window_report.md`.
+
+**Measured first, over all 622,845 differences the function forms across 501 tickers:**
+
+```
+  ≤0            0     1–20        223   duplicated period ends
+  80–100  604,683     101–105       0   empty
+  106–120   1,588     121–160     129   merger / spin-off / IPO / fiscal-year stubs
+  161–200   9,307     201+      6,801   two and three quarters
+```
+
+The clusters, checked against the filers rather than assumed: **83–84** the 12-week quarter,
+**89–92** the calendar quarter, **97–98** the 14-week quarter of a 53-week year, **111–112** the
+16-week quarter, **118–119** the 17-week quarter of a 53-week year.
+
+**The 16-week quarter sits in two different places, and only one was being rescued.** For PEP,
+AZO, COST, DPZ and YUM it is Q4, whose 112-day difference was rejected — but the value survived
+via the `annual − (Q1+Q2+Q3)` fallback. For Kroger it is **Q1**, and there is no fallback for Q1.
+
+**Length alone cannot draw the line.** A 17-week quarter is 119 days; a four-month transition stub
+(CTVA after the DowDuPont split, PSKY after the merger, MOS at its fiscal-year change) is 121. The
+gap at 120 is one day wide — luck, not evidence. What separates them is **repetition**: counted
+per (ticker, concept), the eight 52/53-week filers produce 15–29 such periods and every stub
+produces exactly one. So the rule is a length band plus a recurrence test for the ambiguous part
+of it:
+
+```python
+_QUARTER_MIN_DAYS = 80
+_QUARTER_MAX_DAYS = 100          # accepted unconditionally, as before
+_LONG_QUARTER_MAX_DAYS = 120     # 17 weeks plus a day
+_MIN_LONG_QUARTER_PERIODS = 3    # a long quarter must be part of the filer's calendar
+```
+
+The same 80–100 assumption sat in `extract_period_values`' point-in-time branch and is now the
+same constant — a weighted-average share count carries the duration it averages, so Kroger's Q1
+share counts were rejected there too.
+
+**Kroger, before → after:** Revenue quarters 48 → 71, OperatingCashFlow 35 → 70, `Revenue_TTM`
+**0 → 66**, `pe_ratio` **0 → 63**, `ev_ebitda` **0 → 66**. Its quarters now tile the fiscal year
+exactly — 112 + 84 + 84 + 84 = 364 days — and sum to $147.1bn against ~$147bn of annual sales.
+
+**Diff across all 501 tickers: 1,492 facts appeared, 532 changed, 0 disappeared.** Every appeared
+value is Kroger's, plus JBHT's 2013 Q4 dividend; **no ticker outside the eight 52/53-week filers
+changed a single value**; 364 of the 532 changes are rounding, because the direct year-to-date
+difference now replaces a three-term subtraction of independently rounded figures. The material
+ones are Q4 corrections that were plainly wrong before: YUM's 2015 Q4 operating income
+**−78m → 441m**, Domino's 2012 Q4 repurchase **−40.2m → +35.8m**, Domino's 2023 Q4 SBC
+**24.1m → 7.1m**. Kroger's 2025 Q4 repurchase **5,038m → 4,031m** looks like a regression and is
+the opposite: 5,038m was the *whole year's* treasury purchases tagged into one quarter under a
+fallback tag, and the recovered ladder puts the cash-flow tag back in charge.
+
+One value disappeared — HST's `pe_to_revenue_growth` at 2013-12-31, whose revenue growth fell from
+2.10% to 1.67% and crossed `MIN_PEG_REVENUE_GROWTH`. The anchor invariant holds with one named
+exception: Kroger's newest period moved *forward* to 2026-05-23, because its most recent quarter
+was one of the missing ones.
+
+**Corroborated against facts the recovery never touched:** each recovered Kroger Q1 compared with
+`FY − (Q2+Q3+Q4)` built from discrete quarterly facts — **95 of 121 exact to the cent**, 97 within
+0.1%. The residuals are the 53-week fiscal year and 10-Q-to-10-K restatements.
+
+Rolling five-year means moved 0.2–0.6% of points per line (`avg_p_ffo_5y` 163 of 27,781), against
+roughly a quarter of them in the TTM task. Coverage flags 743 → 741: KR/Capex and
+KR/OperatingCashFlow cleared. Kroger's other concepts were never flagged — 48 of 74 quarters is
+65%, comfortably above the threshold, which is exactly why nothing announced that a fifth of its
+history was missing.
+
+**Not fixed, recorded:** the 300 quarter pairs less than 11 days apart (33 tickers tag the same
+period twice; neutral here, 300 before and after, but the fix belongs in `extract_period_values`'
+`(end, days)` key); 11 long quarters on thin HST and MAR concepts that the per-concept recurrence
+gate cannot distinguish from a stub; and the 121–160 day transition stubs, which are rejected
+rather than represented.
+
+---
+
+## 2026-08-09 — "Trailing twelve months" now has to be twelve months, and annual-only filers finally have one
+
+`calculate_ttm` was `.rolling(window=4).sum()` over the rows present in a series. Four rows are
+four quarters only if the series has no hole; on a thin concept they can span years. The result
+was labelled TTM, raised no error, and fed every valuation denominator. Full derivation in
+`ttm_window_report.md`.
+
+**The threshold came out of the data, not out of a round number.** Measuring the span
+(`end[i] − end[i−3]`) of all **333,737** windows across 501 tickers and 24 concepts gives a dense
+core at 273–275 (91.9%), shoulders at 280 and 287 for 52/53-week filers, a tail to 304 for
+fiscal-year-end changes — and then **nothing at all between 305 and 362**, before the 365 cluster
+where a quarter has been skipped. Both bounds are the midpoint of an empty run:
+
+```
+_TTM_WINDOW_MIN_DAYS = 248   # empty run 246..250
+_TTM_WINDOW_MAX_DAYS = 333   # empty run 305..362
+_TTM_STEP_MIN_DAYS   = 76    # empty run 73..80    (step between adjacent rows)
+_TTM_STEP_MAX_DAYS   = 137   # empty run 122..152
+```
+
+The step rule exists because a window can have the right total length while double-counting one
+quarter and skipping another — DHR 2009-07-03 has steps 189/88/**3** and a span of 280. The span
+band alone would keep all 51 of those.
+
+**4.38% of windows fail (14,615), removing 19,094 facts values** — 14,615 base plus 4,479 derived,
+which adds up exactly. 495 of 501 tickers lose something; six lose nothing. **Kroger loses all
+501**, correctly: its Q1 is 16 weeks, `decumulate_period_values` only emits a quarter for an 80–100
+day year-to-date difference, so KR's Q1 is discarded every single year and every "TTM" it had
+covered fifteen months. 486 of 501 tickers have at least one 180–200 day step.
+
+**Part 2 reads what was always there.** A 12-month fact at a fiscal year end *is* the TTM value at
+that date. `parse_edgar.annual_ttm_values` takes it directly — but only for a `(ticker, concept)`
+whose quarterly extraction produced **nothing at all**. That is the boundary against
+`decumulate_period_values`, and it makes the two paths disjoint by construction: a pair with no
+quarterly rows contributes nothing for the rolling window to roll over, so neither path can reach
+a date the other writes. Confirmed: **0 duplicates on `(ticker, concept, end)`, 0 series carrying
+both provenance labels.** Measured target set: **64 pairs, 60 tickers, 658 annual values**; NEE
+goes from 0 to 18 `ShareBasedCompensation_TTM` points. Part 2's diff is **778 appeared, 0 changed,
+0 disappeared** in facts and the same shape in metrics and valuation history.
+
+The rule is written on the extractor's output, not on raw fact durations — six pairs (ADM, C, EXC,
+KHC, OTIS, TKO) have half-year and nine-month facts but still nothing decumulable, and a
+duration-based rule would have excluded them wrongly.
+
+**Provenance travels with the value:** a `ttm_source` column, `quarterly_rolling` (319,122) or
+`annual_fact` (658), `None` where a masked window left no number. Decision: it *should* surface in
+the app's data tab; not implemented here because the task excluded UI work, but the column already
+reaches `facts_full.parquet`, so that is a rendering change only.
+
+**Downstream, this is the largest move any of these tasks has produced.** Roughly a quarter of the
+historical five-year mean lines shift — `avg_p_ffo_5y` 7,859 of 28,347, `avg_pfcf_5y` 6,477,
+`avg_pe_5y` 5,859, `avg_ev_ebitda_5y` 4,925 — because they were averaging multiples whose
+denominators were not twelve-month figures. `avg_p_tbv_5y` moves 85 of 24,418, which is the
+control: tangible book value has no TTM denominator. Flags: `low_tax_rate_flag` 4,196 → 4,060,
+`fcf_exceeds_ebitda` 1,984 → 1,821, `buyback_distortion_flag` 644 → 633, coverage flags unchanged
+at 743.
+
+**Three pre-existing defects that the diff exposed and this task did not fix**, all recorded in the
+report: `apply_denominator_scale_guard` treats a *missing* scale reference as "large enough" (four
+metric values reappeared, one a 274% effective tax rate); `pct_change(periods=4)` on `Revenue_TTM`
+uses pandas' `ffill` default, so a hole is silently bridged; and `ffo["gains"].fillna(0)` reads a
+missing gains term as a zero gain — all 94 changed facts values run through it.
+
+**Coverage flags do not move, and that is the finding.** `check_data_quality` counts base-concept
+rows before the TTM layer, so 60 of the 64 annual-only pairs keep a `MISSING 0 of 75` flag while
+the pipeline now reads every value the filer publishes. A quarterly coverage ratio does not mean
+what the threshold assumes for an annual-cadence disclosure. Logic unchanged, per the task.
+
+---
+
 ## 2026-08-08 — Directional scale detection: a P/B of 3,377 removed, and the cross-concept scope answered with a measurement
 
 The scale audit left two gaps: the sweep is upward-only, and its evidence is symmetric. Both are
