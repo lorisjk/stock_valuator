@@ -6,6 +6,198 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-08-16 — The annual-path gate: event-driven concepts falling between two paths
+
+The FFO task diagnosed this and left it standing because it changes behaviour all 25 `TTM_CONCEPTS`
+share. Full derivation in `annual_path_gate_report.md`.
+
+**The gate asked the wrong question.** `annual_ttm_values` ran only `if not quarterly_values` --
+whether any quarterly fact exists -- rather than whether the quarterly path can produce anything. For
+a concept reported **on occurrence** rather than every period, a handful of scattered facts that can
+never form a four-consecutive-quarter window disabled the annual facts that could have produced
+values. It now gates on the quarterly path's **output**: run when the rolling path yields no TTM
+value for that series at all.
+
+**Classification over 501 tickers x 25 concepts, 6,035 pairs with data:**
+
+```
+class 1  rolling works, annual adds no new date         105 pairs   66 tickers
+class 2  quarterly facts exist, no TTM produced          77 pairs   57 tickers   343 annual facts  <- the defect
+class 3  no quarterly facts, annual path already runs     64 pairs   60 tickers
+class 4  rolling works partly, annual could fill       5,789 pairs  500 tickers
+```
+
+Class 2 sits exactly where the mechanism predicts: `StockRepurchased` 17, `StockIssued` 16,
+`DividendsPerShare` 14, `ShareBasedCompensation` 8. **BDX has 55 quarterly `DividendsPerShare` values
+and no TTM value at all** -- a dividend is declared when the board declares one -- with 16 annual
+facts discarded; CAH 53 and 18; EXPD 28 and 19.
+
+**Class 4 was the decision, and locating its dates settled it against per-date gating.** Of its
+14,137 annual facts at dates the rolling path never reaches, **81.1% precede its first value** --
+annual-only XBRL history from before quarterly tagging -- only **11.0% are interior holes**, and
+8.0% follow its last. Meanwhile **81,505 annual facts land on dates the rolling path already holds**.
+Gating per date would prepend a decade of annual points to otherwise-quarterly series and turn a
+structural guarantee into a tie-break exercised 81,505 times.
+
+**The guarantee is load-bearing, verified rather than assumed.** The two paths are *concatenated*,
+not merged: a constructed collision returns two rows at one `(ticker, concept, end)` -- one
+`annual_fact`, one `quarterly_rolling` -- which `pivot_table` would silently average into a number
+neither path computed. So relaxing the gate without a collision rule would corrupt facts, and the
+per-series form keeps disjointness structural: a series is wholly rolling-derived or wholly
+annual-derived, and `ttm_source` stays a per-series constant.
+
+**One deliberate imprecision, safe in one direction only.** The gate is evaluated on the pre-mask
+quarterly values, since that is where `annual_ttm_values` is called, while `calculate_ttm` later sees
+them after `_mask_negative_flow_values` and its siblings. Those masks only remove rows, which can only
+widen steps and so only *break* a window, never create one -- a window absent at the gate cannot
+appear later, so both paths can never reach the same date. The reverse costs a recovery, not a
+collision.
+
+---
+
+## 2026-08-15 — FFO's gains term: the tag list, and why the three "extraction failures" were not
+
+The alignment task left `FFO_TTM` zero-filling its gains term for 77% of REIT periods and named the
+tag list as the real fix. This is that work. Full derivation in `ffo_gains_report.md`.
+
+**Part A's premise was wrong, and the diagnosis is worth keeping.** CPT, IRM and MAA were recorded as
+having a queried tag present that "still yields no `_TTM` value". Extraction is fine — CPT gets 5
+quarterly values, IRM 3, MAA 4. **The value is lost at `calculate_ttm`, correctly**: their quarterly
+ends are 90/275/182/92 days apart (CPT), 457/92 (IRM), 91/92/1278 (MAA), so no four-consecutive-quarter
+window exists. `GainLossOnSaleOfProperties` is **event-driven, not periodic** — a REIT tags a gain in
+the quarters it sells something — so a TTM window is available only to filers who happen to sell four
+quarters running.
+
+**And the annual fallback is switched off by the very values that are too sparse to use.**
+`annual_ttm_values` returns `[]` as soon as the quarterly path produced anything; CPT has **13 FY
+facts** and five scattered quarterly ones, so it falls between the two paths. The TTM report's "disjoint
+by construction" here produces a gap rather than an overlap. **Reported, not fixed** — widening that
+gate is shared behaviour all 25 `TTM_CONCEPTS` depend on, and it would move every thin concept at once.
+It needs its own diff. What actually rescues the three is the tag list: CPT 0 → 10 TTM values, MAA
+0 → 26, IRM 0 → 5.
+
+**The tag survey read all 29 REITs' raw facts, not a sample**: 19 disposal-gain tags exist, of which
+2 were queried. Two corrections to the alignment report's starting list — **SPG's unqueried tag is a
+single fact** (true that it is unqueried, useless that it is), and **`GainLossOnSaleOfPropertiesNetOfTax`,
+already queried, appears in no REIT at all.**
+
+**Eight tags added, `mode: fallback` kept, and the ordering carries the argument.** Fallback takes the
+first tag reporting a period end and never sums, which is what keeps BXP's 75 pre-tax and 7
+net-of-tax facts for one gain from being added together, and keeps `...PropertyPlantEquipment` — placed
+last — from ever overriding a property-scoped value. Net-of-tax before pre-tax, because FFO starts
+from net income. Sign convention checked on every tag: all gain-positive, 0.5–11% negative, matching
+the two existing ones.
+
+**The two largest candidates were rejected, and they were larger than everything accepted combined.**
+`GainLossOnDispositionOfAssets` and `...Assets1` would have added **+145 TTM values of a possible
++350**. Where a filer reports both them and a property-scoped tag for the same period they disagree
+35-to-11 and 20-to-12, and the disagreements are not small: **AVB's 2011 property gain is 294.8m
+against 13.7m of "assets"; PLD's 2018 Q1 is 656.9m against 195.1m.** That some filers (CPT, KIM) use
+`...Assets1` as a near-synonym makes it worse, not better — a tag meaning the property gain for one
+filer and something else for another cannot be added globally. Also rejected: the
+discontinued-operations family (23 REITs, 998 facts — the largest unqueried tag in the survey, and it
+measures the disposal of a *business*: CCI's 77 entries are its fiber-segment sale), equity-method
+disposals, disposal groups, and `...PropertiesApplicableIncomeTaxes`, which is the tax and not the gain.
+
+**Two one-off ticker overrides were folded in.** FRT and ARE each carried a `GainLossOnSaleOfProperties`
+override adding a single tag the profile list now has. A ticker override *replaces* the profile entry,
+so leaving them would have pinned those two filers to the old, narrower list.
+
+**Class B/C, confirmed from raw facts — a permanent record so the next investigation does not redo it:**
+
+- **VICI — class C.** No gain/loss-on-disposal tag of any kind. 2017 spin-off, triple-net leased.
+- **CCI — class B.** 77 facts, all discontinued-operations: the fiber/small-cell business sale, not
+  depreciable real property.
+- **AMT — class B.** Three facts of `GainLossOnDispositionOfOtherAssets`, named as not-property.
+- **SBAC — class B in effect.** Four PP&E facts and eleven `...Assets1`; yields one quarterly value.
+- **SPG — class B in effect.** One unqueried fact.
+
+**`ffo_gains_source` keeps its two labels.** A third for "confirmed genuine absence" was rejected
+because the label is computed per row at runtime while class B/C is a per-ticker judgement from
+reading raw facts — the pipeline cannot re-derive it and could never notice it going stale. The
+evidence belongs in this entry instead, which is where it now is.
+
+---
+
+## 2026-08-14 — Cross-concept row alignment, and the two remaining silent defaults
+
+Four independent change groups, diffed separately, all computed from **one price capture** (the
+product-cleanup task established `get_price_history` is not bit-reproducible across calls). Full
+derivation in `alignment_and_defaults_report.md`.
+
+**A — a pivot row is not a quarter, and now it is.** `build_valuation_history` joined fourteen
+concepts on an exact end date, so a filer that ends one concept's period a few days from another's
+got the quarter twice, each row half empty and priced at its own close — **193 pairs across 102
+tickers**, `StockholdersEquity` (70) and `CashAndEquivalents` (64) leading, but `Revenue_TTM` the
+straggler in 32, so a two-concept fix would have missed a third of it. Different population from the
+one `merge_duplicate_period_ends` handles: those are twins *within* a concept, these are one quarter
+split *across* concepts, which a per-concept pass cannot see.
+
+**No empty run here either** — the gaps decay 124/22/16/11/9/9/2 from one day to seven with a
+one-day hole at 8 — so the duplicate-ends bound is reused rather than a second one invented: seven
+days, because a fiscal end is the chosen weekday nearest the month end. What measurement *could*
+settle it did: clustering at 7 days yields **193 clusters of exactly two dates, none spanning more
+than 7, zero chains**.
+
+**Two measurements decided the open questions rather than judgement.** 0 of the 193 pairs share a
+concept, so the merge is lossless by construction — 1,423 values read back out of merged rows, 0
+mismatches. And **no ticker has its newest pivot row inside a cluster**, which silences the anchor
+argument that decided the duplicate-ends task and leaves the canonical date to be chosen on where the
+quarter is: **majority, ties to the later**. "Later always" would have relabelled 142 of 193 quarters
+by the position of a single balance-sheet item.
+
+**Fixed in the pivot, not the parser** — the facts frame keeps every date as filed, because CAT
+really did tag `StockholdersEquity` at 2017-01-01. Honest caveat: the split is not purely a pivot
+artefact (228 such pairs exist across all concepts, 193 of them visible in the pivot), so the "it is
+only a join artefact" argument is weaker than it looks; what makes the pivot the right place is that
+in the facts frame both rows are *correct*.
+
+**Result: pivot rows 33,913 → 33,720 (exactly −193), 0 fact values changed, 0 multiples changed,
+anchor 0/0/0, every quality flag unchanged** — and **232 multiples appear** that the split had made
+incomputable (`ev_sales` 99, `ev_fcf` 59, `pb_ratio` 58, `ev_ebitda` 49). Three keys had to be
+snapped together, not one: the first run **lost 53 `buyback_distortion_flag` values** because that
+merge is keyed on the facts frame's dates, caught by the diff.
+
+**B — the line the brief pointed at was a no-op.** `& scale_reference.notna()` does nothing:
+`5.0 < NaN` is already False, so a missing reference already passed. Verified byte-identical output
+with and without it. The measurement then inverted the expected trade-off: ~6,700 values reach a
+guarded metric with no reference, and they are **tamer than the guarded population** (median
+`pe_ratio` 17.2 against 18.7, max 1,783 against 25,466), so "treat as failing" would have deleted the
+better-behaved half.
+
+**So neither blank nor pass: fill the reference.** Every missing reference is a *per-period hole* —
+all 501 tickers report `Revenue_TTM` somewhere — and a scale guard asks an order-of-magnitude
+question a neighbouring period answers. `fill_scale_reference` carries it forward then backward; the
+guard then evaluates and **blanks 27 of ~6,700 (0.4%)**, every one an extreme: VLO's 1,093% effective
+tax rate (the species the TTM report traced), ATO's 8,199% ROE and 812 P/B, MRSH's 3,098% ROTCE,
+VLO's 1,193 P/FCF-ex-SBC. Nothing changed value; only guarded metrics moved.
+
+**C — confirmed not resolvable, and the raw facts make it worse than unresolvable.** The gains term
+is present in only **427 of ~1,836** REIT FFO periods, so 77% of REIT FFO rests on the zero-fill. Of
+those 427, **only 10 are zero** — a filer with no disposals omits the tag rather than tagging zero —
+and the gaps track XBRL tagging practice, not disposal activity (ARE tags from 2013, EQR from 2014,
+O from 2017; all sold property before that). Of the twelve REITs that never produce the term, **ten
+use a `us-gaap` disposal-gain tag the pipeline does not query** (SPG `…BeforeApplicableIncomeTaxes`,
+HST, VTR, WY, AMT, EQIX, SBAC) and three (CPT, IRM, MAA) have a queried tag present that still yields
+nothing; only CCI and VICI have no such tag at all. Where measurable the term moves FFO by a median
+**13.5%**.
+
+**Blanking would delete 77% of REIT FFO and `p_ffo` for twelve REITs over a tag list this task
+excludes**, so the value stands and the assumption is labelled — `ffo_gains_source`
+(`reported` / `imputed_zero`), the same instrument as `ttm_source`. **0 values changed**; the facts
+frame gains a column. The check against the REITs' own published FFO is unavailable: FFO lives in a
+company extension namespace the SEC `companyfacts` API does not return (verified across 15 REITs).
+The real fix, with its evidence, is recorded for the tag task.
+
+**D.1 was not a judgement about REIT economics.** `is_hidden` already resolves `eps_ttm`, `pe_ttm`,
+`EPS_TTM_CALC` and all five `avg_pe_5y` fields to hidden for REITs through
+`_DERIVED_CONCEPT_CONSUMERS`; `pe_to_revenue_growth` was the single missing entry, so the profile
+published a PEG whose numerator it had ruled out. `reit` is the only profile hiding `pe_ratio`, so
+the one-line entry cannot reach elsewhere. **D.2**: `calculate_rolling_average` had zero call sites
+and still carried the row-count window the rolling-window task replaced — removed.
+
+---
+
 ## 2026-08-13 — Product-side cleanup: `ttm_source` rendering, `write_charts`, `p_ffo` snapshot
 
 Three independent product items, no parse-layer change. Full detail in `product_cleanup_report.md`.

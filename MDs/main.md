@@ -129,7 +129,11 @@ After the arithmetic, `melt` reverses the operation — the inverse of `pivot_ta
 
 `.dropna(subset=["value"])` at the end removes rows where a multiple could not be computed (masked denominators, missing inputs), so they simply don't appear rather than showing up as gaps.
 
-**A pivot row is not a quarter.** A row exists wherever *any* of the fourteen needed concepts reported, and a filer can end one concept's period a day or two from another's — CAT tags `StockholdersEquity` at 2017-01-01 and nine other concepts at 2016-12-31. That is 193 extra rows across 102 tickers, and it is why nothing downstream may count rows: `revenue_yoy_growth` and the `avg_*_5y` means both used to, and both were reaching the wrong period. See `rolling_window_report.md`.
+**A pivot row is not a quarter** — it was, until the join key was aligned. A row exists wherever *any* of the fourteen needed concepts reported, and a filer can end one concept's period a day or two from another's — CAT tags `StockholdersEquity` at 2017-01-01 and nine other concepts at 2016-12-31 — which produced 193 doubled rows across 102 tickers. It is why nothing downstream may count rows: `revenue_yoy_growth` and the `avg_*_5y` means both used to, and both were reaching the wrong period (`rolling_window_report.md`).
+
+`canonical_period_ends` now collapses ends within **7 days** onto one date before the pivot: the same bound and the same mechanism as `merge_duplicate_period_ends` (a fiscal end is the chosen weekday nearest the month end, so at most six days from it), verified here to produce 193 clusters of exactly two dates with no chaining. The canonical date is the one carrying the **most** concepts, ties to the later — majority rather than the duplicate-ends task's "later always", because no ticker has its newest pivot row inside a cluster, so the anchor argument that decided that task is silent here.
+
+**This snaps the join key only.** The facts frame keeps every concept's date exactly as filed; there is no evidence the filer was wrong. Three keys are snapped together — the pivot, the `revenue_yoy_growth` merge and the `buyback_distortion_flag` merge — because both of the latter are computed on the facts frame's own dates and would otherwise miss for every quarter whose value sits on the straggler date. Full derivation in `alignment_and_defaults_report.md`.
 
 ### `revenue_yoy_growth`
 

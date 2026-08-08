@@ -16,6 +16,8 @@ from config import (
     TICKERS,
     CONCEPT_CANDIDATES,
     TTM_CONCEPTS,
+    FFO_GAINS_REPORTED,
+    FFO_GAINS_IMPUTED_ZERO,
     PERIOD,
     DATA_DIR,
     FIGURE_DIR,
@@ -48,6 +50,7 @@ from metrics import (
     get_latest_row,
     to_long_format,
     apply_denominator_scale_guard,
+    fill_scale_reference,
     apply_self_relative_scale_guard,
     MIN_DENOMINATOR_SCALE_RATIO,
     MIN_OPERATING_LEVERAGE_REVENUE_GROWTH,
@@ -66,6 +69,7 @@ from quality import print_data_quality
 import os
 import json
 import time
+import numpy as np
 import pandas as pd
 
 from datetime import date, datetime
@@ -156,10 +160,26 @@ def add_derived_concepts(facts: pd.DataFrame) -> pd.DataFrame:
     re_gains = facts[facts["concept"] == "GainLossOnSaleOfProperties_TTM"][["ticker", "end", "value"]].rename(columns={"value": "gains"})
 
     ffo = ni_ffo.merge(dep_ffo, on=["ticker", "end"]).merge(re_gains, on=["ticker", "end"], how="left")
+    # Which of the three terms was actually filed, recorded before the zero-fill hides it.
+    #
+    # The gains term is present for only 427 of ~1,836 REIT FFO periods, so ~77% of every
+    # REIT's FFO history rests on this fillna. Absence is not "no disposals": of the 427
+    # periods that do carry it only 10 are zero, the gaps track XBRL tagging practice rather
+    # than disposal activity (ARE tags from 2013, EQR from 2014, O from 2017 -- all of them
+    # sold property before that), and of the twelve REITs that never produce the term, ten
+    # use a us-gaap disposal-gain tag this pipeline does not query. Where the term is
+    # measurable it moves FFO by a median 13.5%.
+    #
+    # The two cases cannot be separated from the pipeline's own output, and blanking FFO_TTM
+    # where the term is unknown would delete three quarters of REIT FFO history -- and p_ffo
+    # for twelve REITs entirely -- over a tag list. So the value stands and the assumption is
+    # labelled, the same instrument ttm_source uses.
+    ffo["ffo_gains_source"] = np.where(ffo["gains"].notna(), FFO_GAINS_REPORTED, FFO_GAINS_IMPUTED_ZERO)
     ffo["gains"] = ffo["gains"].fillna(0)
     ffo["value"] = ffo["ni"] + ffo["dep"] - ffo["gains"]
     ffo["concept"] = "FFO_TTM"
-    facts = pd.concat([facts, ffo[["ticker", "end", "concept", "value"]]], ignore_index=True)
+    facts = pd.concat(
+        [facts, ffo[["ticker", "end", "concept", "value", "ffo_gains_source"]]], ignore_index=True)
 
     return facts
 
@@ -771,6 +791,50 @@ def calculate_peer_band_flags(
     return pd.concat(out, ignore_index=True)
 
 
+# A pivot row is not a quarter. build_valuation_history joins fourteen concepts on an
+# exact end date, and a filer can end one concept's period a few days from another's --
+# CAT tags StockholdersEquity at 2017-01-01 and nine other concepts at 2016-12-31 -- so the
+# join emits the quarter twice, each row partly empty and priced at its own close.
+#
+# Seven days is merge_duplicate_period_ends' bound, reused rather than re-derived, and for
+# the same mechanism: a fiscal period end is the chosen weekday nearest the month end, so it
+# sits at most six days from it. The measured distribution has no empty run to take a bound
+# from either -- 193 pairs decaying 124/22/16/11/9/9/2 from one day to seven -- but it does
+# confirm the bound holds: every one of the 193 clusters contains exactly two dates and none
+# spans more than 7 days, so the rule cannot chain.
+_PIVOT_ALIGN_MAX_GAP_DAYS = 7
+
+
+def canonical_period_ends(facts: pd.DataFrame, concepts: list[str],
+                          max_gap_days: int = _PIVOT_ALIGN_MAX_GAP_DAYS) -> pd.DataFrame:
+    """(ticker, end) -> canonical_end, collapsing ends within `max_gap_days` of each other.
+
+    The canonical date is the one carrying the **most** of `concepts`, ties going to the
+    later date.
+
+    Majority rather than the duplicate-ends task's "later always", because that task's
+    deciding argument does not apply here: it chose the later end to protect the anchor
+    invariant, and measured over this frame **no ticker has its newest pivot row inside a
+    cluster**, so neither rule can move an anchor. What is left is where the quarter
+    actually is -- in 149 of 193 clusters exactly one concept is the straggler, and in 142
+    it is the straggler that carries the later date. "Later always" would relabel 142
+    quarters by the position of a single balance-sheet item.
+
+    This snaps the join key only. The facts frame keeps every concept's date exactly as
+    filed, because there is no evidence the filer was wrong: CAT really did tag
+    StockholdersEquity at 2017-01-01.
+    """
+    sub = facts[facts["concept"].isin(concepts)]
+    counts = (sub.groupby(["ticker", "end"])["concept"].nunique()
+              .rename("n_concepts").reset_index().sort_values(["ticker", "end"]))
+    step = counts.groupby("ticker")["end"].diff().dt.days
+    counts["_cluster"] = (step.isna() | (step > max_gap_days)).cumsum()
+    # sort by (count, date) and take the last: majority wins, the later date breaks a tie
+    canonical = (counts.sort_values(["_cluster", "n_concepts", "end"])
+                 .groupby("_cluster")["end"].last().rename("canonical_end"))
+    return counts.merge(canonical, on="_cluster")[["ticker", "end", "canonical_end"]]
+
+
 def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame, prices: pd.DataFrame) -> pd.DataFrame:
     needed = [
         "EPS_TTM_CALC",
@@ -789,8 +853,20 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame, pr
         "ShareBasedCompensation_TTM",
     ]
 
+    canonical = canonical_period_ends(facts, needed)
+
+    aligned = facts[facts["concept"].isin(needed)].merge(canonical, on=["ticker", "end"], how="left")
+    aligned["_filed_end"] = aligned["end"]
+    aligned["end"] = aligned["canonical_end"].fillna(aligned["end"])
+    # 0 of the 193 clusters have the two dates sharing a concept, so this drops nothing today;
+    # it is here so that a future overlap resolves the same way merge_duplicate_period_ends does
+    # -- the later filed date wins -- rather than by whatever pivot_table's default aggregation
+    # would have averaged.
+    aligned = (aligned.sort_values(["ticker", "end", "concept", "_filed_end"])
+               .drop_duplicates(subset=["ticker", "end", "concept"], keep="last"))
+
     wide = (
-    facts[facts["concept"].isin(needed)]
+    aligned
     .pivot_table(index=["ticker", "end"], columns="concept", values="value")
     .reset_index()
 )
@@ -814,6 +890,11 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame, pr
     # is the same date-based lookup metrics["revenue_growth"] and the snapshot's PEG already
     # use; this was the one place computing the quantity a second, different way.
     growth = calculate_growth(facts, "Revenue_TTM", 4, "revenue_yoy_growth")
+    # onto the same canonical key, or the merge would miss for every quarter whose Revenue_TTM
+    # sits on the straggler date -- 32 of the 193 clusters have Revenue_TTM in the minority
+    growth = growth.merge(canonical, on=["ticker", "end"], how="left")
+    growth["end"] = growth["canonical_end"].fillna(growth["end"])
+    growth = growth.sort_values(["ticker", "end"]).drop_duplicates(subset=["ticker", "end"], keep="last")
     wide = wide.merge(growth[["ticker", "end", "revenue_yoy_growth"]], on=["ticker", "end"], how="left")
 
     shares_outstanding_count = wide.groupby("ticker")["SharesOutstanding"].transform("count")
@@ -844,6 +925,10 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame, pr
     wide["p_ffo"] = wide["market_cap"] / wide["FFO_TTM"].where(wide["FFO_TTM"] > 0)
 
     implied_earnings_ttm = wide["EPS_TTM_CALC"] * shares_for_market_cap
+    # carried across the periods where the filer did not report revenue, so the guard can
+    # evaluate instead of passing by default -- 1,906 pb_ratio values and 954 p_tbv values
+    # reached it unguarded, on tickers that all report revenue in other periods
+    revenue_scale = fill_scale_reference(wide, "Revenue_TTM")
     for col, denominator in [
         ("pe_ratio", implied_earnings_ttm),
         ("pb_ratio", wide["StockholdersEquity"]),
@@ -857,14 +942,21 @@ def build_valuation_history(facts: pd.DataFrame, price_history: pd.DataFrame, pr
         ("p_ffo", wide["FFO_TTM"]),
     ]:
         wide[col] = apply_denominator_scale_guard(
-            wide[col], denominator, wide["Revenue_TTM"], MIN_VALUATION_DENOMINATOR_SCALE_RATIO
+            wide[col], denominator, revenue_scale, MIN_VALUATION_DENOMINATOR_SCALE_RATIO
         )
 
     wide["pe_to_revenue_growth"] = wide["pe_ratio"] / (wide["revenue_yoy_growth"] * 100)
     wide["pe_to_revenue_growth"] = wide["pe_to_revenue_growth"].where(wide["revenue_yoy_growth"] > MIN_PEG_REVENUE_GROWTH)
     wide["pe_to_revenue_growth"] = wide["pe_to_revenue_growth"].where(wide["pe_to_revenue_growth"].abs() <= MAX_PEG_RATIO_ABS)
 
-    wide = wide.merge(calculate_buyback_distortion_flag(facts), on=["ticker", "end"], how="left")
+    # onto the canonical key as well: the flag is computed on the facts frame's own dates, and
+    # without this it is lost for every row whose flag sits on the straggler date (53 of them)
+    buyback = calculate_buyback_distortion_flag(facts).merge(canonical, on=["ticker", "end"], how="left")
+    buyback["end"] = buyback["canonical_end"].fillna(buyback["end"])
+    buyback = (buyback.sort_values(["ticker", "end"])
+               .drop_duplicates(subset=["ticker", "end"], keep="last")
+               .drop(columns="canonical_end"))
+    wide = wide.merge(buyback, on=["ticker", "end"], how="left")
 
     value_cols = ["pe_ratio", "pb_ratio", "pfcf_ratio", "ev_fcf", "pfcf_ex_sbc", "ev_ebitda", "ev_sales", "dividend_yield", "p_tbv", "p_ppnr", "p_core_earnings", "pe_to_revenue_growth", "p_ffo", "buyback_distortion_flag"]
 
@@ -973,6 +1065,14 @@ def build_snapshot(
 
     eps = get_latest_value(facts, "EPS_TTM_CALC").rename(columns={"value": "eps_ttm"})
     revenue = get_latest_value(facts, "Revenue_TTM").rename(columns={"value": "revenue_ttm"})
+    # The scale guard's reference, separately from the published revenue_ttm: the newest period
+    # a filer actually reported revenue in, rather than the newest row of the concept. Four
+    # tickers (EA, OXY, PSKY, TAP) have a trailing null there and reached the guard unguarded.
+    # Deliberately not routed through revenue_ttm itself -- how get_latest_value treats a
+    # trailing null is a separate question this task does not open.
+    revenue_scale = get_latest_value(
+        facts[facts["value"].notna()], "Revenue_TTM"
+    ).rename(columns={"value": "_revenue_scale"})[["ticker", "_revenue_scale"]]
     dividends = get_latest_value(facts, "DividendsPerShare_TTM").rename(columns={"value": "dividends_ttm"})
 
     fcf = get_latest_row(metrics["fcf"]).rename(columns={"fcf": "fcf_ttm"})
@@ -1022,6 +1122,7 @@ def build_snapshot(
         (fcf, ["ticker", "fcf_ttm"]),
         (ebitda, ["ticker", "ebitda_ttm"]),
         (revenue, ["ticker", "revenue_ttm"]),
+        (revenue_scale, ["ticker", "_revenue_scale"]),
         (dividends, ["ticker", "dividends_ttm"]),
         (debt, ["ticker", "debt"]),
         (cash, ["ticker", "cash"]),
@@ -1077,7 +1178,7 @@ def build_snapshot(
 
     snap["pe_ttm"] = snap["price"] / snap["eps_ttm"]
     snap["pb_ratio"] = apply_denominator_scale_guard(
-        snap["market_cap"] / snap["equity"], snap["equity"], snap["revenue_ttm"], MIN_DENOMINATOR_SCALE_RATIO
+        snap["market_cap"] / snap["equity"], snap["equity"], snap["_revenue_scale"], MIN_DENOMINATOR_SCALE_RATIO
     )
 
     snap["pb_ratio"] = snap["pb_ratio"].where(~(snap["tangible_equity"] < 0))
@@ -1090,7 +1191,7 @@ def build_snapshot(
     snap["pe_to_revenue_growth"] = snap["pe_to_revenue_growth"].where(snap["pe_to_revenue_growth"].abs() <= MAX_PEG_RATIO_ABS)
     snap["dividend_yield"] = snap["dividends_ttm"] / snap["price"]
     snap["p_tbv"] = apply_denominator_scale_guard(
-        snap["market_cap"] / snap["tangible_equity"], snap["tangible_equity"], snap["revenue_ttm"], MIN_DENOMINATOR_SCALE_RATIO
+        snap["market_cap"] / snap["tangible_equity"], snap["tangible_equity"], snap["_revenue_scale"], MIN_DENOMINATOR_SCALE_RATIO
     )
     snap["p_ppnr"] = snap["market_cap"] / snap["ppnr_ttm"]
     snap["p_core_earnings"] = snap["market_cap"] / snap["core_earnings_ttm"]
@@ -1103,18 +1204,18 @@ def build_snapshot(
     # multiple its whole profile is built around.
     snap["p_ffo"] = apply_denominator_scale_guard(
         snap["market_cap"] / snap["ffo_ttm"].where(snap["ffo_ttm"] > 0),
-        snap["ffo_ttm"], snap["revenue_ttm"], MIN_VALUATION_DENOMINATOR_SCALE_RATIO
+        snap["ffo_ttm"], snap["_revenue_scale"], MIN_VALUATION_DENOMINATOR_SCALE_RATIO
     )
     snap["ev_fcf"] = apply_denominator_scale_guard(
         snap["ev"] / snap["fcf_ttm"].where(snap["fcf_ttm"] > 0),
-        snap["fcf_ttm"], snap["revenue_ttm"], MIN_VALUATION_DENOMINATOR_SCALE_RATIO
+        snap["fcf_ttm"], snap["_revenue_scale"], MIN_VALUATION_DENOMINATOR_SCALE_RATIO
     )
     owner_fcf = snap["fcf_ttm"] - snap["sbc_ttm"]
     snap["pfcf_ex_sbc"] = apply_denominator_scale_guard(
         snap["market_cap"] / owner_fcf.where(owner_fcf > 0),
-        owner_fcf, snap["revenue_ttm"], MIN_VALUATION_DENOMINATOR_SCALE_RATIO
+        owner_fcf, snap["_revenue_scale"], MIN_VALUATION_DENOMINATOR_SCALE_RATIO
     )
-    snap = snap.drop(columns=["ffo_ttm", "sbc_ttm"])
+    snap = snap.drop(columns=["ffo_ttm", "sbc_ttm", "_revenue_scale"])
 
     snap = snap.rename(columns={"pe_ttm": "pe_ratio", "pfcf_ttm": "pfcf_ratio"})
 

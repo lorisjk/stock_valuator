@@ -213,6 +213,14 @@ TTM_CONCEPTS = [
 TTM_SOURCE_ROLLING = "quarterly_rolling"   # four consecutive quarters summed
 TTM_SOURCE_ANNUAL = "annual_fact"          # one 12-month fact, taken as filed
 
+# How FFO_TTM's real-estate-gains term was obtained. Same instrument as ttm_source
+# and for the same reason: the term is absent for roughly 77% of REIT FFO periods
+# and is filled with zero, which asserts "no disposals" from "not extracted". The
+# two cannot be told apart from the pipeline's own output, so the assumption is
+# recorded rather than hidden. See alignment_and_defaults_report.md.
+FFO_GAINS_REPORTED = "reported"            # a filed GainLossOnSaleOfProperties_TTM
+FFO_GAINS_IMPUTED_ZERO = "imputed_zero"    # no fact found; zero assumed
+
 SEARCH_HINTS = {
     "Revenue": ["revenue", "salesrevenue"],
     "NetIncomeLoss": ["netincome"],
@@ -1412,12 +1420,37 @@ PROFILE_CONCEPT_OVERRIDES = {
             "point_in_time": False,
             "mode": "fallback",
         },
+        # NAREIT FFO removes gains on sales of *depreciable real property*, so every tag
+        # here has to measure that and nothing wider. Ordered by scope, and `fallback`
+        # takes the first tag that reports a given period end -- it never sums -- which
+        # is what keeps a filer's pre-tax and net-of-tax figures for one gain from being
+        # added together, and keeps the last entry from overriding a property-scoped one.
+        #
+        # Rejected on the evidence, not for tidiness: GainLossOnDispositionOfAssets and
+        # GainLossOnDispositionOfAssets1 would have contributed more TTM values than every
+        # accepted tag combined (+145 of +350) and measure something else -- AVB tags a
+        # 2011 property gain of 294.8m and 13.7m of "assets", PLD 656.9m against 195.1m.
+        # See ffo_gains_report.md.
         "GainLossOnSaleOfProperties": {
             "tags": [
                 "GainLossOnSaleOfProperties",
                 "GainsLossesOnSalesOfInvestmentRealEstate",
                 "GainLossOnSaleOfPropertiesNetOfTax",
                 "GainLossOnDispositionOfRealEstate",
+                # net-of-tax before pre-tax: FFO starts from net income, so the figure that
+                # flowed through it is the consistent one (and it is 8 REITs against 3)
+                "GainLossOnSaleOfPropertiesNetOfApplicableIncomeTaxes",
+                "GainLossOnSaleOfPropertiesBeforeApplicableIncomeTaxes",
+                "GainLossOnDispositionOfRealEstateDiscontinuedOperations",
+                "GainsLossesOnSalesOfOtherRealEstate",
+                "GainLossOnDispositionOfProperty",
+                "GainLossOnSaleOfProperty",
+                "GainLossOnSaleOfTimberProperty",
+                # last: for a data-centre, tower or storage REIT the operating real estate
+                # is tagged as PP&E, and where a property-scoped tag also reports the period
+                # the two agree to rounding (DLR, 9 of 9). Placed last so it only ever fills
+                # a period nothing above it reported.
+                "GainLossOnSaleOfPropertyPlantEquipment",
             ],
             "point_in_time": False,
             "mode": "fallback",
@@ -1619,17 +1652,10 @@ TICKER_CONCEPT_OVERRIDES = {
             "point_in_time": True,
             "mode": "fallback",
         },
-        "GainLossOnSaleOfProperties": {
-            "tags": [
-                "GainLossOnSaleOfProperties",
-                "GainsLossesOnSalesOfInvestmentRealEstate",
-                "GainLossOnSaleOfPropertiesNetOfTax",
-                "GainLossOnDispositionOfRealEstate",
-                "GainLossOnSaleOfPropertiesNetOfApplicableIncomeTaxes",
-            ],
-            "point_in_time": False,
-            "mode": "fallback",
-        },
+        # GainLossOnSaleOfProperties stood here: a one-off adding a single tag that the
+        # reit profile's list now carries for every REIT. A ticker override replaces the
+        # profile entry outright, so leaving it would have pinned this filer to the old,
+        # narrower list.
     },
     "CMG": {
         "Revenue": {
@@ -1771,17 +1797,10 @@ TICKER_CONCEPT_OVERRIDES = {
         },
     },
     "ARE": {
-        "GainLossOnSaleOfProperties": {
-            "tags": [
-                "GainLossOnSaleOfProperties",
-                "GainsLossesOnSalesOfInvestmentRealEstate",
-                "GainLossOnSaleOfPropertiesNetOfTax",
-                "GainLossOnDispositionOfRealEstate",
-                "GainLossOnDispositionOfRealEstateDiscontinuedOperations",
-            ],
-            "point_in_time": False,
-            "mode": "fallback",
-        },
+        # GainLossOnSaleOfProperties stood here: a one-off adding a single tag that the
+        # reit profile's list now carries for every REIT. A ticker override replaces the
+        # profile entry outright, so leaving it would have pinned this filer to the old,
+        # narrower list.
     },
     "TGT": {
         "AccountsReceivable": {
@@ -1881,6 +1900,11 @@ _DERIVED_CONCEPT_CONSUMERS = {
     "avg_pe_5y_diverges": ["pe_ratio"],
     "avg_pe_5y_n": ["pe_ratio"],
     "avg_pe_5y_history_too_short": ["pe_ratio"],
+    # A P/E with a denominator attached is still a P/E. Every other thing built on GAAP
+    # earnings already resolves through this map -- eps_ttm, pe_ttm, EPS_TTM_CALC and the
+    # five avg_pe_5y fields above -- and pe_to_revenue_growth was the one that did not, so
+    # the reit profile published a PEG whose numerator it had decided is not meaningful.
+    "pe_to_revenue_growth": ["pe_ratio"],
     "avg_pfcf_5y": ["pfcf_ratio"],
     "avg_pfcf_5y_median": ["pfcf_ratio"],
     "avg_pfcf_5y_diverges": ["pfcf_ratio"],
@@ -1982,6 +2006,7 @@ FIGURE_DIR = "figures"
 CHART_FUNDAMENTALS = "fundamentals"
 CHART_VALUATION = "valuation"
 CHART_GROWTH = "growth"
+CHART_RAW_FACTS = "raw_facts"
 
 # What an id in a given chart actually names, and which dataframe column holds
 # its values. Declared once rather than repeated on 45 entries, but reachable
@@ -1990,6 +2015,7 @@ CHART_SPECS = {
     CHART_FUNDAMENTALS: {"id_namespace": "metric", "value_column": "value"},
     CHART_VALUATION: {"id_namespace": "metric", "value_column": "value"},
     CHART_GROWTH: {"id_namespace": "xbrl_concept", "value_column": "yoy_growth"},
+    CHART_RAW_FACTS: {"id_namespace": "xbrl_concept", "value_column": "value"},
 }
 
 # `label` is the string rendered onto the chart today and must stay byte-identical.
@@ -2228,8 +2254,7 @@ METRICS = [
     Metric("p_ffo", CHART_VALUATION, "P/FFO (TTM)", None, harmonic=True,
            description="The REIT equivalent of P/E, using funds from operations because property "
                        "depreciation is an accounting charge rather than an economic one.",
-           formula="market cap / `FFO_TTM` (see FFO Margin for the FFO build-up). No snapshot "
-                   "marker appears on this panel -- build_snapshot does not compute p_ffo."),
+           formula="market cap / `FFO_TTM` (see FFO Margin for the FFO build-up). "),
     Metric("pe_to_revenue_growth", CHART_VALUATION, "PE to Revenue Growth", None,
            description="A PEG-style ratio: the P/E divided by the growth rate that justifies it. "
                        "Below 1 is the conventional 'growth is cheap' threshold.",
@@ -2289,7 +2314,13 @@ METRICS = [
            description="Growth in a REIT's funds from operations.",
            formula="`NetIncomeLoss_TTM` + `DepreciationAndAmortization_TTM` − "
                    "`GainLossOnSaleOfProperties_TTM`."),
-]
+
+   
+
+    ]
+
+
+
 
 # Documented once and referenced by every growth panel, rather than repeated on ten
 # entries. Read off calculate_growth() and main.add_growth_column().
@@ -2452,6 +2483,8 @@ VALUATIONS_TO_PLOT = [
 ]
 
 GROWTH_PANELS = [(m.id, m.label) for m in _metrics_for(CHART_GROWTH)]
+
+
 
 QUARTERLY_COUNTERPART = {m.id: f"{m.id}_quarterly" for m in METRICS if m.quarterly}
 

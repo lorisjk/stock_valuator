@@ -28,7 +28,6 @@ The functions are deliberately generic. There is no `calculate_operating_margin(
 |---|---|
 | `calculate_ttm` | Rolling four-quarter sum |
 | `calculate_rolling_harmonic_stats` | Harmonic mean, median and count over a calendar window |
-| `calculate_rolling_average` | Rolling mean over *n* periods — no callers |
 
 ### Selection and reshaping
 
@@ -80,6 +79,14 @@ Same idea, but optional — because it is not always appropriate.
 
 The distinction is whether a broken **denominator** makes the metric undefined, or whether a negative **result** is a legitimate outcome.
 
+### `apply_denominator_scale_guard` and `fill_scale_reference`
+
+A third kind of broken denominator: one that is *present and positive* but far too small to be the denominator of this business — a $40k equity balance under a $60bn market cap. The guard blanks the ratio when `|denominator| < ratio × |scale reference|`, the reference normally being `Revenue_TTM`.
+
+**A missing reference cannot fire the guard**, and that is a property of the comparison, not a policy: `denominator < ratio × NaN` is `False`, so the value passes. There used to be an explicit `& scale_reference.notna()` on that line; it was a no-op and is gone.
+
+So the reference is filled instead of the behaviour being chosen. `fill_scale_reference` carries a ticker's reference forward, then backward for a leading hole. This is sound because the guard asks an order-of-magnitude question, which a neighbouring period's revenue answers as well as the absent one would — and it is what the data called for: ~6,700 values reached a guarded metric with no reference, and **every one was a per-period hole on a ticker that reports revenue elsewhere**. Once the guard could evaluate them it blanked 27 — VLO's 1,093% tax rate, ATO's 8,199% ROE, a P/B of 812 — and left the rest, which measured *tamer* than the population the guard was already passing. Derivation in `alignment_and_defaults_report.md`.
+
 ---
 
 ## `calculate_ttm` and why it matters
@@ -99,7 +106,11 @@ Every ratio metric in this project is therefore built on `_TTM` concepts. The ex
 
 **`.rolling(4)` sums four *rows*, and four rows are twelve months only if the series has no hole.** On a thin concept the four nearest available values can span years — JBL once had a `StockIssued_TTM` built from ends 2013-08-31 / 2014-05-31 / 2015-05-31 / 2016-05-31. So the window is checked against the calendar before the sum is kept: the outer ends must be 248–333 days apart and every step between adjacent rows 76–137 days. Both bounds are the midpoint of an empty run in the measured distribution of all 333,737 windows — the band is wide enough for 52/53-week filers (12- and 16-week quarters, 53-week years) and fiscal-year-end changes, and 58 days clear of the nearest window that skips a quarter. A window that fails yields no value rather than a wrong one; 4.4% of them do. Derivation in `ttm_window_report.md`.
 
-**A 12-month fact at a fiscal year end is the TTM value at that date, not an approximation of it.** For a filer that discloses an item only once a year there is nothing for `decumulate_period_values` to difference, so the quarterly pipeline gets zero and the rolling window has no rows at all. `parse_edgar.annual_ttm_values` takes such facts directly. It runs *only* where the quarterly extraction produced nothing, which is what keeps the two paths from ever writing the same date — disjoint by construction rather than by a runtime check. Which path produced a value is recorded in the facts frame's `ttm_source` column (`quarterly_rolling` / `annual_fact`), so a series that mixes cadences does not look uniform.
+**A 12-month fact at a fiscal year end is the TTM value at that date, not an approximation of it.** For a filer that discloses an item only once a year there is nothing for `decumulate_period_values` to difference, so the quarterly pipeline gets zero and the rolling window has no rows at all. `parse_edgar.annual_ttm_values` takes such facts directly.
+
+**It runs where the rolling path produces no TTM value for the series** — not, as it once did, where no quarterly *fact* exists. That older test was too coarse for a concept reported **on occurrence** rather than every period: BDX tags 55 quarterly `DividendsPerShare` values that are never four consecutive quarters, and their existence alone discarded the annual facts. Gating on the rolling path's output instead recovers 343 values across 77 (ticker, concept) pairs. Deliberately per *series*, not per date — 81% of what per-date gating would add is annual-only history predating quarterly tagging, and 81,505 annual facts land on dates the rolling path already holds. Derivation in `annual_path_gate_report.md`.
+
+The two paths therefore stay disjoint per series, which matters because they are **concatenated, not merged**: a collision would put two rows at one `(ticker, concept, end)` and `pivot_table` would average them. Which path produced a value is recorded in the facts frame's `ttm_source` column (`quarterly_rolling` / `annual_fact`), and under this rule it is a per-series constant rather than a per-value one.
 
 ---
 
@@ -128,7 +139,8 @@ Two consequences worth knowing:
   window a masked multiple consumed a slot, and since the seven multiples share one pivot row set,
   one quarter missing from any of the fourteen needed concepts cost all seven means a slot.
 
-`calculate_rolling_average` is the arithmetic sibling and has no callers.
+`calculate_rolling_average`, the arithmetic sibling, has been removed — zero call sites since it was
+written, and it still carried the row-count window this function no longer uses.
 
 ---
 

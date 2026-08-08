@@ -864,20 +864,56 @@ def merge_duplicate_period_ends(values: list[dict]) -> list[dict]:
     return kept
 
 
+def _forms_no_ttm_window(quarterly_values: list[dict]) -> bool:
+    """True when `calculate_ttm` could not build a single window from these values.
+
+    Asked of the quarterly path's *output* rather than its input. The old test was
+    `if quarterly_values` -- whether any quarterly fact exists at all -- and that is
+    too coarse for a concept reported **on occurrence** rather than every period.
+    Camden tags a property-disposal gain in the quarters it sells something: five
+    values 90, 275, 182 and 92 days apart, which form no four-consecutive-quarter
+    window, and whose mere existence disabled the thirteen annual facts that would
+    have produced thirteen values.
+
+    Evaluated on the pre-mask values, deliberately, and that is safe in one
+    direction only: the masks further down `build_dataframe` remove rows, which can
+    only widen the steps between the survivors and so can only *break* a window,
+    never create one. A window that does not exist here cannot appear later, so this
+    can never let both paths reach the same date. The reverse -- a window that exists
+    here and is masked away later -- costs a recovery, not a collision.
+    """
+    if not quarterly_values:
+        return True
+    from metrics import calculate_ttm      # local: keeps module import order unchanged
+    frame = pd.DataFrame([
+        {"ticker": "_", "concept": "_", "end": pd.Timestamp(v["end"]), "value": v["value"]}
+        for v in quarterly_values
+    ])
+    return not calculate_ttm(frame, "_", "_ttm")["_ttm"].notna().any()
+
+
 def annual_ttm_values(us_gaap_data: dict, cfg: dict, quarterly_values: list[dict]) -> list[dict]:
-    """The 12-month facts of a filer that discloses this item only once a year.
+    """The 12-month facts of a filer whose quarterly facts cannot produce a TTM value.
 
     A 12-month fact at a fiscal year end *is* the trailing-twelve-month value at
     that date -- not an approximation of it -- so it is taken as filed.
 
-    The boundary against `decumulate_period_values`: this runs only where the
-    quarterly extraction produced nothing at all. Such a filer has no sub-annual
-    year-to-date point to difference, which is both why the quarterly pipeline
-    gets zero and why the rolling window has no rows to roll over. The two paths
-    are therefore disjoint by construction rather than by a runtime check --
-    neither can write a value at a date the other reaches.
+    The boundary against the rolling path: this runs only where that path yields
+    **no TTM value for the series at all**, so the two remain disjoint per series,
+    not merely per filer. Measured over all 501 tickers and 25 TTM concepts, that is
+    77 (ticker, concept) pairs on 57 tickers carrying 343 annual facts that the older
+    test discarded -- concentrated in the concepts filers report on occurrence
+    (StockRepurchased 17, StockIssued 16, DividendsPerShare 14, ShareBasedCompensation 8).
+
+    Deliberately *not* per date. 5,789 pairs have annual facts at dates the rolling
+    path does not reach, but 81% of those dates precede its first value -- annual-only
+    XBRL history from 2008-2010 -- and only 11% are interior holes, while 81,505
+    annual facts land on dates the rolling path already holds. Gating per date would
+    turn a structural guarantee into a tie-break exercised 81,505 times, to prepend a
+    decade of annual points to series that are otherwise quarterly. See
+    annual_path_gate_report.md.
     """
-    if quarterly_values:
+    if not _forms_no_ttm_window(quarterly_values):
         return []
     return merge_duplicate_period_ends(extract_with_mode(us_gaap_data, cfg, "annual"))
 

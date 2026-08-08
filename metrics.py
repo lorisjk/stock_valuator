@@ -39,9 +39,45 @@ def apply_denominator_scale_guard(
     scale_reference: pd.Series,
     min_denominator_scale_ratio: float,
 ) -> pd.Series:
+    """Blank a ratio whose denominator is too small to be a denominator.
+
+    **A missing reference cannot fire this guard**, and that is a property of the
+    comparison rather than a choice: `denominator < ratio * NaN` is False, so the value
+    passes unguarded. The `& scale_reference.notna()` that used to stand here was a no-op --
+    verified, byte-identical output with and without it -- so removing it changes nothing
+    and stating the property is more use than restating it in code.
+
+    Callers hand in a reference already carried across the periods where the filer did not
+    report it (`fill_scale_reference`). Measured over the guarded metrics, that covers the
+    whole exposure: ~6,700 values reached a guarded metric with no reference, and every one
+    was a per-period hole on a ticker that reports revenue elsewhere. What still arrives
+    missing is missing for a whole ticker, and there is nothing to compare against.
+    """
     too_small = denominator.abs() < min_denominator_scale_ratio * scale_reference.abs()
-    too_small = too_small & scale_reference.notna()
     return ratio.where(~too_small)
+
+
+def fill_scale_reference(
+    frame: pd.DataFrame,
+    reference_col: str,
+    ticker_col: str = "ticker",
+    date_col: str = "end",
+) -> pd.Series:
+    """A ticker's scale reference carried into the periods where it is missing.
+
+    A scale guard asks an order-of-magnitude question -- "is this denominator less than 1% of
+    the business" -- so a neighbouring period's revenue answers it as well as the absent one
+    would. Forward first, then backward for a leading hole, so a period is measured against
+    the nearest year the filer actually reported.
+
+    This is what lets the guard evaluate instead of silently passing, without blanking values
+    it was never given the chance to judge: the unguarded population is measurably *tamer*
+    than the guarded one (median pe_ratio 17.2 against 18.7, max 1,783 against 25,466), so
+    treating "cannot evaluate" as "fails" would have deleted the better-behaved half.
+    """
+    work = frame[[ticker_col, date_col, reference_col]].sort_values([ticker_col, date_col])
+    filled = work.groupby(ticker_col)[reference_col].ffill().bfill()
+    return filled.reindex(frame.index)
 
 
 def apply_self_relative_scale_guard(
@@ -137,7 +173,8 @@ def calculate_ratio(
         )
         merged = pd.merge(merged, scale, on=["ticker", "end"], how="left")
         merged[result_name] = apply_denominator_scale_guard(
-            merged[result_name], merged[denominator_col], merged["_scale_ref"], min_denominator_scale_ratio
+            merged[result_name], merged[denominator_col],
+            fill_scale_reference(merged, "_scale_ref"), min_denominator_scale_ratio
         )
 
     return merged[["ticker", "end", result_name]]
@@ -257,17 +294,11 @@ def calculate_ttm(df: pd.DataFrame, concept: str, result_name: str) -> pd.DataFr
     return filtered_df[["ticker", "end", result_name]]
 
 
-def calculate_rolling_average(df: pd.DataFrame, value_col: str, window: int, result_name: str) -> pd.DataFrame:
-    df = df.sort_values(["ticker", "end"]).copy()
-
-    df[result_name] = (
-        df.groupby("ticker")[value_col]
-        .rolling(window=window, min_periods=1)
-        .mean()
-        .reset_index(level=0, drop=True)
-    )
-
-    return df[["ticker", "end", result_name]]
+# calculate_rolling_average stood here: the arithmetic sibling of
+# calculate_rolling_harmonic_stats, with zero call sites anywhere in the project since it
+# was written. It also carried the row-count window that the rolling-window task replaced
+# with a calendar one, so leaving it would have left a second, wrong convention in reach of
+# the next person who needed a rolling mean.
 
 
 def harmonic_mean(values: pd.Series) -> float:

@@ -8,7 +8,7 @@ from plotly.subplots import make_subplots
 from config import (
     is_hidden, FUNDAMENTALS_TO_PLOT, QUARTERLY_COUNTERPART, GROWTH_PANELS,
     VALUATIONS_TO_PLOT, HARMONIC_MEAN_CONCEPTS, TICKER_PROFILES, DEFAULT_PROFILE,
-    METRICS_BY_ID, CHART_VALUATION,
+    METRICS_BY_ID, CHART_VALUATION, CHART_RAW_FACTS, CHART_GROWTH
 )
 from metrics import harmonic_mean
 
@@ -818,6 +818,7 @@ def build_ticker_comparison(
     )
     return fig, excluded
 
+NOT_NEEDED_ENDING = ["_TTM"]
 
 def plot_ticker_comparison(
     tickers: list[str],
@@ -837,3 +838,52 @@ def plot_ticker_comparison(
     if fig is None:
         return
     _write_figure(fig, output_path)
+
+
+def build_raw_facts(
+    ticker: str,
+    facts: pd.DataFrame,
+    concepts: list[str] | None = None,
+    width: int | None = KEEP,
+    height: int | None = KEEP,
+) -> go.Figure | None:
+    """Build the raw facts grid. None when there is nothing to draw.
+
+    `concepts` narrows the panel set (None = everything the config shows).
+    `width`/`height` keep the historical 500*cols / 330*rows unless given; pass
+    width=None for a figure with no width in its layout, which is what a
+    responsive frontend needs.
+    """
+
+    concepts_to_plot = _select_concepts(ticker, CHART_RAW_FACTS, concepts)
+
+    if not concepts_to_plot:
+        print(f"[build_raw_facts] {ticker}: no visible panels, nothing to build.")
+        return None
+
+    rows, cols = _make_grid(len(concepts_to_plot))
+    fig = _make_subplot_figure(rows, cols, [c[0] for c in concepts_to_plot])
+
+    for idx, (concept, ylabel) in enumerate(concepts_to_plot):
+        r, c = idx // cols + 1, idx % cols + 1
+        plot_metric(fig, r, c, facts, ticker, concept, ylabel)
+
+    fig.update_layout(
+        title_text=f"Raw Facts {ticker}",
+        **_size(width, height, 500 * cols, 330 * rows),
+        legend=dict(font=dict(size=9)),
+    )
+    return fig
+
+def plot_raw_facts(
+    ticker: str,
+    facts: pd.DataFrame,
+    output_path: str,
+    concepts: list[str] | None = None,
+    write_html: bool = False,
+) -> None:
+    """File-writing wrapper around build_raw_facts."""
+    fig = build_raw_facts(ticker, facts, concepts)
+    if fig is None:
+        return
+    _write_figure(fig, output_path, write_html)
