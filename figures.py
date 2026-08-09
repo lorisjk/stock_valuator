@@ -453,6 +453,7 @@ def plot_metric_dual(
 def build_fundamentals(
     ticker: str,
     metrics_long: pd.DataFrame,
+    years: int = 15,
     concepts: list[str] | None = None,
     width: int | None = KEEP,
     height: int | None = KEEP,
@@ -464,7 +465,7 @@ def build_fundamentals(
     width=None for a figure with no width in its layout, which is what a
     responsive frontend needs.
     """
-
+    filtered = _window_frame(metrics_long, years=years, as_of=None)
     concepts_to_plot = _select_concepts(ticker, FUNDAMENTALS_TO_PLOT, concepts)
 
     if not concepts_to_plot:
@@ -479,10 +480,10 @@ def build_fundamentals(
         r, c = idx // cols + 1, idx % cols + 1
         quarterly_concept = QUARTERLY_COUNTERPART.get(concept)
         if quarterly_concept and not is_hidden(ticker, quarterly_concept):
-            plot_metric_dual(fig, r, c, metrics_long, ticker, concept, quarterly_concept,
+            plot_metric_dual(fig, r, c, filtered, ticker, concept, quarterly_concept,
                              ylabel, ref_line, percent)
         else:
-            plot_metric(fig, r, c, metrics_long, ticker, concept, ylabel, ref_line, percent)
+            plot_metric(fig, r, c, filtered, ticker, concept, ylabel, ref_line, percent)
 
     fig.update_layout(
         title_text=f"Fundamentals {ticker}",
@@ -496,11 +497,12 @@ def plot_fundamentals(
     ticker: str,
     metrics_long: pd.DataFrame,
     output_path: str,
+    years: int = 15,
     concepts: list[str] | None = None,
     write_html: bool = False,
 ) -> None:
     """File-writing wrapper around build_fundamentals."""
-    fig = build_fundamentals(ticker, metrics_long, concepts)
+    fig = build_fundamentals(ticker, metrics_long, years, concepts)
     if fig is None:
         return
     _write_figure(fig, output_path, write_html)
@@ -509,6 +511,7 @@ def plot_fundamentals(
 def build_growth(
     ticker: str,
     facts: pd.DataFrame,
+    years: int = 15,
     growth_column: str = "yoy_growth",
     concepts: list[str] | None = None,
     width: int | None = KEEP,
@@ -519,7 +522,7 @@ def build_growth(
     if growth_column not in facts.columns:
         print(f"[build_growth] {ticker}: column '{growth_column}' missing, nothing to build.")
         return None
-
+    filtered = _window_frame(facts, years=years, as_of=None)
     panels = _select_concepts(ticker, GROWTH_PANELS, concepts)
 
     if not panels:
@@ -535,8 +538,8 @@ def build_growth(
 
     for idx, (concept, label) in enumerate(panels):
         r, col = idx // cols + 1, idx % cols + 1
-        series = facts[
-            (facts["ticker"] == ticker) & (facts["concept"] == concept)
+        series = filtered[
+            (filtered["ticker"] == ticker) & (filtered["concept"] == concept)
         ].sort_values("end")
 
         series_values = series.dropna(subset=[growth_column])
@@ -567,12 +570,13 @@ def plot_growth(
     ticker: str,
     facts: pd.DataFrame,
     output_path: str,
+    years: int = 15,
     growth_column: str = "yoy_growth",
     concepts: list[str] | None = None,
     write_html: bool = False,
 ) -> None:
     """File-writing wrapper around build_growth."""
-    fig = build_growth(ticker, facts, growth_column, concepts)
+    fig = build_growth(ticker, facts, years, growth_column, concepts)
     if fig is None:
         return
     _write_figure(fig, output_path, write_html)
@@ -861,6 +865,7 @@ def available_raw_concepts(
 def build_raw_facts(
     ticker: str,
     facts: pd.DataFrame,
+    years: int = 15,
     concepts: list[str] | None = None,
     include_derived: bool = False,
     width: int | None = KEEP,
@@ -868,6 +873,7 @@ def build_raw_facts(
 ) -> go.Figure | None:
 
     available = available_raw_concepts(ticker, facts, include_derived)
+    filtered = _window_frame(facts, years=years, as_of=None)
     if concepts is not None:
         available = [c for c in available if c in set(concepts)]
 
@@ -880,7 +886,7 @@ def build_raw_facts(
 
     for idx, concept in enumerate(available):
         r, c = idx // cols + 1, idx % cols + 1
-        plot_metric(fig, r, c, facts, ticker, concept, ylabel=concept)
+        plot_metric(fig, r, c, filtered, ticker, concept, ylabel=concept)
 
     fig.update_layout(
         title_text=f"Raw Facts {ticker}",
@@ -893,11 +899,12 @@ def plot_raw_facts(
     ticker: str,
     facts: pd.DataFrame,
     output_path: str,
+    years: int = 15,
     concepts: list[str] | None = None,
     write_html: bool = False,
 ) -> None:
     """File-writing wrapper around build_raw_facts."""
-    fig = build_raw_facts(ticker, facts, concepts)
+    fig = build_raw_facts(ticker, facts, years, concepts)
     if fig is None:
         return
     _write_figure(fig, output_path, write_html)

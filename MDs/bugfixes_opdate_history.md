@@ -6,6 +6,90 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-08-17 — Four consistency items, and the one that turned out to falsify a chart
+
+The items every recent task recorded and left standing, because fixing them inside a task about
+something else would have made that diff unattributable. Full derivation in
+`final_consistency_report.md`.
+
+**A — `apply_self_relative_scale_guard` counted rows where it meant days.** The last member of
+the family `calculate_ttm`, `calculate_rolling_harmonic_stats` and `pct_change` belonged to: a
+17-row centred window, which is eight quarters either side only on a series with no hole. The
+modal span of the 37,891 full windows is exactly 1,461 days; the tail reaches **4,475 — twelve
+years**. Now `[end - 730d, end + 730d]`.
+
+There is no empty run to derive a threshold from, for the same structural reason the five-year
+window had none: a span is a sum of quarter-steps, so its support is a lattice with ~91-day
+spacing and every gap is that spacing. **The change moved no value, and the reason is the
+finding**: the two rules disagree about the reference on 25% of rows -- the row window reaches
+further back and sees a maximum larger by 2.4% at the median and up to 5.9x -- but the guard
+fires at a factor of ten, so no row crosses it either way. Fourteen rows sit within
+[0.10, 0.15) of the threshold; that is the headroom the "no change" result has. The window
+stays **centred**, so the guard remains non-causal by decision: the quantity is the scale of
+the business around that period, and a backward-only reference would judge a company's early
+years against nothing.
+
+**B — `calculate_peer_band_flags` anchored on `pd.Timestamp.today()`.** The same cached data
+re-run with only the run date moved a year forward flips **35 of 2,106 flags and drops 16**.
+Now takes `as_of`, and windows through the new `within_avg_5y_window`, which uses
+`AVG_5Y_WINDOW` -- the second divergent copy of a windowing rule this project has had to
+consolidate, after the two revenue-growth computations. Both forms land on the same cutoff this
+run date, so the diff is zero; the point is that the next run agrees with this one. The app
+cannot pass its `as_of` through (it reads precomputed frames) and `build_snapshot_as_of` emits
+no band flags at all, so no as-of view was silently current.
+
+**C — the two scale-guard constants, and a bigger defect underneath them.** `build_snapshot`
+guarded `pb_ratio` and `p_tbv` at 0.01 while `build_valuation_history` guards the same two at
+0.001. Unified to 0.001, argued on the measurement rather than on strictness: 0.01 is the
+*metrics* constant, inherited from before the valuation one existed, and it misclassifies --
+Cencora reports $3.05bn of equity on $332.8bn of revenue, 0.92%, for a P/B of 20.0, an ordinary
+multiple inside the population 0.01 passes (p99 = 29.3).
+
+Measuring the two expressions side by side turned up what the brief had not named: **the
+snapshot had no positivity mask on the denominator, so 111 of 458 published `p_tbv` markers
+were negative** (min -201.30), sitting on charts whose line is blank at that period by
+construction. That was the larger half of the disagreement and is fixed with it. Three more
+multiples still have it -- `pe_ratio` 25, `pfcf_ratio` 40, `ev_ebitda` 7 -- and are recorded as
+the next task.
+
+**D — `get_latest_value` returned the newest row even when it was null.** AvalonBay's `FFO_TTM`
+is NaN at its two newest periods and 1.60bn at 2025-09-30, so a REIT had no `p_ffo`; 83
+(ticker, concept) pairs on 69 tickers were in that state, 49 of them `DividendsPerShare_TTM`.
+The bound is **365 days** and it is definitional: a TTM figure covers twelve months, so a value
+more than four quarters behind the concept's newest row describes a year that no longer
+overlaps the current one. The measured distances corroborate it without being what chose it --
+they form a quarterly lattice that stops at 365 and does not resume until 546, so every bound
+in [365, 545] admits the identical 37 pairs. The distances run to **5,021 days**, which is why
+the unbounded version of this fix is worse than the bug.
+
+The age is measured **inside the series**, so it does not duplicate `days_since_last_filing`,
+and it is published as `<field>_age_days` -- the same "how was this number obtained" signal
+`ttm_source` and `ffo_gains_source` carry. AVB's `p_ffo` is now 16.7186, which is
+26,781,757,961 / 1,601,911,000 exactly.
+
+**E — class 4's interior holes: confirmed not worth the mechanism.** Re-measured against the
+current gate: 1,653 interior holes on 812 pairs, against 11,493 pre-history dates and 82,434
+collisions. A rule reaching the interior without a tie-break does exist, and measuring it was
+kinder than expected -- **zero collisions**, because the post-mask date set is a strict subset
+of the pre-mask one (1,290 dates lost, 0 gained). It still loses: it reaches only 1,413 of the
+holes, 0.28% of the frame, and it demotes the disjointness guarantee from structural to
+empirical while making `ttm_source` a per-value rather than per-series property.
+
+**A correction to the gate's own safety argument, found while checking this.** The annual-gate
+entry claims masks "can only break a window, never create one". That is not true: removing a
+row widens a step, and a widened step can move *into* the valid band from below -- rows at days
+0, 45, 91, 182, 273 form no TTM window, and removing the day-45 row produces one. The
+conclusion still holds over all 501 tickers (0 cases), but by measurement rather than by that
+argument.
+
+**Diff, all 501 tickers from one price capture: 107 snapshot values appeared, 112 disappeared,
+and nothing else in the project moved.** Base facts, facts, `metrics_long`,
+`valuation_history` and all seven `avg_*_5y` lines are identical from before to after -- the
+first task in the running series with a mean-line effect of exactly 0.000%. Anchors 18,877 with
+0 moved and 0 changed; quality flags 734 -> 734; peer bands 2,106 with 0 flipped.
+
+---
+
 ## 2026-08-16 — The annual-path gate: event-driven concepts falling between two paths
 
 The FFO task diagnosed this and left it standing because it changes behaviour all 25 `TTM_CONCEPTS`

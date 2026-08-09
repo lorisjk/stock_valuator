@@ -33,7 +33,7 @@ The functions are deliberately generic. There is no `calculate_operating_margin(
 
 | Function | What it does |
 |---|---|
-| `get_latest_value` | Newest row per ticker, for a given concept |
+| `get_latest_value` | Newest row **carrying a value** per ticker, for a given concept |
 | `get_latest_row` | Newest row per ticker, for any DataFrame |
 | `to_long_format` | Renames a value column to `value` and adds a `concept` column |
 | `add_ttm_concepts` | Appends `<concept>_TTM` series to the facts table |
@@ -86,6 +86,43 @@ A third kind of broken denominator: one that is *present and positive* but far t
 **A missing reference cannot fire the guard**, and that is a property of the comparison, not a policy: `denominator < ratio × NaN` is `False`, so the value passes. There used to be an explicit `& scale_reference.notna()` on that line; it was a no-op and is gone.
 
 So the reference is filled instead of the behaviour being chosen. `fill_scale_reference` carries a ticker's reference forward, then backward for a leading hole. This is sound because the guard asks an order-of-magnitude question, which a neighbouring period's revenue answers as well as the absent one would — and it is what the data called for: ~6,700 values reached a guarded metric with no reference, and **every one was a per-period hole on a ticker that reports revenue elsewhere**. Once the guard could evaluate them it blanked 27 — VLO's 1,093% tax rate, ATO's 8,199% ROE, a P/B of 812 — and left the rest, which measured *tamer* than the population the guard was already passing. Derivation in `alignment_and_defaults_report.md`.
+
+### `apply_self_relative_scale_guard`: two years either side, measured in days
+
+A fourth kind of broken denominator, and the one the *series* answers rather than the period:
+a revenue figure that collapsed to under a tenth of what this business reports around that
+time. The reference is the maximum absolute revenue in a window centred on the row.
+
+**The window is a calendar span, not a row count** — `REVENUE_SELF_SCALE_HALF_WINDOW_DAYS = 730`,
+so `[end - 730d, end + 730d]`. It used to be seventeen rows, the last member of the family
+`calculate_ttm` (4 rows), `calculate_rolling_harmonic_stats` (20 rows) and `pct_change` (4 rows)
+belonged to. Seventeen rows are four years only on a series with no hole: the modal span was
+exactly 1,461 days but the tail reached **4,475 — twelve years**, and 27% of windows were
+truncated at a series end before that.
+
+As with the five-year window there is **no empty run to derive a threshold from**, and for the
+same structural reason: a span is a sum of quarter-steps, so its support is a lattice with
+~91-day spacing and every gap in it is that spacing rather than a boundary between two
+populations. That is the argument for defining the window instead of masking a wrong one.
+
+Two things worth knowing:
+
+- **Switching from rows to days moved no value**, but not because the rules agree. They
+  disagree about the reference on **25% of rows** — the row window reaches further back and so
+  sees a larger maximum, by 2.4% at the median and up to 5.9x — and the conclusion survives
+  because the guard fires at a factor of ten while the error is a factor of 1.02. Fourteen rows
+  sit within [0.10, 0.15) of the threshold; that is the headroom.
+- **The window is centred, so the guard is not causal.** A row's visibility can change when a
+  later period is filed, and an as-of view assembled by cutting rows was still guarded using
+  data from after the cut. Kept, because the quantity is "the scale of this business around
+  this period" and a backward-only reference would judge a company's early years against
+  nothing and its post-divestiture years against a business that no longer exists.
+
+A thin window needs no special case: `min_periods=1` puts the row in its own window, so a row
+with no neighbours is compared against itself and passes — the same "cannot evaluate, therefore
+do not blank" property the denominator guard has with a missing reference, and deliberately not
+a second notion of "too little history" beside `avg_*_5y_history_too_short`. Derivation in
+`final_consistency_report.md`.
 
 ---
 
@@ -141,6 +178,35 @@ Two consequences worth knowing:
 
 `calculate_rolling_average`, the arithmetic sibling, has been removed — zero call sites since it was
 written, and it still carried the row-count window this function no longer uses.
+
+---
+
+## `get_latest_value`: the newest row that carries a number
+
+It used to be the newest *row*, value or not. AvalonBay's `FFO_TTM` is NaN at 2026-03-31 and
+2026-06-30 and 1.60bn at 2025-09-30, so the snapshot had no `p_ffo` for a REIT although one
+was available three quarters back — and every snapshot input goes through this function.
+**83 (ticker, concept) pairs on 69 tickers** were in that state, 49 of them
+`DividendsPerShare_TTM`, which is exactly the concept a board declares on occasion rather than
+every quarter.
+
+**Skipping nulls without a bound is worse than the bug**: the distances run to 5,021 days, and a
+dividend from 2012 beside today's price is not a stale number, it is a wrong one.
+`MAX_LATEST_VALUE_AGE_DAYS = 365` bounds it, and the bound is definitional rather than fitted —
+a TTM figure covers twelve months, so a value more than four quarters behind the concept's
+newest row describes a year that no longer overlaps the current one. The measured distances
+corroborate it: they form a quarterly lattice that stops at 365 and does not resume until 546,
+so **every bound in [365, 545] selects the identical 37 pairs**.
+
+**The age is measured inside the series, not against today.** A filer whose whole series ended
+three years ago has age 0, because its newest row *is* its value; absolute staleness stays the
+job of `days_since_last_filing` and `fundamentals_stale`. The returned `value_age_days` is what
+lets `build_snapshot` publish `<field>_age_days`, the same "here is how this number was
+obtained" signal `ttm_source` and `ffo_gains_source` carry in the facts frame.
+
+`max_value_age_days=None` disables the bound, for the one caller that wants a value at any age:
+the scale guard's order-of-magnitude reference, on the same argument `fill_scale_reference`
+makes. Derivation in `final_consistency_report.md`.
 
 ---
 

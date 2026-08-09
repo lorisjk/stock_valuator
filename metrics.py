@@ -9,7 +9,12 @@ MAX_OPERATING_LEVERAGE_ABS = 15
 MIN_NET_DEBT_TO_EBITDA_ABS = 10_000_000
 MAX_NET_DEBT_TO_EBITDA_ABS = 60
 MIN_DEBT_TO_EQUITY_SCALE_RATIO = 0.05
-REVENUE_SELF_SCALE_WINDOW = 8
+# Two years of calendar either side, not eight rows either side. Eight rows are eight
+# quarters only on a series with no hole: over the 37,891 full 17-row windows the row
+# rule formed, the modal span was exactly 1,461 days -- sixteen quarter-steps, which is
+# what this constant now says outright -- but the tail reached 4,475, twelve years.
+# See final_consistency_report.md.
+REVENUE_SELF_SCALE_HALF_WINDOW_DAYS = 730
 MIN_REVENUE_SELF_SCALE_RATIO = 0.10
 MIN_PEG_REVENUE_GROWTH = 0.02
 MAX_PEG_RATIO_ABS = 30
@@ -84,16 +89,53 @@ def apply_self_relative_scale_guard(
     df: pd.DataFrame,
     value_col: str,
     reference_col: str,
-    window: int,
+    half_window_days: int,
     min_self_scale_ratio: float,
 ) -> pd.Series:
+    """Blank a value whose own reference collapsed against the scale of its neighbours.
+
+    The window is a **calendar span**, `[end - half_window_days, end + half_window_days]`,
+    not a row count. It used to be seventeen rows, and seventeen rows are four years only
+    on a series with no hole -- the fourth member of the family `calculate_ttm`,
+    `calculate_rolling_harmonic_stats` and `pct_change` belonged to. The span distribution
+    has no empty run to derive a threshold from, for the same structural reason the
+    five-year window had none: a span is a sum of quarter-steps, so its support is a
+    lattice with ~91-day spacing and every gap in it is that spacing rather than a boundary
+    between two populations. So the window is defined directly instead of a wrong one being
+    masked.
+
+    **Centred, so it looks forward as well as back, and that is deliberate.** The quantity
+    is "the scale of this business around this period", which is symmetric: a backward-only
+    reference would judge the first years of a company that later grew twentyfold against
+    nothing, and the years after a divestiture against a business that no longer exists. The
+    cost is that the guard is not causal -- a row's visibility can change when a later period
+    is filed, and an as-of view assembled by cutting rows was still guarded using data from
+    after the cut. That is inherent to a centred rule; it is recorded rather than removed.
+
+    **Nothing new is needed when a window is thin.** `min_periods=1` puts the row in its own
+    window, so a row with no neighbours is compared against itself and passes -- the same
+    "cannot evaluate, therefore do not blank" property `apply_denominator_scale_guard` has
+    with a missing reference. There is deliberately no second notion of "too little history"
+    beyond the one `avg_*_5y_history_too_short` already expresses.
+
+    Switching from rows to days moved no value in the frame it was measured on, and the
+    reason is worth knowing: the two rules disagree about the reference on **25% of rows**
+    -- the row window reaches further back and so sees a larger maximum, by 2.4% at the
+    median and up to 5.9x -- but the guard fires at a factor of ten, and no row's ratio
+    crossed it either way. Fourteen rows sit within [0.10, 0.15) of the threshold, which is
+    how much headroom that argument has. See final_consistency_report.md.
+    """
     work = df[["ticker", "end", reference_col]].copy().sort_values(["ticker", "end"])
     work["_abs_ref"] = work[reference_col].abs()
+    # 2*half+1 days centred is exactly [end - half, end + half] with both ends closed.
+    # groupby(...).rolling(on=...) returns a (ticker, end) MultiIndex that cannot be aligned
+    # back by index; work is sorted by ticker then end and groupby walks the tickers in that
+    # order, so the rows come back in the order they went in and position is the alignment.
     work["_window_max"] = (
-        work.groupby("ticker")["_abs_ref"]
-        .rolling(window=2 * window + 1, center=True, min_periods=1)
+        work.groupby("ticker")
+        .rolling(window=f"{2 * half_window_days + 1}D", on="end", center=True, min_periods=1)["_abs_ref"]
         .max()
-        .reset_index(level=0, drop=True)
+        .to_numpy()
     )
     too_small = work["_abs_ref"] < min_self_scale_ratio * work["_window_max"]
     too_small = too_small.reindex(df.index)
@@ -348,10 +390,49 @@ def calculate_rolling_harmonic_stats(
     return df[["ticker", "end", result_prefix, f"{result_prefix}_median", f"{result_prefix}_n"]]
 
 
-def get_latest_value(df: pd.DataFrame, concept: str) -> pd.DataFrame:
+# How stale a carried-forward value may be. A TTM figure covers twelve months, so a value
+# whose period ended more than four quarters before the concept's newest row describes a
+# year that no longer overlaps the one the newest period would cover -- that is where the
+# bound comes from, not from fitting. The measured distribution corroborates it without
+# being what chose it: over the 83 (ticker, concept) pairs whose newest row is null with a
+# real value behind it, the observed distances form a quarterly lattice that stops at 365
+# and does not resume until 546, so every bound in [365, 545] selects the identical 37
+# pairs. See final_consistency_report.md.
+MAX_LATEST_VALUE_AGE_DAYS = 365
+
+
+def get_latest_value(
+    df: pd.DataFrame, concept: str, max_value_age_days: "int | None" = MAX_LATEST_VALUE_AGE_DAYS
+) -> pd.DataFrame:
+    """The newest row of `concept` that actually carries a value, per ticker.
+
+    It used to be the newest *row*, value or not. AvalonBay's `FFO_TTM` is NaN at
+    2026-03-31 and 2026-06-30 and 1.60bn at 2025-09-30, so the snapshot had no `p_ffo`
+    for a REIT although one was available three quarters back -- and the same is true of
+    every concept the snapshot reads, 83 (ticker, concept) pairs on 69 tickers.
+
+    Skipping nulls without a bound is the version of this fix that is worse than the bug:
+    the distances run to 5,021 days, and a dividend from 2012 presented beside today's
+    price is not a stale number, it is a wrong one. `max_value_age_days` bounds it;
+    `None` disables the bound for a caller that wants a value at any age (the scale
+    guard's order-of-magnitude reference is the one such caller -- a neighbouring year's
+    revenue answers "is this denominator 1% of the business" as well as this year's).
+
+    `end` is now the period the returned **value** is from rather than the period the
+    newest row is from, and `value_age_days` is the distance between the two, 0 whenever
+    the newest row is the value. That is what lets a caller publish how the number was
+    obtained, the way `ttm_source` and `ffo_gains_source` do in the facts frame.
+    """
     filtered_df = df[df["concept"] == concept]
-    latest = filtered_df.loc[filtered_df.groupby("ticker")["end"].idxmax()]
-    return latest[["ticker", "end", "value"]]
+    newest_end = filtered_df.groupby("ticker")["end"].max()
+
+    with_value = filtered_df[filtered_df["value"].notna()]
+    latest = with_value.loc[with_value.groupby("ticker")["end"].idxmax()].copy()
+    latest["value_age_days"] = (latest["ticker"].map(newest_end) - latest["end"]).dt.days
+
+    if max_value_age_days is not None:
+        latest = latest[latest["value_age_days"] <= max_value_age_days]
+    return latest[["ticker", "end", "value", "value_age_days"]]
 
 
 def get_latest_row(df: pd.DataFrame, date_col: str = "end") -> pd.DataFrame:

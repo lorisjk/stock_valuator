@@ -153,6 +153,63 @@ A P/E with negative earnings is not a low P/E — it is undefined. Same for P/B 
 
 Masking turns these into `NaN`, which `dropna` then removes. The chart shows a gap instead of a misleading value.
 
+**The snapshot marker and the history line must be the same quantity**, and for `pb_ratio` and
+`p_tbv` they were not. `build_snapshot` guarded those two at `MIN_DENOMINATOR_SCALE_RATIO`
+(0.01) while `build_valuation_history` guards them at `MIN_VALUATION_DENOMINATOR_SCALE_RATIO`
+(0.001), and the snapshot had no positivity mask on the denominator at all. Both are fixed, and
+the second was the larger half: **111 of 458 published `p_tbv` markers were negative**, drawn
+onto charts whose line is blank at that period.
+
+0.001 is the right constant on the measurement rather than because it is looser. 0.01 is the
+*metrics* constant — it also guards ROE, ROTCE and the effective tax rate, and its use here was
+inheritance from before the valuation constant existed. And it misclassifies: Cencora reports
+$3.05bn of equity against $332.8bn of revenue, 0.92%, for a P/B of 20.0, which is an ordinary
+multiple inside the population 0.01 passes (p99 = 29.3). One percent of revenue is inside the
+range a thin-equity, high-turnover filer genuinely occupies. After the change one constant
+governs valuation multiples in both code paths, and `MIN_DENOMINATOR_SCALE_RATIO` is back to
+guarding only the three metrics ratios. Derivation in `final_consistency_report.md`.
+
+Still outstanding, same class of defect: `pe_ratio` (25), `pfcf_ratio` (40) and `ev_ebitda` (7)
+publish negative snapshot markers where the history line is blank.
+
+---
+
+## The snapshot may carry a value forward, and says when it does
+
+`build_snapshot` reads each of its inputs through `get_latest_value`, which returns the newest
+row **carrying a value** rather than the newest row, bounded at
+`MAX_LATEST_VALUE_AGE_DAYS = 365`. Where a value did not come from the newest period the
+snapshot publishes `<field>_age_days` beside it — 37 such rows today, 90 to 365 days old.
+
+Two boundaries worth keeping straight:
+
+- **The age is measured inside the series**, so it says how far back the snapshot had to reach,
+  not how old the data is. `days_since_last_filing` and `fundamentals_stale` answer the second
+  question and are unaffected.
+- **`_revenue_scale` opts out** (`max_value_age_days=None`). It is the scale guard's
+  order-of-magnitude reference, and an older year answers "is this denominator 1% of the
+  business" as well as the current one — the argument `fill_scale_reference` already makes on
+  the history side.
+
+---
+
+## `calculate_peer_band_flags` is anchored on the data, not the run date
+
+Its five-year window used to start at `pd.Timestamp.today()`, so the same cached facts gave
+different flags on different days: moving the run date forward a year with nothing else changed
+flips 35 of 2,106 flags and drops 16. It now takes `as_of` (`None` keeps today) and windows
+through `within_avg_5y_window`, which uses `AVG_5Y_WINDOW` — the same five years the rolling
+means use, rather than a second `DateOffset(years=5)` copy of the arithmetic.
+
+This is the **only cross-sectional flag** in the project: it compares a ticker's own five-year
+low against its profile peers' **median**, so one ticker gaining an observation moves another
+ticker's output. An anchor that drifts with the run date therefore drifts across the universe.
+
+The app cannot pass its own `as_of` through — it reads precomputed frames and its `as_of` is a
+chart-window filter — and `build_snapshot_as_of` emits no band flags at all, so no as-of view is
+silently current. The parameter exists so that the one place that could emit them has a correct
+way to.
+
 ---
 
 ## What this tool does not do

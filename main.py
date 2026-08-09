@@ -58,7 +58,7 @@ from metrics import (
     MIN_NET_DEBT_TO_EBITDA_ABS,
     MAX_NET_DEBT_TO_EBITDA_ABS,
     MIN_DEBT_TO_EQUITY_SCALE_RATIO,
-    REVENUE_SELF_SCALE_WINDOW,
+    REVENUE_SELF_SCALE_HALF_WINDOW_DAYS,
     MIN_REVENUE_SELF_SCALE_RATIO,
     MIN_PEG_REVENUE_GROWTH,
     MAX_PEG_RATIO_ABS,
@@ -429,7 +429,8 @@ def calculate_all_metrics(facts: pd.DataFrame, price_history: pd.DataFrame = Non
     m["operating_margin"] = m["operating_margin"].merge(revenue_ttm_rows, on=["ticker", "end"], how="left")
     m["operating_margin"]["operating_margin"] = apply_self_relative_scale_guard(
         m["operating_margin"], "operating_margin", "Revenue_TTM",
-        window=REVENUE_SELF_SCALE_WINDOW, min_self_scale_ratio=MIN_REVENUE_SELF_SCALE_RATIO,
+        half_window_days=REVENUE_SELF_SCALE_HALF_WINDOW_DAYS,
+        min_self_scale_ratio=MIN_REVENUE_SELF_SCALE_RATIO,
     )
     m["operating_margin"] = m["operating_margin"][["ticker", "end", "operating_margin"]]
 
@@ -439,7 +440,8 @@ def calculate_all_metrics(facts: pd.DataFrame, price_history: pd.DataFrame = Non
     m["fcf_margin"] = m["fcf_margin"].merge(revenue_ttm_rows, on=["ticker", "end"], how="left")
     m["fcf_margin"]["fcf_margin"] = apply_self_relative_scale_guard(
         m["fcf_margin"], "fcf_margin", "Revenue_TTM",
-        window=REVENUE_SELF_SCALE_WINDOW, min_self_scale_ratio=MIN_REVENUE_SELF_SCALE_RATIO,
+        half_window_days=REVENUE_SELF_SCALE_HALF_WINDOW_DAYS,
+        min_self_scale_ratio=MIN_REVENUE_SELF_SCALE_RATIO,
     )
     m["fcf_margin"] = m["fcf_margin"][["ticker", "end", "fcf_margin"]]
 
@@ -750,17 +752,51 @@ def calculate_rolling_multiple_averages(
 
 
 MIN_PEER_GROUP_SIZE = 5
-PEER_BAND_WINDOW_YEARS = 5
+
+
+def within_avg_5y_window(
+    frame: pd.DataFrame, as_of: "str | pd.Timestamp | None" = None, date_col: str = "end"
+) -> pd.DataFrame:
+    """Rows inside the same five-year window `calculate_rolling_harmonic_stats` uses.
+
+    One definition of "the last five years" for the whole project. This used to be
+    `pd.Timestamp.today() - pd.DateOffset(years=5)` here and `AVG_5Y_WINDOW` there --
+    the second divergent copy of a windowing rule this project has had to consolidate,
+    after the two revenue-growth computations. The two agree exactly on the run date they
+    were measured on (both land on 2021-08-09) and differ by a day whenever a leap day
+    falls differently, which is reason enough not to keep both.
+
+    `as_of=None` anchors on today; a supplied date anchors the window there **and closes
+    it there**, which the `today()` form never needed and an as-of view does.
+    """
+    anchor = pd.Timestamp(as_of) if as_of is not None else pd.Timestamp(date.today())
+    cutoff = anchor - pd.Timedelta(AVG_5Y_WINDOW)
+    return frame[(frame[date_col] > cutoff) & (frame[date_col] <= anchor)]
 
 
 def calculate_peer_band_flags(
-    valuation_history: pd.DataFrame, share_count_jump_flags: "pd.DataFrame | None" = None
+    valuation_history: pd.DataFrame,
+    share_count_jump_flags: "pd.DataFrame | None" = None,
+    as_of: "str | pd.Timestamp | None" = None,
 ) -> pd.DataFrame:
+    """Whether a ticker's own five-year low still sits above its peer group's median.
+
+    **Anchored on `as_of`, not on the run date.** The window used to start at
+    `pd.Timestamp.today()`, so the same cached facts produced different flags on
+    different days: re-running this frame's data with the run date moved a year forward
+    and nothing else changed flips 35 of 2,106 flags and drops 16 of them entirely.
+
+    This is also the one flag where the anchor choice is not a private matter. Every
+    other flag is a function of its own ticker's data; this one compares against a peer
+    **median**, so one ticker gaining or losing an observation moves another ticker's
+    output -- three band flags moved that way in the annual-gate task without those
+    tickers' own data changing at all.
+    """
 
     profiles = valuation_history["ticker"].map(lambda t: TICKER_PROFILES.get(t, DEFAULT_PROFILE))
     vh = valuation_history.assign(profile=profiles)
-    cutoff = pd.Timestamp.today() - pd.DateOffset(years=PEER_BAND_WINDOW_YEARS)
-    window = vh[(vh["end"] >= cutoff) & (vh["value"] > 0)]
+    window = within_avg_5y_window(vh, as_of)
+    window = window[window["value"] > 0]
 
     out = []
     for concept in sorted(HARMONIC_MEAN_CONCEPTS):
@@ -1063,49 +1099,67 @@ def build_snapshot(
         # concepts, so a string here would force the whole column to object dtype on reload.
         snap["shares_basis"] = snap["ticker"].map(shares_basis).map(SHARES_BASIS_CODES)
 
-    eps = get_latest_value(facts, "EPS_TTM_CALC").rename(columns={"value": "eps_ttm"})
-    revenue = get_latest_value(facts, "Revenue_TTM").rename(columns={"value": "revenue_ttm"})
+    # A snapshot input that did not come from the newest period is a fact about the value,
+    # so it is published rather than left implicit -- the same "here is how this number was
+    # obtained" signal `ttm_source` and `ffo_gains_source` carry in the facts frame. The age
+    # is emitted as its own concept, `<field>_age_days`, and only when it is non-zero.
+    value_ages = []
+
+    def latest_value(concept: str, field: str) -> pd.DataFrame:
+        got = get_latest_value(facts, concept)
+        carried = got[got["value_age_days"] > 0]
+        if not carried.empty:
+            value_ages.append(pd.DataFrame({
+                "ticker": carried["ticker"].to_numpy(),
+                "concept": f"{field}_age_days",
+                "value": carried["value_age_days"].to_numpy().astype(float),
+            }))
+        return got.rename(columns={"value": field})
+
+    eps = latest_value("EPS_TTM_CALC", "eps_ttm")
+    revenue = latest_value("Revenue_TTM", "revenue_ttm")
     # The scale guard's reference, separately from the published revenue_ttm: the newest period
     # a filer actually reported revenue in, rather than the newest row of the concept. Four
     # tickers (EA, OXY, PSKY, TAP) have a trailing null there and reached the guard unguarded.
-    # Deliberately not routed through revenue_ttm itself -- how get_latest_value treats a
-    # trailing null is a separate question this task does not open.
+    # Deliberately unbounded in age, unlike every other input here: this asks an
+    # order-of-magnitude question, which an older year answers as well as the current one --
+    # the argument `fill_scale_reference` already makes on the history side. Bounding it would
+    # take the reference away from exactly the filers whose revenue is missing.
     revenue_scale = get_latest_value(
-        facts[facts["value"].notna()], "Revenue_TTM"
+        facts, "Revenue_TTM", max_value_age_days=None
     ).rename(columns={"value": "_revenue_scale"})[["ticker", "_revenue_scale"]]
-    dividends = get_latest_value(facts, "DividendsPerShare_TTM").rename(columns={"value": "dividends_ttm"})
+    dividends = latest_value("DividendsPerShare_TTM", "dividends_ttm")
 
     fcf = get_latest_row(metrics["fcf"]).rename(columns={"fcf": "fcf_ttm"})
     ebitda = get_latest_row(metrics["ebitda"]).rename(columns={"ebitda": "ebitda_ttm"})
 
-    equity = get_latest_value(facts, "StockholdersEquity").rename(columns={"value": "equity"})
-    debt = get_latest_value(facts, "LongTermDebt").rename(columns={"value": "debt"})
-    cash = get_latest_value(facts, "CashAndEquivalents").rename(columns={"value": "cash"})
+    equity = latest_value("StockholdersEquity", "equity")
+    debt = latest_value("LongTermDebt", "debt")
+    cash = latest_value("CashAndEquivalents", "cash")
 
     growth = get_latest_row(metrics["revenue_growth"])
 
     nim = get_latest_row(metrics["net_interest_margin"])
     efficiency = get_latest_row(metrics["efficiency_ratio"])
-    tangible_equity = get_latest_value(facts, "TangibleEquity").rename(columns={"value": "tangible_equity"})
+    tangible_equity = latest_value("TangibleEquity", "tangible_equity")
     roa = get_latest_row(metrics["roa"])
     equity_to_assets = get_latest_row(metrics["equity_to_assets"])
     provision_ratio = get_latest_row(metrics["provision_ratio"])
-    ppnr_latest = get_latest_value(facts, "PPNR").rename(columns={"value": "ppnr_ttm"})
+    ppnr_latest = latest_value("PPNR", "ppnr_ttm")
     # FFO_TTM is added to `facts` by add_derived_concepts, well before build_snapshot
     # runs, so nothing was missing -- p_ffo was simply never added here. Read from the
     # same column build_valuation_history reads, which is what keeps the snapshot marker
     # and the historical line the same quantity. That inherits the fillna(0) on the
     # real-estate gains term in add_derived_concepts, deliberately: the two must agree,
     # and fixing that expression is a separate change that fixes both at once.
-    ffo_latest = get_latest_value(facts, "FFO_TTM").rename(columns={"value": "ffo_ttm"})
-    sbc_latest = get_latest_value(facts, "ShareBasedCompensation_TTM").rename(
-        columns={"value": "sbc_ttm"})
+    ffo_latest = latest_value("FFO_TTM", "ffo_ttm")
+    sbc_latest = latest_value("ShareBasedCompensation_TTM", "sbc_ttm")
     combined_ratio = get_latest_row(metrics["combined_ratio"])
     loss_ratio = get_latest_row(metrics["loss_ratio"])
     expense_ratio = get_latest_row(metrics["expense_ratio"])
     net_investment_yield = get_latest_row(metrics["net_investment_yield"])
     reserve_growth = get_latest_row(metrics["reserve_growth"])
-    core_earnings_latest = get_latest_value(facts, "CoreOperatingEarnings").rename(columns={"value": "core_earnings_ttm"})
+    core_earnings_latest = latest_value("CoreOperatingEarnings", "core_earnings_ttm")
     inventory_turnover = get_latest_row(metrics["inventory_turnover"])
     dio = get_latest_row(metrics["dio"])
     dso = get_latest_row(metrics["dso"])
@@ -1176,14 +1230,31 @@ def build_snapshot(
     snap["net_debt"] = snap["debt"] - snap["cash"]
     snap["ev"] = snap["market_cap"] + snap["net_debt"]
 
-    snap["pe_ttm"] = snap["price"] / snap["eps_ttm"]
+    snap["pe_ttm"] = snap["price"] / snap["eps_ttm"].where(snap["eps_ttm"] > 0)
+    # Same expression as build_valuation_history's, in all three of its parts: the
+    # positivity mask on the denominator, the valuation scale constant, and the
+    # TangibleEquity veto below.
+    #
+    # The constant was MIN_DENOMINATOR_SCALE_RATIO -- the *metrics* constant, ten times
+    # tighter than the valuation one the same two multiples use in the history, so a value
+    # could be guarded out of the marker and published on the line it sits on. 0.001 is the
+    # right one on the measurement, not merely the looser one: at 0.01 the guard blanked
+    # Cencora's P/B of 20.0, which is an ordinary multiple inside the population it passes
+    # (p99 = 29.3), because a distributor turning $333bn of revenue on $3.1bn of equity is a
+    # real business model rather than a broken denominator. One percent of revenue is inside
+    # the range a thin-equity filer genuinely occupies; a tenth of a percent is not.
+    #
+    # The positivity mask was missing outright, and that was the larger half of the
+    # disagreement: 111 of 458 published p_tbv markers were **negative**, sitting on charts
+    # whose line is blank there by construction. See final_consistency_report.md.
     snap["pb_ratio"] = apply_denominator_scale_guard(
-        snap["market_cap"] / snap["equity"], snap["equity"], snap["_revenue_scale"], MIN_DENOMINATOR_SCALE_RATIO
+        snap["market_cap"] / snap["equity"].where(snap["equity"] > 0),
+        snap["equity"], snap["_revenue_scale"], MIN_VALUATION_DENOMINATOR_SCALE_RATIO
     )
 
     snap["pb_ratio"] = snap["pb_ratio"].where(~(snap["tangible_equity"] < 0))
-    snap["pfcf_ttm"] = snap["market_cap"] / snap["fcf_ttm"]
-    snap["ev_ebitda"] = snap["ev"] / snap["ebitda_ttm"]
+    snap["pfcf_ttm"] = snap["market_cap"] / snap["fcf_ttm"].where(snap["fcf_ttm"] > 0)
+    snap["ev_ebitda"] = snap["ev"] / snap["ebitda_ttm"].where(snap["ebitda_ttm"] > 0)
     snap["ev_sales"] = snap["ev"] / snap["revenue_ttm"]
   
     snap["pe_to_revenue_growth"] = snap["pe_ttm"].where(snap["pe_ttm"] > 0) / (snap["yoy_growth"] * 100)
@@ -1191,7 +1262,8 @@ def build_snapshot(
     snap["pe_to_revenue_growth"] = snap["pe_to_revenue_growth"].where(snap["pe_to_revenue_growth"].abs() <= MAX_PEG_RATIO_ABS)
     snap["dividend_yield"] = snap["dividends_ttm"] / snap["price"]
     snap["p_tbv"] = apply_denominator_scale_guard(
-        snap["market_cap"] / snap["tangible_equity"], snap["tangible_equity"], snap["_revenue_scale"], MIN_DENOMINATOR_SCALE_RATIO
+        snap["market_cap"] / snap["tangible_equity"].where(snap["tangible_equity"] > 0),
+        snap["tangible_equity"], snap["_revenue_scale"], MIN_VALUATION_DENOMINATOR_SCALE_RATIO
     )
     snap["p_ppnr"] = snap["market_cap"] / snap["ppnr_ttm"]
     snap["p_core_earnings"] = snap["market_cap"] / snap["core_earnings_ttm"]
@@ -1223,6 +1295,11 @@ def build_snapshot(
     long = snap.melt(id_vars=["ticker"], value_vars=value_cols, var_name="concept", value_name="value")
     long = long.dropna(subset=["value"])
     long["end"] = as_of_date
+
+    if value_ages:
+        ages = pd.concat(value_ages, ignore_index=True)
+        ages["end"] = as_of_date
+        long = pd.concat([long, ages[["ticker", "end", "concept", "value"]]], ignore_index=True)
 
     if peer_band_flags is not None and not peer_band_flags.empty:
         bands = peer_band_flags.copy()

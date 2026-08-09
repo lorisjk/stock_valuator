@@ -1,159 +1,174 @@
-# Task: The `annual_ttm_values` Gate — Event-Driven Concepts Falling Between Two Paths
+# Task: Final Consistency Items
 
-**Read first:** `ffo_gains_report.md` §1.3–1.4 and §8 (the direct input — the defect was diagnosed
-there and deliberately left standing), `ttm_window_report.md` (Part 2 built the annual path and the
-disjointness property this task revisits), `alignment_and_defaults_report.md`, and the current
-`annual_ttm_values`, `calculate_ttm` and `extract_with_mode` code.
+**Read first:** `annual_path_gate_report.md` §7 (Parts A and E come from there),
+`alignment_and_defaults_report.md` "Deliberately not fixed" (Parts B, C and D),
+`product_cleanup_report.md` (Part C's measurement), `rolling_window_report.md` (Part A's
+methodological model), and `bugfixed_update_history.md`.
 
 ## Context
 
-The TTM task added a second derivation path: where a filer reports a concept **only** at 12-month
-duration, `<concept>_TTM` is set directly from the annual fact, because a 12-month value at a fiscal
-year end *is* the trailing-twelve-month value at that date. The two paths were made disjoint by
-construction, so no value could ever be written twice:
+After ten investigations the data layer has **no known structural defect**. What remains is a set of
+items each previous task recorded and deliberately left standing, because fixing them inside a task
+about something else would have made that task's diff unattributable.
 
-```python
-    if quarterly_values:
-        return []
-```
+They are small, they are independent, and none of them currently falsifies a displayed number in the
+way the shipped fixes did. They are worth doing because each is a place where the pipeline is
+internally inconsistent with itself.
 
-That gate is too coarse. It asks whether *any* quarterly value exists, not whether the quarterly path
-can actually produce anything. The FFO investigation found the consequence:
+**Four change groups (A–D), each with its own diff. Part E is an evaluation, not necessarily a
+change.**
 
-```
-CPT  GainLossOnSaleOfProperties   13 FY facts,  5 quarterly values
-     quarterly ends: 2014-12-31  2015-03-31  2015-12-31  2016-06-30  2016-09-30
-                     steps  90, 275, 182, 92
-     -> calculate_ttm refuses every window (correctly)
-     -> annual_ttm_values returns [] because quarterly_values is non-empty
-     -> 13 usable annual facts produce nothing
-```
+**Explicitly NOT in this task:** no coverage-flag semantics (that is its own task and it changes the
+meaning of every flag), no `calculate_ttm` / `calculate_rolling_harmonic_stats` /
+`decumulate_period_values` / `extract_period_values` / `annual_ttm_values` changes (all shipped and
+evidence-backed), no tag work, no UI or chart changes, no new metrics.
 
-Five scattered values that cannot form a window disable the path that could have used thirteen that
-can. The filer falls between the two paths and gets nothing.
-
-**The mechanism is general, not FFO-specific.** Any concept reported **on occurrence** rather than
-every period is exposed: property disposals, asset impairments, restructuring charges, legal
-settlements, one-off gains. A filer tags it in the quarters it happens and omits it otherwise, so
-consecutive-quarter runs are rare, while the annual figure is reported every year.
-
-This is why the fix was excluded from the FFO task: it changes behaviour that **all 25
-`TTM_CONCEPTS` share**, so it moves every thin concept in the frame at once and needs its own diff.
-
-**Explicitly NOT in this task:** no changes to `calculate_ttm`'s window bounds (shipped,
-evidence-backed), no changes to `decumulate_period_values` or `extract_period_values`, no tag work of
-any kind, no `apply_self_relative_scale_guard` / `calculate_peer_band_flags` / scale-guard-constant /
-`get_latest_value` fixes (all recorded, all separate), no UI or chart changes, no new metrics.
+**Methodological constraint, established in `product_cleanup_report.md`:** `get_price_history` is not
+bit-reproducible across calls (two consecutive AAPL fetches differed by up to 9.155e-05). Every
+before/after comparison must run from **one price capture**.
 
 ---
 
-## Step 1 — Measure the population before designing anything
+## Part A — `apply_self_relative_scale_guard`'s 17-row window
 
-Across all 501 cached tickers and all 25 `TTM_CONCEPTS`, classify every (ticker, concept) pair:
+The last member of a family this project has now fixed three times: `calculate_ttm` (4 rows),
+`calculate_rolling_harmonic_stats` (20 rows), and `pct_change` (4 rows) all counted **rows** where
+they meant **calendar time**. This guard uses a **17-row centred window** — roughly four years either
+side, on a series with no gaps, and something else entirely on a series with them.
 
-| class | quarterly path | annual path | current outcome |
-|---|---|---|---|
-| **1** | produces TTM values | disabled by the gate | fine — quarterly is authoritative |
-| **2** | produces **no** TTM values, but quarterly values exist | disabled by the gate | **the defect** |
-| **3** | no quarterly values at all | runs | fine — the annual path already covers it |
-| **4** | produces some TTM values, with gaps the annual path could fill | disabled by the gate | **the open design question** |
+It differs from the three in one way that matters: the window is **centred**, so it looks forward as
+well as back. State what that implies for the rule before designing it.
 
-Report counts per class, per concept, and the tickers in class 2.
+Follow the method that produced the other three bounds:
 
-**Class 4 is the decision this task turns on** and must be measured separately from class 2. Class 2
-is unambiguous — the quarterly path yields nothing, so nothing can be overwritten. Class 4 is a
-filer whose quarterly path works for some years and not others, where the annual path would fill the
-holes and the two paths would then coexist on one series. That is exactly the overlap the original
-gate was built to prevent.
+1. **Measure the span distribution** of every 17-row window the guard currently forms, across all 501
+   tickers and every concept it covers. Report it around each cluster and identify the **empty
+   runs**, if any. Note that the rolling-window task found *no* empty run for its five-year window
+   and explained structurally why — check whether the same reasoning applies here before assuming a
+   threshold exists to find.
+2. **Report the tail**: how many windows span materially more than the intended period, on how many
+   tickers and concepts.
+3. **Decide the rule** — date-filter (take what falls inside the intended span) or mask (keep the row
+   window, reject it when its span is wrong). The rolling-window task chose date-filtering because
+   the quantity really was "the last five years"; decide what the quantity is here and let that
+   decide. A centred window may need both halves bounded separately.
+4. **Minimum observation count**: a centred date window can have very few neighbours near the series
+   ends. Decide what the guard does then, and keep it coherent with however the rolling stats already
+   express "not enough history" rather than inventing a second notion.
 
-Also report: for class 2 and class 4, **how many annual facts are being discarded** — the size of the
-prize.
+## Part B — `calculate_peer_band_flags` anchors on `pd.Timestamp.today()`
 
-## Step 2 — Decide the gate, and preserve the property that mattered
+Its five-year peer window is anchored on the run date rather than on the data. Two consequences:
 
-The original gate's purpose was that no value is ever written twice by two mechanisms. **That
-property must survive.** What can change is how it is achieved: today it is enforced by a coarse
-precondition; it could instead be enforced per date.
+1. **The flags are not reproducible.** The same cached facts re-run a month later give different
+   flags, because the window moved and the data did not.
+2. **It ignores `as_of`.** `build_valuation` takes an `as_of` anchor precisely so a historical view
+   shows what that date could have known; the peer bands attached to that view are still computed
+   from a window ending today.
 
-Candidate rules, to argue on the Step 1 numbers:
+Fix it the way `build_valuation` was fixed: an `as_of: pd.Timestamp | None = None` parameter, `None`
+keeping today's behaviour, a supplied date anchoring the window there. Reuse the existing windowing
+helper rather than writing a second copy of the arithmetic — the rolling-window task consolidated two
+divergent revenue-growth computations for exactly this reason.
 
-1. **Gate on the quarterly path's output, not its input** — run the annual path when the quarterly
-   path produced no TTM values, regardless of how many quarterly facts exist. Fixes class 2, leaves
-   class 4 alone. Minimal, and the disjointness stays whole-series.
-2. **Gate per date** — the annual path supplies a date only if the quarterly path did not. Fixes
-   class 2 and class 4, and disjointness becomes a per-date guarantee rather than a structural one.
-3. **Something narrower**, if the measurement suggests it.
+Then decide and state: **does the app pass its `as_of` through to these flags?** The snapshot and the
+valuation charts already honour it; leaving the peer bands anchored on today would make one part of
+an as-of view silently current. Note the cross-ticker property the gate report found — a peer band
+flag depends on other tickers' data, so this is the one flag where one ticker's window choice moves
+another ticker's output.
 
-State the choice with reasoning and the failure mode of the alternatives. Two things to weigh
-explicitly:
+## Part C — The two scale-guard constants
 
-- **Mixed-provenance series.** Under rule 2 a single series carries values derived two different
-  ways. The `ttm_source` column already exists precisely so that is visible rather than silent —
-  check that it is populated correctly on every value either rule produces, and say so.
-- **Cadence honesty.** An annual-derived value sits at a fiscal year end and says nothing about the
-  intervening quarters. Filling a hole in an otherwise quarterly series with one annual point
-  produces a series whose *spacing* is uneven in a way the values do not advertise. Decide whether
-  that is acceptable and why. The TTM task's position was that a series should show the disclosure
-  cadence rather than interpolate; check whether rule 2 is consistent with that.
+`build_snapshot` passes **0.01** and `build_valuation_history` passes **0.001** for `pb_ratio` and
+`p_tbv` — a factor of ten. So for those two multiples, the snapshot marker and the historical line
+are not strictly the same quantity, and a value can be guarded out of one and published in the other.
 
-Whichever rule is chosen, **verify no value is written by both paths** — a direct check, not an
-argument from construction, since the construction is what is being changed.
+The three concepts added by the product-cleanup task deliberately use the history constant, so the
+inconsistency is confined to these two.
 
-## Step 3 — Implement
+1. **Measure the disagreement**: how many (ticker, period) pairs would be guarded under one constant
+   and not the other, and what those values look like.
+2. **Decide which is right** and unify. Argue it on the measurement, not on which is stricter — the
+   alignment task's Part B showed that the unguarded population there was systematically *tamer* than
+   the guarded one, so intuition about strictness is not reliable here.
+3. Verify that after unification the snapshot marker and the history line agree on every published
+   point for both multiples.
 
-Apply the rule. Keep `annual_ttm_values`' contract otherwise, and keep `ttm_source` accurate for
-every value it produces.
+## Part D — `get_latest_value` returns the newest row even when its value is null
 
-## Step 4 — Non-regression, all 501 tickers
+Measured in `product_cleanup_report.md`:
 
-Same discipline as the previous nine tasks, and note the constraint established in
-`product_cleanup_report.md`: **`get_price_history` is not bit-reproducible across calls**, so the
-before- and after-states must be computed from one price capture.
+```
+AVB  p_ffo inputs:  NaN at 2026-06-30, NaN at 2026-03-31, a real value at 2025-09-30
+                    -> no snapshot p_ffo, though one is available three quarters back
+```
 
-This change is **additive by intent** — it should recover TTM values, not alter existing ones.
+This affects **every snapshot input**, not only `p_ffo`.
 
-1. Capture a before-state across all cached tickers: base facts, all `_TTM` concepts, `ttm_source`,
-   `metrics_long`, every `valuation_history` multiple, every `avg_*_5y` line and its `_n`, and the
-   snapshot.
-2. Diff and account for every appeared, **changed** and disappeared value:
-   - **Appeared** is the intended effect.
-   - **Changed** needs individual justification. Under rule 1 no existing value should change at all;
-     under rule 2 a changed value would mean the annual path wrote over a date the quarterly path
-     already held, which is the property that must not break.
-   - **Disappeared** should not happen.
-3. **Anchor and snapshot invariants.** Note the precedent from the FFO task: a newest *date* moving
-   **forward** because a series gained recent reach is the intended effect and is reported as such,
-   not as a breach. A newest *value* changing under an unchanged date is not.
+The fix is obvious and the danger is in the obvious version of it: skipping nulls without a bound
+would silently resurrect a value from years ago and present it as current.
+
+1. **Measure the exposure**: across all concepts the snapshot reads, how many tickers have a null
+   newest row with a real value behind it, and **how far behind**. Report the distribution of that
+   distance — it is what the bound should come from.
+2. **Decide the staleness bound** and state it. Consider whether the snapshot should also *record*
+   the value's date when it is not the newest period, so a consumer can see it — the project already
+   surfaces `ttm_source` and `ffo_gains_source` for exactly this kind of "here is how this number was
+   obtained" signal, and a snapshot value from three quarters back is a fact about the value.
+3. Verify AVB specifically, and confirm no value older than the bound is published.
+
+## Part E — Class 4's interior holes: evaluate, then recommend
+
+The gate task left **1,550 genuine interior holes across 719 (ticker, concept) pairs** — AMZN
+`StockRepurchased` 15, LUV `ShareBasedCompensation` 10, CNP `StockIssued` 9, ETR `Capex` 9,
+PFE/SYY `DepreciationAndAmortization` 9 — because reaching them needs per-date machinery whose cost it
+measured: a tie-break at **81,505 collision dates**, and **11,460 pre-quarterly annual points**
+admitted alongside unless separately excluded.
+
+**This part is an evaluation. Do not implement unless the evidence clearly supports it.**
+
+1. Re-measure the three populations (interior holes, pre-history, collisions) against the current
+   code, since the gate has changed since they were counted.
+2. Determine whether a rule can reach the 1,550 **without** admitting the 11,460 and **without** a
+   tie-break at the 81,505 — for instance by restricting to dates strictly interior to the rolling
+   path's span and unreached by it. State whether such a rule exists and what it would cost.
+3. **State the recommendation and the reasoning.** "Confirmed not worth the mechanism" is a fully
+   successful outcome here — the value is 1,550 rows against a frame of 512,000, and the property
+   being risked is the per-series disjointness guarantee that the gate task showed is load-bearing
+   (two paths concatenate rather than merge; a collision produces duplicate rows that `pivot_table`
+   averages silently).
+4. If and only if a rule exists that preserves disjointness structurally rather than by tie-break,
+   implement it as a fifth change group with its own diff and the same verification as the rest.
+
+---
+
+## Verification, per change group
+
+1. Capture a before-state across all cached tickers: base facts, all `_TTM` concepts, `metrics_long`,
+   every `valuation_history` multiple, every `avg_*_5y` line and its `_n`, and the snapshot.
+2. Diff after each group; account for every appeared, changed and disappeared value, with the
+   expected footprint stated up front.
+3. **Anchor and snapshot invariants**: newest value per ticker/concept unchanged, or any exception
+   named and justified. This has held 0/0 for ten tasks; Part D changes snapshot values **by design**,
+   so state that expected exception up front rather than reporting it as a surprise.
 4. **Report the mean-line effect per line.** Running series: TTM ~25%, rolling-window 11–15%,
-   duplicate-ends 2–5%, alignment 0–3.7%, FFO gains 0.6–1.5%.
-5. **Report which concepts moved and by how much.** This touches all 25 `TTM_CONCEPTS`, so a
-   per-concept breakdown is the honest summary — a change concentrated in two event-driven concepts
-   is a different outcome from one spread across all of them, and the report should say which it is.
-6. **Independent plausibility check.** The FFO task's method is directly reusable and is the right
-   one here: a recovered annual-derived TTM value must equal the filer's own 12-month fact for that
-   fiscal year — and where a filer reports both, four quarterly values must sum to it. State what you
-   used and the reconciliation rate.
-7. Re-measure all quality flags and report the delta per concept. Coverage flags should improve for
-   the class-2 pairs; report by how much.
+   duplicate-ends 2–5%, alignment 0–3.7%, FFO gains 0.6–1.5%, annual-gate 0–0.07%.
+5. **Independent plausibility check** for any group that changes values — the established pattern is
+   checking against something the filer published or a reconstruction sharing no code with the
+   pipeline.
+6. Re-measure all quality flags and report the delta per flag. Note from the gate report that
+   coverage flags count **base concepts before `add_derived_concepts` runs**, so do not expect
+   derived-value recoveries to clear them.
 
-## Step 5 — Record
+## Record
 
-Update `bugfixed_update_history.md` per convention, including the class 1–4 counts, the gate rule,
-and how disjointness is now guaranteed.
+Update `bugfixed_update_history.md` per convention, including Part A's bound with the evidence it came
+from, Part C's constant decision, Part D's staleness bound, and Part E's recommendation.
 
 ## Output
 
-One file, `annual_path_gate_report.md`:
-
-1. The Step 1 classification with counts per class and per concept, the class-2 ticker list, and the
-   number of annual facts currently discarded.
-2. The gate rule chosen with reasoning, the failure mode of the alternatives, and the position taken
-   on mixed-provenance series and cadence honesty.
-3. The direct verification that no value is written by both paths.
-4. The diff with every appeared/changed/disappeared value accounted for, the invariants, the
-   per-concept breakdown, and the mean-line effect.
-5. The independent reconciliation and its rate.
-6. Re-measured flag counts.
-7. Anything deliberately not fixed, with reasoning.
+One file, `final_consistency_report.md`, with a section per part: the measurements, the decision with
+reasoning and the alternative's failure mode, what was implemented, and the per-group diff. Plus the
+mean-line effect, the flag deltas, Part E's recommendation, and anything deliberately not fixed.
 
 No scratch scripts left behind.

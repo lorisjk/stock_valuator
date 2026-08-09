@@ -711,9 +711,10 @@ def render_analysis(ticker: str, as_of, tickers: list[str], profiles: dict) -> N
         ids, labels = metric_options("fundamentals", ticker)
         chosen = st.multiselect("Metrics", ids, default=ids,
                                 format_func=lambda i: labels[i], key="fund_metrics")
+        years = st.slider("Window (years)", 1, 15, 15, key="fundamentals_years")
         render(
             figures.build_fundamentals(ticker, frame_for("fundamentals"),
-                                       concepts=chosen, width=None),
+                                       years=years, concepts=chosen, width=None),
             "Nothing selected, or no data for the selected metrics.",
         )
 
@@ -721,9 +722,10 @@ def render_analysis(ticker: str, as_of, tickers: list[str], profiles: dict) -> N
         ids, labels = metric_options("growth", ticker)
         chosen = st.multiselect("Concepts", ids, default=ids,
                                 format_func=lambda i: labels[i], key="growth_metrics")
+        years = st.slider("Window (years)", 1, 15, 15, key="growth_years")
         render(
             figures.build_growth(ticker, frame_for("growth"),
-                                 concepts=chosen, width=None),
+                                 years=years, concepts=chosen, width=None),
             "Nothing selected, or no growth data for this ticker.",
         )
 
@@ -731,7 +733,7 @@ def render_analysis(ticker: str, as_of, tickers: list[str], profiles: dict) -> N
         ids, labels = metric_options("valuation", ticker)
         chosen = st.multiselect("Multiples", ids, default=ids,
                                 format_func=lambda i: labels[i], key="val_metrics")
-        years = st.slider("Window (years)", 1, 15, 5)
+        years = st.slider("Window (years)", 1, 15, 5, key="valuation_years")
         render(
             figures.build_valuation(ticker, frame_for("valuation"), years=years,
                                     concepts=chosen, as_of=as_of,
@@ -786,9 +788,10 @@ def render_analysis(ticker: str, as_of, tickers: list[str], profiles: dict) -> N
                     if c in options]
 
             chosen = st.multiselect("Concepts", options, default=default, key="raw_concepts")
+            years = st.slider("Window (years)", 1, 15, 15, key="raw_years")
             render(
                 figures.build_raw_facts(ticker, facts_full, concepts=chosen,
-                                        include_derived=show_derived, width=None),
+                                        include_derived=show_derived, width=None, years=years),
                 "Nothing selected, or no raw facts for this ticker.",
             )
 
