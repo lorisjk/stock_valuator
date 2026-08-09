@@ -370,7 +370,7 @@ def render_data_section(title: str, wide: pd.DataFrame, ticker: str, slug: str,
     )
     copied = wide.head(copy_periods)
     text = to_csv_text(copied)
-    with st.expander(f"Copy for an LLM — {len(copied)} periods, ~{len(text):,} characters"):
+    with st.expander(f"Copy table — {len(copied)} periods, ~{len(text):,} characters"):
         st.code(text, language="text")
 
 
@@ -438,7 +438,7 @@ def render_snapshot_section(snapshot: pd.DataFrame, ticker: str) -> None:
         file_name=f"{ticker}_snapshot.csv", mime="text/csv", key="dl_snapshot",
     )
     text = table.to_csv(index=True, lineterminator="\n")
-    with st.expander(f"Copy for an LLM — ~{len(text):,} characters"):
+    with st.expander(f"Copy table — ~{len(text):,} characters"):
         st.code(text, language="text")
 
 
@@ -507,7 +507,7 @@ def render_data_tab(ticker: str) -> None:
     )
 
     st.subheader("Quality flags")
-    st.caption("Where the pipeline is unsure about its own numbers.")
+    st.caption("Distortion of data.")
     render_flag_section(flags, ticker, periods)
 
     render_data_section(
@@ -586,8 +586,7 @@ def render_coverage() -> None:
         "Which metrics each business profile shows, and which it suppresses. A bank "
         "has no inventory and a REIT is not valued on earnings, so showing every "
         "metric for every company would mean showing numbers that do not mean "
-        "anything. **This table is generated from `config.is_hidden` on every "
-        "render** — it cannot drift from what the charts actually do."
+        "anything. "
     )
 
     visibility = config.profile_visibility()
@@ -629,8 +628,8 @@ def render_coverage() -> None:
 # --- page --------------------------------------------------------------------
 
 def main() -> None:
-    st.set_page_config(page_title="Stock Valuator", layout="wide")
-    st.title("Stock Valuator")
+    st.set_page_config(page_title="Kyhestlo", layout="wide")
+    st.title("Kyhestlo")
 
     absent = missing_files()
     if absent:
@@ -652,7 +651,7 @@ def main() -> None:
     universe = load_frame("universe.parquet")
 
     st.caption(
-        "This pipeline uniquely fetches SEC EDGAR 10k and 10q filings, extracts the XBRL "
+        "This pipeline fetches SEC EDGAR 10k and 10q filings of every S&P 500 company, extracts the XBRL "
         "facts, computes derived metrics, and links them to yfinance course data. "
         "This data stream is as pure as possible."
     )
@@ -699,9 +698,9 @@ def render_analysis(ticker: str, as_of, tickers: list[str], profiles: dict) -> N
     # Data first: the app opens on what was extracted, and the charts follow.
     # The `with` blocks below fill named containers, so their order in the source
     # is independent of the order the tabs render in -- only this list decides.
-    tab_data, tab_fund, tab_growth, tab_val, tab_cmp, tab_raw = st.tabs(
-        ["Data", CHART_LABELS["fundamentals"], CHART_LABELS["growth"],
-         CHART_LABELS["valuation"], "Comparison", "Raw Facts"]
+    tab_data, tab_raw,  tab_growth, tab_fund, tab_val, tab_cmp = st.tabs(
+        ["Data", "Raw Facts",  CHART_LABELS["growth"], CHART_LABELS["fundamentals"],
+         CHART_LABELS["valuation"], "Comparison"]
     )
 
     with tab_data:

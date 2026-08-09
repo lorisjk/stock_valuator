@@ -2325,8 +2325,7 @@ METRICS = [
 # Documented once and referenced by every growth panel, rather than repeated on ten
 # entries. Read off calculate_growth() and main.add_growth_column().
 GROWTH_MECHANISM_NOTE = """
-Every growth panel is produced by the same function, and its guards are the reason
-you see gaps rather than nonsense.
+Every growth panel is produced by the same function, with certain guards applied in order to exclude absurd values.
 
 - **4-quarter lag.** Each period is compared against the observation closest to
   365 days earlier (tolerance ±45 days), so a quarterly series is compared like
