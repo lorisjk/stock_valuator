@@ -4,11 +4,12 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import plotly.express as px
 
 from config import (
     get_concept_candidates, is_hidden, FUNDAMENTALS_TO_PLOT, QUARTERLY_COUNTERPART, GROWTH_PANELS,
     VALUATIONS_TO_PLOT, HARMONIC_MEAN_CONCEPTS, TICKER_PROFILES, DEFAULT_PROFILE,
-    METRICS_BY_ID, CHART_VALUATION, CHART_RAW_FACTS, CHART_GROWTH
+    METRICS_BY_ID, CHART_VALUATION, 
 )
 from metrics import harmonic_mean
 
@@ -278,13 +279,13 @@ def plot_metric(
             name=concept,
             line=dict(color=_PRIMARY_COLOR),
             connectgaps=True,
-            hovertemplate=("Date: %{x|%d.%m.%Y}""<br>Value: %{y}""<extra></extra>")
+            hovertemplate=("Date: %{x|%d.%m.%Y}<br>Value: %{y}<extra></extra>")
         ),
         row=row,
         col=col,
 
     )
-
+   
     _style_axes(fig, row, col, ylabel, percent)
 
     if show_mean:
@@ -488,6 +489,7 @@ def build_fundamentals(
     fig.update_layout(
         title_text=f"Fundamentals {ticker}",
         **_size(width, height, 500 * cols, 330 * rows),
+        hovermode="x unified",
         legend=dict(font=dict(size=9)),
     )
     return fig
@@ -562,6 +564,7 @@ def build_growth(
         title_text=f"Growth (YoY) {ticker}",
         **_size(width, height, 500 * cols, 360 * rows),
         legend=dict(font=dict(size=9)),
+        hovermode="x unified",
     )
     return fig
 
@@ -630,6 +633,7 @@ def build_valuation(
         title_text=f"Valuation Data {ticker}",
         **_size(width, height, 500 * cols, 400 * rows),
         legend=dict(font=dict(size=9)),
+        hovermode="x unified",
     )
     return fig
 
@@ -886,7 +890,21 @@ def build_raw_facts(
 
     for idx, concept in enumerate(available):
         r, c = idx // cols + 1, idx % cols + 1
-        plot_metric(fig, r, c, filtered, ticker, concept, ylabel=concept)
+        series = dict(filtered[
+            (filtered["ticker"] == ticker) & (filtered["concept"] == concept)
+        ].sort_values("end"))
+
+        fig.add_trace(
+            go.Bar(
+                x=series["end"],
+                y=series["value"],
+                name=concept,
+                marker_color=_PRIMARY_COLOR,
+                hovertemplate=("Date: %{x|%d.%m.%Y}<br>Value: %{y}<extra></extra>")
+            ),
+            row=r,
+            col=c,
+        )
 
     fig.update_layout(
         title_text=f"Raw Facts {ticker}",

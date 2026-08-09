@@ -2006,7 +2006,7 @@ FIGURE_DIR = "figures"
 CHART_FUNDAMENTALS = "fundamentals"
 CHART_VALUATION = "valuation"
 CHART_GROWTH = "growth"
-CHART_RAW_FACTS = "raw_facts"
+
 
 # What an id in a given chart actually names, and which dataframe column holds
 # its values. Declared once rather than repeated on 45 entries, but reachable
@@ -2015,7 +2015,7 @@ CHART_SPECS = {
     CHART_FUNDAMENTALS: {"id_namespace": "metric", "value_column": "value"},
     CHART_VALUATION: {"id_namespace": "metric", "value_column": "value"},
     CHART_GROWTH: {"id_namespace": "xbrl_concept", "value_column": "yoy_growth"},
-    CHART_RAW_FACTS: {"id_namespace": "xbrl_concept", "value_column": "value"},
+    
 }
 
 # `label` is the string rendered onto the chart today and must stay byte-identical.

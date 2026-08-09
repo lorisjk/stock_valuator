@@ -63,7 +63,7 @@ CHART_SECTIONS = [
     (config.CHART_FUNDAMENTALS, "Fundamentals", "What the business does, independent of its share price."),
     (config.CHART_VALUATION, "Valuation", "What the market charges for a claim on that business."),
     (config.CHART_GROWTH, "Growth", "Year-over-year change in the underlying filed figures."),
-    (config.CHART_RAW_FACTS, "Raw Facts", "Underlying financial data for the selected ticker."),
+    
 ]
 
 

@@ -1539,7 +1539,7 @@ def main(write_charts: bool = True, write_html: bool = False):
     facts = add_as_concept(facts, quarterly_metrics["ebitda_quarterly"], "ebitda_quarterly", "EBITDA_QUARTERLY")
 
     duplicates = facts[facts.duplicated(subset=["ticker", "concept", "end"], keep=False)]
-    if not duplicates.empty:
+    if not duplicates.empty and len(duplicates) > 6:
         print("WARNUNG: Duplikate gefunden!")
         print(duplicates)
 
