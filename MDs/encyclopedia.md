@@ -300,7 +300,7 @@ This is the metric used in actual acquisitions, because an acquirer inherits the
 conventional PEG divides P/E by the *earnings* growth rate; this project has always divided
 by the *revenue* growth rate. The label promised one thing and the computation did another,
 so it was renamed to describe what it actually is. **The numbers did not change** — only the
-name. See `meta_fetch_and_related_fixes_report.md` Part 4.
+name.
 
 **Why revenue growth rather than earnings growth**, having measured both on the real data:
 an earnings-growth version would be materially worse. 38.4% of rows would have a negative

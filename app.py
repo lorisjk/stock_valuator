@@ -54,10 +54,34 @@ DEFAULT_COPY_PERIODS = 8
 # ticker-independent: sitting them next to a ticker-specific tab set would invite
 # the reader to assume they describe the selected ticker. Switching away from
 # Analysis also hides the ticker controls, so there is nothing to misread.
+#
+# About joins them for exactly that reason and no other: it describes the project,
+# not the selected company. It sits last because it is the page a reader looks for
+# once, whereas the other two are looked up repeatedly.
 VIEW_ANALYSIS = "Analysis"
 VIEW_ENCYCLOPEDIA = "Metric encyclopedia"
 VIEW_COVERAGE = "Profile coverage"
-VIEWS = [VIEW_ANALYSIS, VIEW_ENCYCLOPEDIA, VIEW_COVERAGE]
+VIEW_ABOUT = "About"
+VIEWS = [VIEW_ANALYSIS, VIEW_ENCYCLOPEDIA, VIEW_COVERAGE, VIEW_ABOUT]
+
+# Editable text that is not code: the About page and the update notice. Kept in
+# files rather than in string constants so the operator can change what the site
+# says without touching a module the pipeline also imports, and so "no file" can
+# mean "nothing to say" without a special case.
+CONTENT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "content")
+ABOUT_FILE = "about.md"
+NOTICE_FILE = "update_notice.md"
+
+# The one heading render_about lifts out of the flow and draws as a callout. The
+# disclaimer has to be visible without scrolling past the introduction, and that is
+# a rendering decision rather than something the text can enforce about itself.
+PROMINENT_ABOUT_SECTIONS = {"disclaimer"}
+
+# Dismissal lives in session state because Streamlit re-executes this whole script
+# on every widget interaction -- a module-level or local flag would be reset by the
+# next click. Session state persists for the browser session and is dropped on
+# reload, which is exactly the requested lifetime, so no cookie is involved.
+NOTICE_DISMISSED_KEY = "update_notice_dismissed"
 
 CHART_SECTIONS = [
     (config.CHART_FUNDAMENTALS, "Fundamentals", "What the business does, independent of its share price."),
@@ -67,7 +91,6 @@ CHART_SECTIONS = [
 ]
 
 
-# --- loading -----------------------------------------------------------------
 # Dataframes are cached, figures never are: building a figure is cheap, and a
 # cached figure would silently outlive the widget state that produced it.
 
@@ -86,6 +109,44 @@ def load_frame(name: str) -> pd.DataFrame:
 def load_meta() -> dict:
     with open(os.path.join(APP_DATA_DIR, "meta.json"), encoding="utf-8") as fh:
         return json.load(fh)
+
+
+def read_content(name: str) -> str:
+    """A content file's text, or '' when it is absent or unreadable.
+
+    Deliberately **not** cached, unlike the frames above. These files are the ones a
+    person edits by hand, and a cache would hold the old text until someone knew to
+    clear it; they are a few kilobytes read once per rerun.
+
+    An absent file is not an error. That is what lets an empty `update_notice.md` --
+    or no file at all -- mean "nothing to announce" without a separate switch.
+    """
+    try:
+        with open(os.path.join(CONTENT_DIR, name), encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
+def strip_comments(text: str) -> str:
+    """Markdown with its HTML comments removed.
+
+    The content files carry their editing instructions in `<!-- -->` blocks. Streamlit
+    renders markdown with HTML disabled, so a comment would otherwise be printed to
+    the page verbatim -- and, worse for the notice, a file holding nothing but its
+    instructions would count as content and draw an empty box.
+    """
+    out, rest = [], text
+    while True:
+        start = rest.find("<!--")
+        if start == -1:
+            out.append(rest)
+            return "".join(out)
+        out.append(rest[:start])
+        end = rest.find("-->", start)
+        if end == -1:                      # unterminated comment: drop the remainder
+            return "".join(out)
+        rest = rest[end + 3:]
 
 
 def frame_for(chart: str) -> pd.DataFrame:
@@ -111,7 +172,6 @@ def metric_options(chart: str, ticker: str | None) -> tuple[list[str], dict[str,
     return [i for i, _ in pairs], {i: label for i, label in pairs}
 
 
-# --- data inspection ---------------------------------------------------------
 
 def pivot_ticker(frame: pd.DataFrame, ticker: str,
                  value_column: str = "value") -> pd.DataFrame:
@@ -245,7 +305,6 @@ def cadence_markers(frame: pd.DataFrame, ticker: str) -> tuple[dict[str, str], s
     return markers, "  \n".join(parts)
 
 
-# --- display formatting ------------------------------------------------------
 # Kept strictly apart from the numbers: format_for_display returns a frame of
 # strings that is only ever handed to st.dataframe. Downloads and copy blocks
 # are produced from the numeric frame, so they carry full precision.
@@ -519,7 +578,6 @@ def render_data_tab(ticker: str) -> None:
     render_snapshot_section(load_frame(DATA_FILES["snapshot"]), ticker)
 
 
-# --- reference pages ---------------------------------------------------------
 
 def render_freshness(meta: dict) -> None:
     """Run provenance, in the sidebar so it survives every tab and page switch."""
@@ -625,7 +683,97 @@ def render_coverage() -> None:
     st.dataframe(pd.DataFrame(rows).set_index("metric"), width="stretch")
 
 
-# --- page --------------------------------------------------------------------
+def split_sections(text: str) -> list[tuple[str, str]]:
+    """Markdown split on level-2 headings, as (heading, body) in file order.
+
+    Anything before the first `## ` comes back as ("", intro). Splitting rather than
+    rendering the file in one block is what lets one named section be drawn
+    differently; every other section is passed through untouched, so the file stays
+    ordinary markdown and the page order is the file's order.
+    """
+    sections, heading, body = [], "", []
+    for line in text.splitlines():
+        if line.startswith("## "):
+            if heading or any(l.strip() for l in body):
+                sections.append((heading, "\n".join(body).strip()))
+            heading, body = line[3:].strip(), []
+        else:
+            body.append(line)
+    if heading or any(l.strip() for l in body):
+        sections.append((heading, "\n".join(body).strip()))
+    return sections
+
+
+def render_about() -> None:
+    st.header("About")
+
+    text = strip_comments(read_content(ABOUT_FILE))
+    if not text.strip():
+        # A missing About file is a deployment mistake rather than a valid state, so
+        # unlike the notice it says so -- but it still must not raise.
+        st.warning(
+            f"No About content found. Expected `{ABOUT_FILE}` in `{CONTENT_DIR}`. "
+            "The page is text held in a file so it can be edited without changing "
+            "code; create that file to fill this page in."
+        )
+        return
+
+    for heading, body in split_sections(text):
+        if heading:
+            st.subheader(heading)
+        if not body:
+            continue
+        if heading.strip().lower() in PROMINENT_ABOUT_SECTIONS:
+            st.warning(body)
+        else:
+            st.markdown(body)
+
+
+def dismiss_update_notice() -> None:
+    """Set the dismissal flag. Runs as a button callback, which is the whole point.
+
+    Streamlit executes widget callbacks **before** it re-runs the script body. So by
+    the time render_update_notice() reads the flag on the rerun a click triggers, it
+    is already True and the early return fires -- one click, one rerun, gone.
+
+    The obvious alternative, `if st.button("Dismiss"): st.session_state[...] = True`,
+    is the failure mode this avoids. That branch is only reached *after* the notice
+    above it has already been drawn in that same run, so the flag is set for a run
+    that never happens on its own: the notice stays on screen until some unrelated
+    widget triggers the next rerun.
+    """
+    st.session_state[NOTICE_DISMISSED_KEY] = True
+
+
+def render_update_notice() -> None:
+    """A dismissible notice, right-aligned at the top of the page body.
+
+    Ordering matters and is the reverse of how it reads: check the flag, then decide
+    whether to draw anything at all, and never let the drawing code be responsible
+    for clearing itself.
+
+    "Top-right" is as literal as this app can be without custom CSS. Streamlit has no
+    absolute positioning in its layout model, so this is a right-aligned container at
+    the top of the page body -- it scrolls with the page rather than pinning to the
+    viewport. st.toast was the other candidate and is wrong here: it dismisses itself
+    after a few seconds, and the notice is supposed to persist until the reader
+    dismisses it.
+    """
+    if st.session_state.get(NOTICE_DISMISSED_KEY, False):
+        return
+
+    text = strip_comments(read_content(NOTICE_FILE)).strip()
+    if not text:
+        # Missing file, empty file, and a file holding only its own instructions all
+        # land here, and all three mean the same thing: draw nothing. Not an empty box.
+        return
+
+    with st.container(horizontal=True, horizontal_alignment="right"):
+        with st.container(border=True, width="content"):
+            st.markdown(text)
+            st.button("Dismiss", key="dismiss_update_notice",
+                      on_click=dismiss_update_notice)
+
 
 def main() -> None:
     st.set_page_config(page_title="Kyhestlo", layout="wide")
@@ -649,6 +797,11 @@ def main() -> None:
 
     meta = load_meta()
     universe = load_frame("universe.parquet")
+
+    # Above the introduction and below the title, so it is the first thing after the
+    # page name on every view. After the missing-data guard on purpose: that branch
+    # stops the run, and an announcement over an error page helps nobody.
+    render_update_notice()
 
     st.caption(
         "This pipeline fetches SEC EDGAR 10k and 10q filings of every S&P 500 company, extracts the XBRL "
@@ -689,6 +842,9 @@ def main() -> None:
         return
     if view == VIEW_COVERAGE:
         render_coverage()
+        return
+    if view == VIEW_ABOUT:
+        render_about()
         return
 
     render_analysis(ticker, as_of, tickers, profiles)

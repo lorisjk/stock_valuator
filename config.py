@@ -217,7 +217,7 @@ TTM_SOURCE_ANNUAL = "annual_fact"          # one 12-month fact, taken as filed
 # and for the same reason: the term is absent for roughly 77% of REIT FFO periods
 # and is filled with zero, which asserts "no disposals" from "not extracted". The
 # two cannot be told apart from the pipeline's own output, so the assumption is
-# recorded rather than hidden. See alignment_and_defaults_report.md.
+# recorded rather than hidden. See MDs/main.md.
 FFO_GAINS_REPORTED = "reported"            # a filed GainLossOnSaleOfProperties_TTM
 FFO_GAINS_IMPUTED_ZERO = "imputed_zero"    # no fact found; zero assumed
 
@@ -330,7 +330,8 @@ TICKER_PROFILES = {
     "DG": "retail",
     "DLTR": "retail",
     "CAH": "retail", "COR": "retail", "MCK": "retail", "HSIC": "retail",
-    #"CVNA": "retail", doesnt work
+    # CVNA is deliberately not on the retail profile: it was tried and the profile
+    # produced nothing usable for it.
 
     "MO": "consumer_staples",
     "ADM": "consumer_staples",
@@ -505,8 +506,8 @@ TICKER_PROFILES = {
 
     "DHI": "homebuilder",
     "LEN": "homebuilder",
-   # "PHM": "homebuilder", WORKS NOT WELL
-   # "NVR": "homebuilder", SAME AS ABOVE
+   # PHM and NVR were tried on a homebuilder profile and it fitted both poorly;
+   # they stay on the default profile until that set is re-derived.
 
     "MCD": "leisure",
     "SBUX": "leisure", "DPZ": "leisure", "CMG": "leisure",
@@ -537,7 +538,8 @@ TICKER_PROFILES = {
     "CVX": "energy_integrated",
     "EOG": "energy", "COP": "energy_integrated", "OXY": "energy_integrated", "DVN": "energy_integrated",
     "FANG": "energy", 
-    #"APA": "energy", HAS NO REVENUE
+    # APA is deliberately not on the energy profile: it reports no Revenue, so the
+    # profile's revenue-based metrics would all be empty.
     "EQT": "energy", "EXE": "energy",
     "WMB": "energy", "OKE": "energy", "KMI": "energy", "TRGP": "energy",
     "MPC": "energy", "PSX": "energy_integrated", "VLO": "energy",
@@ -1430,7 +1432,6 @@ PROFILE_CONCEPT_OVERRIDES = {
         # GainLossOnDispositionOfAssets1 would have contributed more TTM values than every
         # accepted tag combined (+145 of +350) and measure something else -- AVB tags a
         # 2011 property gain of 294.8m and 13.7m of "assets", PLD 656.9m against 195.1m.
-        # See ffo_gains_report.md.
         "GainLossOnSaleOfProperties": {
             "tags": [
                 "GainLossOnSaleOfProperties",
@@ -1652,10 +1653,6 @@ TICKER_CONCEPT_OVERRIDES = {
             "point_in_time": True,
             "mode": "fallback",
         },
-        # GainLossOnSaleOfProperties stood here: a one-off adding a single tag that the
-        # reit profile's list now carries for every REIT. A ticker override replaces the
-        # profile entry outright, so leaving it would have pinned this filer to the old,
-        # narrower list.
     },
     "CMG": {
         "Revenue": {
@@ -1797,10 +1794,6 @@ TICKER_CONCEPT_OVERRIDES = {
         },
     },
     "ARE": {
-        # GainLossOnSaleOfProperties stood here: a one-off adding a single tag that the
-        # reit profile's list now carries for every REIT. A ticker override replaces the
-        # profile entry outright, so leaving it would have pinned this filer to the old,
-        # narrower list.
     },
     "TGT": {
         "AccountsReceivable": {
@@ -1974,6 +1967,14 @@ def filter_hidden_rows(df, ticker_col="ticker", concept_col="concept"):
     return df[mask].reset_index(drop=True)
 
 def get_concept_candidates(ticker: str) -> dict:
+    """Base concepts, then the profile's overrides, then the ticker's.
+
+    Each layer **replaces** a concept's whole entry, it does not merge into it. So a
+    ticker override that adds one tag to a concept silently discards every other tag the
+    profile listed for it, and pins that filer to whatever the list looked like the day
+    the override was written. Widen the profile entry instead, unless the filer really is
+    the exception.
+    """
     profile = TICKER_PROFILES.get(ticker, DEFAULT_PROFILE)
     overrides = PROFILE_CONCEPT_OVERRIDES.get(profile, {})
     resolved = dict(CONCEPT_CANDIDATES)
@@ -1981,22 +1982,12 @@ def get_concept_candidates(ticker: str) -> dict:
     resolved.update(TICKER_CONCEPT_OVERRIDES.get(ticker, {}))
     return resolved
 
-# GROWTH_BASE_PANELS / GROWTH_PROFILE_EXTRA / get_growth_panels() stood here: an
-# earlier sketch of per-profile growth panels, with zero consumers. It named 15
-# concepts (fcf_growth, nii_growth, ffo_growth, equity_growth, ...) of which not
-# one existed in any dataframe or in this registry -- an invented naming scheme
-# that was never wired to data. The growth entries in METRICS supersede it, keyed
-# by real concept names and made per-profile by is_hidden rather than by a second
-# visibility mechanism, so it is deleted rather than left as a third parallel one.
-
 CACHE_DIR = "cache"
 DATA_DIR = "data"
 FIGURE_DIR = "figures"
 
 
 
-# FOR FIGURES:PY
-#
 # METRICS is the single source of truth for everything that gets plotted. The
 # five structures figures.py has always imported (FUNDAMENTALS_TO_PLOT,
 # VALUATIONS_TO_PLOT, GROWTH_PANELS, QUARTERLY_COUNTERPART,
@@ -2074,7 +2065,7 @@ class Metric:
 
 
 METRICS = [
-    # --- fundamentals: order is panel order ---
+    # fundamentals -- list order is panel order
     Metric("revenue_yoy_growth", CHART_FUNDAMENTALS, "Revenue growth", 0, percent=True,
            description="How much larger trailing-twelve-month sales are than a year ago. "
                        "The top line, and the number hardest to influence through accounting choices.",
@@ -2197,7 +2188,7 @@ METRICS = [
                    "`DepreciationAndAmortization_TTM` − `GainLossOnSaleOfProperties_TTM`. Total "
                    "D&A is added back, not only real-estate depreciation as NAREIT specifies."),
 
-    # --- valuation: order is panel order ---
+    # valuation -- list order is panel order
     Metric("pe_ratio", CHART_VALUATION, "P/E (TTM)", None, harmonic=True,
            description="Price per dollar of annual earnings -- the years of current profit you "
                        "are paying for one share.",
@@ -2467,7 +2458,6 @@ def get_plottable_metrics(
     ]
 
 
-# --- derived compatibility layer -------------------------------------------
 # Everything below is generated from METRICS and must stay equal to the literals
 # these names held before the registry existed. The legacy symlog flag is not
 # part of the registry (no metric ever set it and nothing renders it); the

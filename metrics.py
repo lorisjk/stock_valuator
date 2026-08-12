@@ -9,11 +9,10 @@ MAX_OPERATING_LEVERAGE_ABS = 15
 MIN_NET_DEBT_TO_EBITDA_ABS = 10_000_000
 MAX_NET_DEBT_TO_EBITDA_ABS = 60
 MIN_DEBT_TO_EQUITY_SCALE_RATIO = 0.05
-# Two years of calendar either side, not eight rows either side. Eight rows are eight
-# quarters only on a series with no hole: over the 37,891 full 17-row windows the row
-# rule formed, the modal span was exactly 1,461 days -- sixteen quarter-steps, which is
-# what this constant now says outright -- but the tail reached 4,475, twelve years.
-# See final_consistency_report.md.
+# Two years of calendar either side, not eight rows either side: over the 37,891 full
+# 17-row windows the row rule formed, the modal span was 1,461 days -- sixteen
+# quarter-steps, what this constant now says outright -- but the tail reached 4,475,
+# twelve years. See MDs/metrics.md.
 REVENUE_SELF_SCALE_HALF_WINDOW_DAYS = 730
 MIN_REVENUE_SELF_SCALE_RATIO = 0.10
 MIN_PEG_REVENUE_GROWTH = 0.02
@@ -22,7 +21,7 @@ MAX_PEG_RATIO_ABS = 30
 # calculate_ttm sums four *rows*, which are only four quarters if the series has
 # no holes. Every bound below is the midpoint of an empty run measured over the
 # 333,737 windows the implementation forms across all 501 tickers and 24 TTM
-# concepts -- not a round number chosen in advance. See ttm_window_report.md.
+# concepts -- not a round number chosen in advance. See MDs/metrics.md.
 #
 #   window span = end[i] - end[i-3]
 #     245 |  gap 246..250  | 251 ... 304 |  gap 305..362  | 363
@@ -48,14 +47,8 @@ def apply_denominator_scale_guard(
 
     **A missing reference cannot fire this guard**, and that is a property of the
     comparison rather than a choice: `denominator < ratio * NaN` is False, so the value
-    passes unguarded. The `& scale_reference.notna()` that used to stand here was a no-op --
-    verified, byte-identical output with and without it -- so removing it changes nothing
-    and stating the property is more use than restating it in code.
-
-    Callers hand in a reference already carried across the periods where the filer did not
-    report it (`fill_scale_reference`). Measured over the guarded metrics, that covers the
-    whole exposure: ~6,700 values reached a guarded metric with no reference, and every one
-    was a per-period hole on a ticker that reports revenue elsewhere. What still arrives
+    passes unguarded. Callers therefore hand in a reference already carried across the
+    periods where the filer did not report it (`fill_scale_reference`); what still arrives
     missing is missing for a whole ticker, and there is nothing to compare against.
     """
     too_small = denominator.abs() < min_denominator_scale_ratio * scale_reference.abs()
@@ -70,15 +63,14 @@ def fill_scale_reference(
 ) -> pd.Series:
     """A ticker's scale reference carried into the periods where it is missing.
 
-    A scale guard asks an order-of-magnitude question -- "is this denominator less than 1% of
-    the business" -- so a neighbouring period's revenue answers it as well as the absent one
-    would. Forward first, then backward for a leading hole, so a period is measured against
-    the nearest year the filer actually reported.
+    A scale guard asks an order-of-magnitude question, so a neighbouring period's revenue
+    answers it as well as the absent one would. Forward first, then backward for a leading
+    hole.
 
-    This is what lets the guard evaluate instead of silently passing, without blanking values
-    it was never given the chance to judge: the unguarded population is measurably *tamer*
-    than the guarded one (median pe_ratio 17.2 against 18.7, max 1,783 against 25,466), so
-    treating "cannot evaluate" as "fails" would have deleted the better-behaved half.
+    This is what lets the guard evaluate instead of silently passing, and the alternative
+    was measured: the unguarded population is *tamer* than the guarded one (median pe_ratio
+    17.2 against 18.7, max 1,783 against 25,466), so treating "cannot evaluate" as "fails"
+    would have deleted the better-behaved half.
     """
     work = frame[[ticker_col, date_col, reference_col]].sort_values([ticker_col, date_col])
     filled = work.groupby(ticker_col)[reference_col].ffill().bfill()
@@ -95,35 +87,27 @@ def apply_self_relative_scale_guard(
     """Blank a value whose own reference collapsed against the scale of its neighbours.
 
     The window is a **calendar span**, `[end - half_window_days, end + half_window_days]`,
-    not a row count. It used to be seventeen rows, and seventeen rows are four years only
-    on a series with no hole -- the fourth member of the family `calculate_ttm`,
-    `calculate_rolling_harmonic_stats` and `pct_change` belonged to. The span distribution
-    has no empty run to derive a threshold from, for the same structural reason the
-    five-year window had none: a span is a sum of quarter-steps, so its support is a
-    lattice with ~91-day spacing and every gap in it is that spacing rather than a boundary
-    between two populations. So the window is defined directly instead of a wrong one being
-    masked.
+    not a row count. There is no empty run in the span distribution to derive a threshold
+    from -- a span is a sum of quarter-steps, so its support is a lattice with ~91-day
+    spacing and every gap is that spacing -- which is why the window is defined directly
+    rather than a wrong one being masked.
 
-    **Centred, so it looks forward as well as back, and that is deliberate.** The quantity
-    is "the scale of this business around this period", which is symmetric: a backward-only
-    reference would judge the first years of a company that later grew twentyfold against
-    nothing, and the years after a divestiture against a business that no longer exists. The
-    cost is that the guard is not causal -- a row's visibility can change when a later period
-    is filed, and an as-of view assembled by cutting rows was still guarded using data from
-    after the cut. That is inherent to a centred rule; it is recorded rather than removed.
+    **Centred, so it looks forward as well as back, and that is a decision rather than an
+    oversight.** The quantity is "the scale of this business around this period", which is
+    symmetric: a backward-only reference would judge a company's first years against
+    nothing and its post-divestiture years against a business that no longer exists. The
+    cost is that the guard is **not causal** -- a row's visibility can change when a later
+    period is filed, and an as-of view assembled by cutting rows was still guarded using
+    data from after the cut. Do not "fix" the forward-looking window without reading
+    MDs/metrics.md first.
 
-    **Nothing new is needed when a window is thin.** `min_periods=1` puts the row in its own
-    window, so a row with no neighbours is compared against itself and passes -- the same
-    "cannot evaluate, therefore do not blank" property `apply_denominator_scale_guard` has
-    with a missing reference. There is deliberately no second notion of "too little history"
-    beyond the one `avg_*_5y_history_too_short` already expresses.
+    A thin window needs no special case: `min_periods=1` puts the row in its own window, so
+    a row with no neighbours is compared against itself and passes -- the same "cannot
+    evaluate, therefore do not blank" property the denominator guard has.
 
-    Switching from rows to days moved no value in the frame it was measured on, and the
-    reason is worth knowing: the two rules disagree about the reference on **25% of rows**
-    -- the row window reaches further back and so sees a larger maximum, by 2.4% at the
-    median and up to 5.9x -- but the guard fires at a factor of ten, and no row's ratio
-    crossed it either way. Fourteen rows sit within [0.10, 0.15) of the threshold, which is
-    how much headroom that argument has. See final_consistency_report.md.
+    Rows to days moved no value, and the headroom is measurable: the two rules disagree
+    about the reference on 25% of rows (up to 5.9x), but the guard fires at a factor of
+    ten and only fourteen rows sit within [0.10, 0.15) of it.
     """
     work = df[["ticker", "end", reference_col]].copy().sort_values(["ticker", "end"])
     work["_abs_ref"] = work[reference_col].abs()
@@ -336,13 +320,6 @@ def calculate_ttm(df: pd.DataFrame, concept: str, result_name: str) -> pd.DataFr
     return filtered_df[["ticker", "end", result_name]]
 
 
-# calculate_rolling_average stood here: the arithmetic sibling of
-# calculate_rolling_harmonic_stats, with zero call sites anywhere in the project since it
-# was written. It also carried the row-count window that the rolling-window task replaced
-# with a calendar one, so leaving it would have left a second, wrong convention in reach of
-# the next person who needed a rolling mean.
-
-
 def harmonic_mean(values: pd.Series) -> float:
 
     positive = values[values > 0].dropna()
@@ -357,13 +334,10 @@ def calculate_rolling_harmonic_stats(
     """Harmonic mean, median and observation count over a *calendar* window.
 
     `window` is a pandas offset string, not a row count: the window holds every
-    observation whose end falls in `(end - window, end]`. A row count is not the
-    same measurement. Twenty consecutive quarters span nineteen quarter-steps --
-    1,735 days between the outer end dates, not 1,826 -- and only a series with no
-    hole and no extra row lands there. Measured over the 23,734 windows the
-    valuation history forms, 12.3% reached back more than five years (up to 11.2)
-    and 8.8% covered less than 4.65, so 21% of the five-year means were an average
-    over some other period. See rolling_window_report.md.
+    observation whose end falls in `(end - window, end]`. A row count is not the same
+    measurement -- twenty consecutive quarters span 1,735 days, not 1,826 -- and measured
+    over the 23,734 windows the valuation history forms, 21% of the row-counted five-year
+    means were an average over some other period. See MDs/metrics.md.
 
     The count is not fixed at twenty, deliberately: five years of history with a
     gap in it is still five years, and `_n` reports how many observations were
@@ -397,7 +371,7 @@ def calculate_rolling_harmonic_stats(
 # being what chose it: over the 83 (ticker, concept) pairs whose newest row is null with a
 # real value behind it, the observed distances form a quarterly lattice that stops at 365
 # and does not resume until 546, so every bound in [365, 545] selects the identical 37
-# pairs. See final_consistency_report.md.
+# pairs. See MDs/metrics.md.
 MAX_LATEST_VALUE_AGE_DAYS = 365
 
 
@@ -406,22 +380,15 @@ def get_latest_value(
 ) -> pd.DataFrame:
     """The newest row of `concept` that actually carries a value, per ticker.
 
-    It used to be the newest *row*, value or not. AvalonBay's `FFO_TTM` is NaN at
-    2026-03-31 and 2026-06-30 and 1.60bn at 2025-09-30, so the snapshot had no `p_ffo`
-    for a REIT although one was available three quarters back -- and the same is true of
-    every concept the snapshot reads, 83 (ticker, concept) pairs on 69 tickers.
+    Skipping nulls **without a bound** is the version of this fix that is worse than the
+    bug: the observed distances run to 5,021 days, and a dividend from 2012 beside today's
+    price is not a stale number, it is a wrong one. `max_value_age_days` bounds it; `None`
+    disables it for a caller that wants a value at any age -- the scale guard's
+    order-of-magnitude reference is the one such caller.
 
-    Skipping nulls without a bound is the version of this fix that is worse than the bug:
-    the distances run to 5,021 days, and a dividend from 2012 presented beside today's
-    price is not a stale number, it is a wrong one. `max_value_age_days` bounds it;
-    `None` disables the bound for a caller that wants a value at any age (the scale
-    guard's order-of-magnitude reference is the one such caller -- a neighbouring year's
-    revenue answers "is this denominator 1% of the business" as well as this year's).
-
-    `end` is now the period the returned **value** is from rather than the period the
-    newest row is from, and `value_age_days` is the distance between the two, 0 whenever
-    the newest row is the value. That is what lets a caller publish how the number was
-    obtained, the way `ttm_source` and `ffo_gains_source` do in the facts frame.
+    `end` is the period the returned **value** is from, not the period the newest row is
+    from, and `value_age_days` is the distance between the two. That is what lets a caller
+    publish how the number was obtained, the way `ttm_source` and `ffo_gains_source` do.
     """
     filtered_df = df[df["concept"] == concept]
     newest_end = filtered_df.groupby("ticker")["end"].max()
@@ -464,16 +431,3 @@ def add_ttm_concepts(df: pd.DataFrame, concepts: list[str]) -> pd.DataFrame:
 def add_as_concept(facts: pd.DataFrame, df: pd.DataFrame, value_col: str, concept_name: str) -> pd.DataFrame:
     new_concept = to_long_format(df, value_col, concept_name)
     return pd.concat([facts, new_concept], ignore_index=True)
-
-  
-# _normalize_series / normalize_split_adjusted stood here. They rescaled every
-# historical SharesOutstanding value by whichever factor from COMMON_SPLIT_FACTORS
-# brought it closest to the newest value -- share-count history pulled toward the
-# anchor, with no notion of when a split happened or whether one had. Of the 929
-# rescaling events it performed across 335 tickers, 7 were corroborated by an actual
-# corporate action. Split normalisation now lives in parse_edgar._apply_split_basis,
-# where the filing date of each fact and the corporate-action feed are both available
-# and no guessing is required.
-
-
- 

@@ -15,7 +15,24 @@ Unlike the EDGAR fetcher, this module does **not** cache. Prices change daily; a
 | Function | Purpose | Output |
 |---|---|---|
 | `get_current_price_and_shares` | Latest price and share count for one ticker | `dict` |
-| `get_price_history` | Daily closing prices since `start` | `DataFrame` with `ticker`, `date`, `close` |
+| `get_price_history` | Daily closes **and the corporate-action feed** since `start` | `DataFrame` with `ticker`, `date`, `close`, `stock_split` |
+| `split_events` | The non-zero split ratios out of a price history | `DataFrame` with `ticker`, `date`, `ratio` |
+
+### The split column is not a bonus, it is a dependency
+
+`"Stock Splits"` ships in the same response as the prices, so the corporate-action feed
+costs no extra request — and `parsers/parse_edgar.py` needs it to put historical share
+counts on the current split basis. That is why the price fetch runs **before** the EDGAR
+fetch in `run_full_refresh`, not merely first by habit.
+
+The column is zero on every non-event day. Note that `close` is **already back-adjusted**
+by yfinance regardless of `auto_adjust`, so a split is visible only here and never as a
+step in the price.
+
+**`get_price_history` is not bit-reproducible across calls.** Two consecutive fetches of
+the same ticker have differed by up to 9.155e-05 on the closes. Any before/after
+comparison of pipeline output therefore has to run from **one** captured price history, or
+the noise swamps the change being measured.
 
 ---
 

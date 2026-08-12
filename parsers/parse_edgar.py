@@ -875,12 +875,17 @@ def _forms_no_ttm_window(quarterly_values: list[dict]) -> bool:
     window, and whose mere existence disabled the thirteen annual facts that would
     have produced thirteen values.
 
-    Evaluated on the pre-mask values, deliberately, and that is safe in one
-    direction only: the masks further down `build_dataframe` remove rows, which can
-    only widen the steps between the survivors and so can only *break* a window,
-    never create one. A window that does not exist here cannot appear later, so this
-    can never let both paths reach the same date. The reverse -- a window that exists
-    here and is masked away later -- costs a recovery, not a collision.
+    Evaluated on the pre-mask values, deliberately -- and the safety of that rests on
+    measurement, not on the argument it is tempting to make. **The tempting argument is
+    wrong**: "masks only remove rows, so they can only break a window, never create one"
+    does not hold, because removing a row widens the step between its neighbours and a
+    widened step can move *into* the valid band from below. Rows at days 0, 45, 91, 182,
+    273 form no window; remove the day-45 row and they form one.
+
+    What is true is empirical: over all 501 tickers and 25 TTM concepts there is no pair
+    where this gate opens and the post-mask values then form a window, and no post-mask
+    series reaches a date its pre-mask self did not. Both paths therefore never reach the
+    same date -- but if that ever changes, the collision is real. See MDs/parser_edgar.md.
     """
     if not quarterly_values:
         return True
@@ -911,7 +916,7 @@ def annual_ttm_values(us_gaap_data: dict, cfg: dict, quarterly_values: list[dict
     annual facts land on dates the rolling path already holds. Gating per date would
     turn a structural guarantee into a tie-break exercised 81,505 times, to prepend a
     decade of annual points to series that are otherwise quarterly. See
-    annual_path_gate_report.md.
+    MDs/metrics.md.
     """
     if not _forms_no_ttm_window(quarterly_values):
         return []

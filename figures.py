@@ -13,8 +13,9 @@ from config import (
 )
 from metrics import harmonic_mean
 
-# Colors pinned so every subplot looks like the matplotlib version did
-# (each mpl axes restarted its color cycle; one Plotly figure would not).
+# Pinned rather than left to Plotly's cycle: one figure holds every subplot, so an
+# automatic cycle would give each panel a different colour and imply a distinction
+# that is not there.
 _PRIMARY_COLOR = "#1f77b4"
 _SECONDARY_COLOR = "#ff7f0e"
 # The snapshot marker: green rather than the series blue, and never red, which is
@@ -265,12 +266,10 @@ def plot_metric(
 
     valid_values = filtered.dropna(subset=["end", "value"])
 
-    # Erst prüfen, ob Daten vorhanden sind
     if valid_values.empty:
         _annotate_no_data(fig, row, col)
         return
 
-    # Erst danach den Plot hinzufügen
     fig.add_trace(
         go.Scatter(
             x=filtered["end"],
@@ -375,26 +374,23 @@ def plot_metric_dual(
     percent: bool = False,
 ) -> None:
 
-    # TTM-Daten holen
     ttm = metrics_long[
         (metrics_long["ticker"] == ticker)
         & (metrics_long["concept"] == concept)
     ].sort_values("end")
 
-    # Quartalsdaten holen
     quarterly = metrics_long[
         (metrics_long["ticker"] == ticker)
         & (metrics_long["concept"] == quarterly_concept)
     ].sort_values("end")
 
-    # Wenn keine echten TTM-Werte existieren:
-    # komplettes Panel leer lassen und "keine Daten" anzeigen
+    # no TTM series means an empty panel, whatever the quarterly series holds: the
+    # quarterly line alone would be read as the metric itself
     ttm_valid = ttm.dropna(subset=["end", "value"])
     if ttm_valid.empty:
         _annotate_no_data(fig, row, col)
         return
 
-    # TTM immer anzeigen, wenn vorhanden
     fig.add_trace(
         go.Scatter(
             x=ttm["end"],
@@ -413,7 +409,6 @@ def plot_metric_dual(
 
     )
 
-    # Quartal nur anzeigen, wenn Quartalsdaten vorhanden sind
     quarterly_valid = quarterly.dropna(subset=["end", "value"])
     if not quarterly_valid.empty:
         fig.add_trace(
@@ -476,7 +471,6 @@ def build_fundamentals(
     rows, cols = _make_grid(len(concepts_to_plot))
     fig = _make_subplot_figure(rows, cols, [c[0] for c in concepts_to_plot])
 
-    # 5th tuple element is the legacy symlog flag; unused by any metric, not rendered.
     for idx, (concept, ylabel, ref_line, percent, _symlog) in enumerate(concepts_to_plot):
         r, c = idx // cols + 1, idx % cols + 1
         quarterly_concept = QUARTERLY_COUNTERPART.get(concept)

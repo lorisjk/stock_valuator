@@ -1246,7 +1246,7 @@ def build_snapshot(
     #
     # The positivity mask was missing outright, and that was the larger half of the
     # disagreement: 111 of 458 published p_tbv markers were **negative**, sitting on charts
-    # whose line is blank there by construction. See final_consistency_report.md.
+    # whose line is blank there by construction. See MDs/main.md.
     snap["pb_ratio"] = apply_denominator_scale_guard(
         snap["market_cap"] / snap["equity"].where(snap["equity"] > 0),
         snap["equity"], snap["_revenue_scale"], MIN_VALUATION_DENOMINATOR_SCALE_RATIO
@@ -1843,9 +1843,9 @@ def run_full_refresh(write_charts: bool = False, write_html: bool = False):
     deleted = delete_cached_facts(active_tickers)
     print(f"Deleted {len(deleted)} cached company-facts files.")
 
-    # --- Phase 1: yfinance fetch, timed per ticker ---
-    # Runs before EDGAR because the price response carries the corporate-action feed,
-    # and the parser needs it to put historical share counts on the current basis.
+    # Prices first, and timed per ticker: the price response carries the
+    # corporate-action feed, and the parser needs it to put historical share counts on
+    # the current split basis.
     yfinance_times = {}
     price_frames = []
     current_price_rows = []
@@ -1865,7 +1865,6 @@ def run_full_refresh(write_charts: bool = False, write_html: bool = False):
     prices["market_cap"] = prices["price"] * prices["shares_outstanding"]
     splits = splits_by_ticker(price_history)
 
-    # --- Phase 2: EDGAR fetch, timed per ticker ---
     mapping = fetch_or_cache(
         url="https://www.sec.gov/files/company_tickers.json",
         cache_path="cache/ticker_mapping.json",
@@ -1893,7 +1892,6 @@ def run_full_refresh(write_charts: bool = False, write_html: bool = False):
     expected_by_ticker = {ticker: get_expected_concepts(ticker) for ticker in active_tickers}
     print_data_quality(facts, expected_by_ticker, SEARCH_HINTS, collect_flags=quality_flags)
 
-    # --- Phase 3: calculate (batch) + plot (per ticker) ---
     t0 = time.perf_counter()
     facts = add_derived_concepts(facts)
     facts = add_quarterly_derived_concepts(facts)

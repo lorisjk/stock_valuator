@@ -166,7 +166,7 @@ def get_latest_filed_period(submissions: dict) -> str | None:
 
 
 # A quarter is not 13 weeks for every filer. Measured over the 622,845 differences
-# decumulate_period_values forms across all 501 tickers (decumulation_window_report.md):
+# decumulate_period_values forms across all 501 tickers (see MDs/fetcher_edgar.md):
 #
 #   80..100   604,683   the calendar quarter (89-92) and the 12-week quarter (83-84)
 #   101..105        0   empty
