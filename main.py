@@ -94,8 +94,8 @@ def load_facts(splits: dict = None) -> pd.DataFrame:
         cache_path="cache/ticker_mapping.json",
         headers={"User-Agent": EDGAR_USER_AGENT},
     )
-    cik_mapping = build_ticker_to_cik(mapping)
-    cik_mapping.update(CIK_OVERRIDES)
+    cik_mapping = build_ticker_to_cik(mapping).update(CIK_OVERRIDES)
+    
 
     all_dfs = []
     for ticker in TICKERS:
