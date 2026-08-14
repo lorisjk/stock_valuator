@@ -63,11 +63,11 @@ last refreshed.
 
 ## Source code
 
-[Github repo link: ](https://github.com/lorisjk/stock_valuator.git)
+[Github repo link](https://github.com/lorisjk/stock_valuator.git)
 
 ## Contact
 
-For buisness inquiries, please contact: kyhestlo@gmail.com
+For buisness inquiries, please contact: kyhestlo.mail@gmail.com
 
 ## Legal notice / Impressum
 
@@ -79,7 +79,7 @@ Birkenhof 3
 Deutschland
 
 Kontakt
-E-Mail: kyhestlo@gmail.com
+E-Mail: kyhestlo.mail@gmail.com
 
 Verantwortlich für den Inhalt: Loris-Joona Köhn, Birkenhof 3, 15831 Mahlow
 
@@ -103,4 +103,4 @@ USA.
 
 **Your rights.** You have the right to information, correction, deletion, restriction
 of processing, and to object to processing, as well as the right to lodge a complaint
-with a supervisory authority. Contact: kyhestlo@gmail.com.
+with a supervisory authority. Contact: kyhestlo.mail@gmail.com.
