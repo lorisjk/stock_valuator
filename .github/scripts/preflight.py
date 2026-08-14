@@ -63,17 +63,25 @@ def probe_yfinance() -> list[str]:
 def probe_edgar() -> list[str]:
     """The same for EDGAR. Cheap, and it proves the User-Agent is accepted."""
     from config import EDGAR_USER_AGENT
-    from fetchers.edgar import fetch_or_cache, build_ticker_to_cik, get_cik, get_company_info
+    from fetchers.edgar import get_cik, get_company_info
+    # Through the pipeline's own resolver, so this probes the mapping the run will
+    # actually use -- including its freshness policy and its CIK overrides. Probing a
+    # differently-assembled mapping would prove nothing about the run that follows.
+    from main import resolve_cik_mapping
 
     failures = []
     try:
-        mapping = fetch_or_cache(
-            url="https://www.sec.gov/files/company_tickers.json",
-            cache_path="cache/ticker_mapping.json",
-            headers={"User-Agent": EDGAR_USER_AGENT},
-        )
-        cik_mapping = build_ticker_to_cik(mapping)
+        cik_mapping = resolve_cik_mapping()
         print(f"  ticker->CIK mapping: {len(cik_mapping):,} symbols")
+        # Reported, never failed on. An unresolvable ticker is a skip by design (see
+        # run_full_refresh), so turning it into a preflight failure here would undo
+        # that decision. This line exists so the count is visible in the log *before*
+        # the 40-minute run, not so it can stop one.
+        from config import get_active_tickers
+        universe = get_active_tickers()
+        unresolved = [t for t in universe if t not in cik_mapping]
+        print(f"  universe resolves: {len(universe) - len(unresolved)} of {len(universe)}"
+              + (f"  unresolvable: {', '.join(unresolved)}" if unresolved else ""))
     except Exception as exc:                            # noqa: BLE001
         return [f"company_tickers.json: {type(exc).__name__}: {exc}"]
 

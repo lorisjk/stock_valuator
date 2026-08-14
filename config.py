@@ -528,7 +528,14 @@ TICKER_PROFILES = {
 
     "T": "telecom_cable",
     "VZ": "telecom_cable", "TMUS": "telecom_cable",
-    "CMCSA": "telecom_cable", "CHTR": "telecom_cable", "SATS": "telecom_cable",
+    "CMCSA": "telecom_cable", "CHTR": "telecom_cable",
+    # SATS was removed on 2026-08-14. It is not a mapping lag like AEP: EDGAR's own
+    # submissions file for CIK 0001415404 now reports the ticker as ECHO, and yfinance
+    # serves SATS a single price row ending 2026-07-17 against 4,683 rows for ECHO.
+    # The symbol stopped trading; a CIK override would have kept a dead ticker in the
+    # universe with a one-row price history. ECHO is the successor and is a separate
+    # decision -- adding it means a new ticker's whole history to verify, which is not
+    # this task. See ticker_resolution_report.md section 4.
 
     "UNP": "railroads",
     "CSX": "railroads",
@@ -615,9 +622,6 @@ TICKER_PROFILES = {
     "APO": "alt_asset_manager",
 }
 
-CIK_OVERRIDES = {
-    "AEP": "0000004904",   
-}
 
 PROFILE_HIDDEN = {
     "standard": {
@@ -1540,6 +1544,50 @@ PROFILE_EXCLUDED_CONCEPTS = {
     "OperatingIncomeLoss", 
     "Capex"
     },
+}
+
+
+# Ticker -> CIK, applied on top of what company_tickers.json resolves. Structurally the
+# same idea as TICKER_CONCEPT_OVERRIDES and _KNOWN_BAD_FACTS: each entry is one checked
+# case with its reason written down, never a rule.
+#
+# Every CIK here was verified against data.sec.gov directly on 2026-08-14 -- the entity
+# name, the ticker EDGAR itself reports, and that periodic filings still arrive. It was
+# a stale cache that caused the incident these exist for, so confirming an override
+# against a cache would be confirming it against the disease.
+#
+# main.resolve_cik_mapping audits this table on every run and prints a line per entry:
+# an override whose ticker has reappeared in company_tickers.json with the same CIK is
+# reported as redundant, and one that reappeared with a *different* CIK is reported as
+# contested. That is how these get noticed instead of quietly rotting.
+CIK_OVERRIDES = {
+    # Absent from company_tickers.json since somewhere around an exchange change (it is
+    # listed variously as NYSE and Nasdaq), while the company trades and files normally:
+    # EDGAR's submissions endpoint for this CIK reports name "AMERICAN ELECTRIC POWER CO
+    # INC", tickers ['AEP'], exchange Nasdaq, and a 10-Q filed 2026-07-30 for the quarter
+    # ended 2026-06-30. The omission is a defect in that one file, not a delisting.
+    # Without this entry the ticker is unresolvable and AEP silently leaves the universe.
+    "AEP": "0000004904",
+
+    # ExxonMobil re-domiciled to Texas and company_tickers.json now points XOM at the new
+    # holding company, CIK 0002115436 ("ExxonMobil Holdings Corp", NYSE). Following it
+    # would be a silent amputation, measured through the real parser:
+    #
+    #                     old 0000034088     new 0002115436
+    #   parsed rows                  905                 30
+    #   concepts                      14                 10   of 17 candidates
+    #   period range         2006 .. 2026       2024 .. 2026
+    #   missing entirely               -   Capex, OperatingCashFlow,
+    #                                      StockIssued, StockRepurchased
+    #
+    # Losing OperatingCashFlow and Capex removes FCF, and with it pfcf_ratio, ev_fcf,
+    # pfcf_ex_sbc and fcf_margin. Both CIKs carry the 2026-Q2 10-Q, but only the new one
+    # carries its XBRL facts, so the old registrant's data ends at 2026-03-31 and will
+    # not advance. **This entry preserves twenty years of history at the cost of a
+    # growing lag, and it is a stopgap.** The correct fix is reading both CIKs and
+    # merging them, which is a fetch/parse-layer change and was out of scope here.
+    # Revisit before XOM is more than two quarters behind.
+    "XOM": "0000034088",
 }
 
 

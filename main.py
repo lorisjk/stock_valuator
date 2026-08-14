@@ -88,14 +88,60 @@ def splits_by_ticker(price_history: pd.DataFrame) -> dict:
     return out
 
 
-def load_facts(splits: dict = None) -> pd.DataFrame:
+# One day. company_tickers.json is the file that decides which companies exist at all,
+# and this pipeline runs nightly, so the mapping should never be older than the run that
+# uses it. The cost of the choice is one extra SEC request per night against a file that
+# moved 268 symbols out and 257 in over the 37 days that separated the local cache from
+# the CI fetch -- a divergence that made a CI crash unreproducible locally. Weighed
+# against one request, a mapping stale by even a day is the worse side of the trade.
+CIK_MAPPING_MAX_AGE_DAYS = 1
+
+
+def resolve_cik_mapping(report_overrides: bool = True) -> dict:
+    """{ticker: CIK}, fetched no more than a day stale, with CIK_OVERRIDES applied.
+
+    One function rather than the four near-identical blocks this replaces. The four had
+    drifted apart on exactly one detail -- none of them passed max_age_days -- and a
+    35-day-old cache resolving a ticker that the SEC's current file does not is what
+    took down the first CI run. Duplication was the mechanism, so removing it is the
+    structural half of the fix; CIK_MAPPING_MAX_AGE_DAYS is the behavioural half.
+
+    Overrides are applied *after* build_ticker_to_cik so they win over the file, which
+    is the point: every entry in CIK_OVERRIDES exists because the file is wrong about
+    that ticker.
+    """
     mapping = fetch_or_cache(
         url="https://www.sec.gov/files/company_tickers.json",
         cache_path="cache/ticker_mapping.json",
         headers={"User-Agent": EDGAR_USER_AGENT},
+        max_age_days=CIK_MAPPING_MAX_AGE_DAYS,
     )
-    cik_mapping = build_ticker_to_cik(mapping).update(CIK_OVERRIDES)
-    
+    cik_mapping = build_ticker_to_cik(mapping)
+
+    if report_overrides:
+        for ticker, cik in CIK_OVERRIDES.items():
+            from_file = cik_mapping.get(ticker)
+            if from_file is None:
+                print(f"[cik-override] {ticker} -> {cik} (absent from company_tickers.json)")
+            elif from_file == cik:
+                # The file caught up. The override is now a no-op and can be deleted --
+                # said out loud, because an override nobody revisits is the next stale cache.
+                print(f"[cik-override] {ticker} -> {cik} REDUNDANT: the file now agrees, "
+                      f"this entry can be removed from CIK_OVERRIDES")
+            else:
+                print(f"[cik-override] {ticker} -> {cik} CONTESTED: company_tickers.json "
+                      f"says {from_file}. Re-verify against data.sec.gov before trusting either.")
+
+    cik_mapping.update(CIK_OVERRIDES)
+    return cik_mapping
+
+
+def load_facts(splits: dict = None) -> pd.DataFrame:
+    # No skip handling here, deliberately. This is the ad-hoc path over the short
+    # TICKERS list; a hand-run that silently drops one of two requested tickers and
+    # reports success is worse than the traceback. run_full_refresh, which sweeps 500,
+    # is the one that must survive a single unresolvable name.
+    cik_mapping = resolve_cik_mapping()
 
     all_dfs = []
     for ticker in TICKERS:
@@ -1439,12 +1485,9 @@ def load_shares_basis(tickers: list[str]) -> dict:
 
 
 def load_filing_cadences(tickers: list[str]) -> dict:
-    mapping = fetch_or_cache(
-        url="https://www.sec.gov/files/company_tickers.json",
-        cache_path="cache/ticker_mapping.json",
-        headers={"User-Agent": EDGAR_USER_AGENT},
-    )
-    cik_mapping = build_ticker_to_cik(mapping)
+    # report_overrides=False: run_full_refresh already printed the audit from its own
+    # call, and three copies of the same three lines in one log is noise.
+    cik_mapping = resolve_cik_mapping(report_overrides=False)
     out = {}
     for ticker in tickers:
         try:
@@ -1457,12 +1500,7 @@ def load_filing_cadences(tickers: list[str]) -> dict:
 
 
 def load_latest_filed_periods(tickers: list[str]) -> dict:
-    mapping = fetch_or_cache(
-        url="https://www.sec.gov/files/company_tickers.json",
-        cache_path="cache/ticker_mapping.json",
-        headers={"User-Agent": EDGAR_USER_AGENT},
-    )
-    cik_mapping = build_ticker_to_cik(mapping)
+    cik_mapping = resolve_cik_mapping(report_overrides=False)
 
     periods = {}
     for ticker in tickers:
@@ -1640,6 +1678,7 @@ def write_full_refresh_report(
     quality_flags: list[dict],
     charts_written: bool = True,
     html_written: bool = False,
+    unresolved_tickers: list[str] | None = None,
 ) -> None:
     edgar = _timing_summary(edgar_times)
     yfin = _timing_summary(yfinance_times)
@@ -1652,8 +1691,25 @@ def write_full_refresh_report(
     lines.append(f"- Start: {run_start.isoformat(timespec='seconds')}")
     lines.append(f"- End: {run_end.isoformat(timespec='seconds')}")
     lines.append(f"- Total wall-clock time: {total_wall:.1f}s ({total_wall/60:.1f} min)")
-    lines.append(f"- Active tickers processed: {len(active_tickers)}")
+    unresolved = unresolved_tickers or []
+    lines.append(f"- Active tickers requested: {len(active_tickers)}")
+    lines.append(f"- Tickers processed: {len(active_tickers) - len(unresolved)}")
     lines.append(f"- Cached facts files deleted: {len(deleted_cache_files)}\n")
+    # Directly under the run metadata rather than in a section further down: a ticker
+    # missing from the universe is the first thing a reader chasing a gap looks for,
+    # and burying it under 1,500 lines of deleted cache paths would hide it.
+    if unresolved:
+        lines.append(f"### Unresolvable tickers ({len(unresolved)})\n")
+        lines.append("No CIK in `company_tickers.json` and no `CIK_OVERRIDES` entry, so no "
+                     "EDGAR data was fetched. These are **skipped, not failed**: the run "
+                     "continues and they appear in `meta.json`'s `tickers_without_data` "
+                     "alongside tickers that resolved but yielded nothing. The distinction "
+                     "between the two causes lives here.\n")
+        for t in unresolved:
+            lines.append(f"- `{t}`")
+        lines.append("")
+    else:
+        lines.append("Every requested ticker resolved to a CIK.\n")
     if deleted_cache_files:
         lines.append("<details><summary>Deleted cache files</summary>\n")
         for p in deleted_cache_files:
@@ -1868,25 +1924,36 @@ def run_full_refresh(write_charts: bool = False, write_html: bool = False):
     prices["market_cap"] = prices["price"] * prices["shares_outstanding"]
     splits = splits_by_ticker(price_history)
 
-    mapping = fetch_or_cache(
-        url="https://www.sec.gov/files/company_tickers.json",
-        cache_path="cache/ticker_mapping.json",
-        headers={"User-Agent": EDGAR_USER_AGENT},
-    )
-    cik_mapping = build_ticker_to_cik(mapping)
+    cik_mapping = resolve_cik_mapping()
 
     edgar_times = {}
     facts_frames = []
+    # A ticker the mapping cannot resolve is skipped, not fatal. get_cik keeps its
+    # contract -- it still raises -- because two other callers already depend on that,
+    # and because "absent from the mapping" is genuinely exceptional; what changes is
+    # that this loop, the only one sweeping the whole universe, decides a single
+    # unresolvable name is not worth the other 500. The skip is loud: a line here, a
+    # section in the run report, and the ticker lands in meta.json's
+    # tickers_without_data because it produces no rows.
+    unresolved_tickers = []
     for ticker in active_tickers:
         t0 = time.perf_counter()
         concept_candidates = get_concept_candidates(ticker)
-        cik = get_cik(ticker, cik_mapping)
+        try:
+            cik = get_cik(ticker, cik_mapping)
+        except ValueError as exc:
+            unresolved_tickers.append(ticker)
+            print(f"[skip] {ticker}: {exc} Continuing without it.")
+            continue
         company_info = get_company_info(ticker, cik, EDGAR_USER_AGENT)
         facts_frames.append(build_dataframe(ticker, company_info, concept_candidates, period=PERIOD,
                                             splits=splits.get(ticker),
                                             annual_ttm_concepts=TTM_CONCEPTS))
         edgar_times[ticker] = time.perf_counter() - t0
     print(f"EDGAR fetch done: {sum(edgar_times.values()):.1f}s total.")
+    if unresolved_tickers:
+        print(f"WARNUNG: {len(unresolved_tickers)} von {len(active_tickers)} Tickern "
+              f"nicht auflösbar: {', '.join(unresolved_tickers)}")
 
     facts = pd.concat(facts_frames, ignore_index=True)
     facts["end"] = pd.to_datetime(facts["end"]).astype("datetime64[ns]")
@@ -1963,6 +2030,7 @@ def run_full_refresh(write_charts: bool = False, write_html: bool = False):
         report_path, run_start, run_end, active_tickers, deleted,
         edgar_times, yfinance_times, calc_time, plot_times, quality_flags,
         charts_written=write_charts, html_written=write_charts and write_html,
+        unresolved_tickers=unresolved_tickers,
     )
     print(f"Full refresh complete. Report: {report_path}")
 

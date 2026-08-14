@@ -1,7 +1,8 @@
 import sys
 
-from fetchers.edgar import fetch_or_cache, build_ticker_to_cik, get_cik, get_company_info
+from fetchers.edgar import get_cik, get_company_info
 from config import EDGAR_USER_AGENT
+from main import resolve_cik_mapping
 from quality import search_tags
 
 
@@ -14,12 +15,11 @@ def main():
     ticker = sys.argv[1].upper()
     keywords = sys.argv[2:]
 
-    mapping = fetch_or_cache(
-        url="https://www.sec.gov/files/company_tickers.json",
-        cache_path="cache/ticker_mapping.json",
-        headers={"User-Agent": EDGAR_USER_AGENT},
-    )
-    cik_mapping = build_ticker_to_cik(mapping)
+    # Via main rather than assembling the mapping here: a diagnostic that resolves
+    # tickers differently from the pipeline cannot reproduce the pipeline's bugs, which
+    # is exactly what a 37-day-old cache did on 2026-08-14 -- the CI crash on AEP was
+    # not reproducible locally because the two sides resolved from different files.
+    cik_mapping = resolve_cik_mapping(report_overrides=False)
     cik = get_cik(ticker, cik_mapping)
     company_info = get_company_info(ticker, cik, EDGAR_USER_AGENT)
 

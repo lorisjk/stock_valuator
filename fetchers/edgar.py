@@ -26,10 +26,40 @@ def fetch_or_cache(url: str, cache_path: str, headers: dict, max_age_days: int |
     return data
 
 
-def build_ticker_to_cik(mapping: dict) -> dict:
+# company_tickers.json listed 10,396 symbols when this was measured (2026-08-14), and
+# 10,407 in a cache 37 days older -- a net -11 over five weeks, made of 268 departures
+# and 257 arrivals. So the count moves, but only at the edges.
+#
+# The floor is set well below that churn because it is not guarding against churn. It
+# guards against the file coming back structurally wrong: a truncated download, a
+# redesigned schema whose entries no longer carry `ticker`, an outage page that happens
+# to parse as JSON. Any of those yields a mapping one or two orders of magnitude too
+# small, and the failure would otherwise show up as several hundred tickers "not found"
+# forty minutes later. 8,000 is ~77% of the current file: unreachable by listing churn,
+# unmissable by a broken parse.
+MIN_MAPPING_ENTRIES = 8000
+
+
+def build_ticker_to_cik(mapping: dict, min_entries: int = MIN_MAPPING_ENTRIES) -> dict:
+    """{ticker: zero-padded CIK} from company_tickers.json, with a plausibility floor.
+
+    The check lives here rather than in fetch_or_cache because this function is already
+    the company_tickers-specific one -- it knows the payload has `ticker` and `cik_str`
+    keys. fetch_or_cache is generic and must stay that way.
+
+    It is deliberately *not* a check on whether any particular ticker is present:
+    a symbol legitimately leaves this file when a listing changes, which is the whole
+    subject of CIK_OVERRIDES in config.py.
+    """
     cik_mapping = {}
     for entry in mapping.values():
         cik_mapping[entry["ticker"]] = str(entry["cik_str"]).zfill(10)
+    if len(cik_mapping) < min_entries:
+        raise ValueError(
+            f"company_tickers.json yielded only {len(cik_mapping)} ticker->CIK entries, "
+            f"below the {min_entries} floor. The file is truncated, malformed, or no "
+            f"longer has the expected shape; refusing to resolve a universe against it."
+        )
     return cik_mapping
 
 

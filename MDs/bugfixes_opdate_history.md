@@ -6,6 +6,75 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-08-18 — One unresolvable ticker killed the whole run, and a stale cache hid it
+
+The first CI run of the nightly workflow died after ~5 minutes on
+`ValueError: Ticker AEP not found in mapping.` Two independent defects, and a third found while
+fixing them. Full derivation in `ticker_resolution_report.md`.
+
+**1 — `get_cik` raising aborted `run_full_refresh`.** 500 tickers that resolve perfectly well
+were never processed because one did not. The tolerance already existed elsewhere in the same
+file -- `load_filing_cadences` and `load_latest_filed_periods` have caught this since they were
+written -- but the two loops that build the actual data did not. `get_cik` **keeps its
+contract** and still raises; only `run_full_refresh` catches, because it is the one loop
+sweeping the whole universe. `load_facts` deliberately still dies: it is the ad-hoc path over a
+two-ticker list, where silently dropping half the request and reporting success is worse than a
+traceback. The skip is recorded in three places -- a `[skip]` line, a section directly under the
+run report's metadata, and `meta.json`'s existing `tickers_without_data`, which needs no schema
+change because a skipped ticker produces no rows and lands there by construction.
+
+**2 — the mapping cache never expired.** `fetch_or_cache` has supported `max_age_days` all
+along and **all four `company_tickers.json` call sites omitted it**, so a cache file was read
+forever. The local copy was 37 days old with 10,407 entries; CI fetched 10,396. That is why the
+CI crash was not reproducible locally -- the two sides were resolving against different files.
+Now `max_age_days=1`, and the four duplicated blocks are one `resolve_cik_mapping()`:
+duplication was the mechanism by which they drifted apart on exactly one argument, so removing
+it is the structural half of the fix. `explore_tags.py` and the CI preflight go through the same
+function, because **a diagnostic that resolves tickers differently from the pipeline cannot
+reproduce the pipeline's bugs** -- which is precisely what happened here.
+
+**3 — XOM's CIK changed, and fixing defect 2 would have amputated it.** Not in the brief; found
+by diffing the two mappings. ExxonMobil re-domiciled to Texas and `company_tickers.json` now
+points XOM at CIK `0002115436` ("ExxonMobil Holdings Corp") instead of `0000034088`. Measured
+through the real parser, not by tag count:
+
+| | old `0000034088` | new `0002115436` |
+|---|---:|---:|
+| parsed rows | 905 | 30 |
+| concepts | 14 | 10 |
+| period range | 2006–2026 | 2024–2026 |
+
+`Capex`, `OperatingCashFlow`, `StockIssued` and `StockRepurchased` vanish entirely, taking FCF
+and with it `pfcf_ratio`, `ev_fcf`, `pfcf_ex_sbc` and `fcf_margin`. **No error would have been
+raised**: the ticker resolves fine, it just resolves to eighteen months of a company that has
+twenty years. Pinned via `CIK_OVERRIDES` as a **stopgap** -- the old registrant's facts stop at
+2026-03-31 and will not advance, so this trades a growing lag for the history. The real fix is
+reading both CIKs and merging, which is a fetch/parse-layer change.
+
+**A cache-shadowing hazard worth knowing:** `get_company_info` caches by *ticker*, not by CIK,
+so with a warm cache a changed CIK is invisible -- the old file is served. Only a cold cache
+exposes it, which is why this surfaced in CI and not locally, and why the XOM measurement had
+to fetch both CIKs directly rather than go through the cache.
+
+**`SATS` removed from the universe, and it is not the same case as AEP.** The brief assumed the
+other differing tickers would be mapping lag. It is not: EDGAR's submissions file for CIK
+`0001415404` reports the ticker as **ECHO**, and yfinance serves SATS **one** price row ending
+2026-07-17 against 4,683 for ECHO. An override would have kept a dead symbol alive. Its data was
+already hollow -- 720 `valuation_history` rows and **zero** non-null values across all ten
+valuation concepts inside the five-year window -- which is why removing it moved no peer band.
+
+**Two guards added.** `build_ticker_to_cik` now refuses a mapping under 8,000 entries (the file
+has 10,396; it moved 268 out and 257 in over 37 days, so churn cannot reach the floor but a
+truncated download or a schema change would). And `resolve_cik_mapping` audits `CIK_OVERRIDES`
+on every run, printing whether each entry is still needed, has become **redundant** because the
+file caught up, or is **contested** because the file now says something different -- because an
+override nobody revisits is the next stale cache.
+
+**Non-regression:** before/after from one price capture and one warm cache, all 501 tickers,
+six frames. **Zero appeared, zero changed, zero disappeared for every ticker except SATS.**
+
+---
+
 ## 2026-08-17 — Four consistency items, and the one that turned out to falsify a chart
 
 The items every recent task recorded and left standing, because fixing them inside a task about
