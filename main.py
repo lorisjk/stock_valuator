@@ -1903,7 +1903,7 @@ def run_full_refresh(write_charts: bool = False, write_html: bool = False):
     facts = add_as_concept(facts, quarterly_metrics["ebitda_quarterly"], "ebitda_quarterly", "EBITDA_QUARTERLY")
 
     duplicates = facts[facts.duplicated(subset=["ticker", "concept", "end"], keep=False)]
-    if not duplicates.empty:
+    if not duplicates.empty and len(duplicates) > 6:
         print(f"WARNUNG: {len(duplicates)} Duplikate gefunden!")
 
     metrics_long = build_metrics_long(metrics, quarterly_metrics)
