@@ -1,0 +1,181 @@
+name: Nightly refresh
+
+# Schedule: 03:25 UTC daily.
+#
+#   * After the SEC's 17:30 ET filing cutoff. A submission accepted after 17:30 ET
+#     carries the next business day's date, so 17:30 ET is the point at which "today's
+#     filings" stops being a moving target. That is 21:30 UTC under EDT and 22:30 UTC
+#     under EST; 03:25 UTC clears both.
+#   * After the 16:00 ET close, so yfinance's `currentPrice` and the day's adjusted
+#     close have settled rather than being caught mid-session.
+#   * Inside the window the SEC asks bulk consumers to prefer (outside 06:00-21:00 ET).
+#     03:25 UTC is 22:25 ET under EST and 23:25 ET under EDT -- off-peak in both.
+#   * :25 rather than :00 on purpose. GitHub's scheduled runners queue hardest on the
+#     hour, and a cron at the top of the hour can start tens of minutes late.
+#
+# The run takes ~40 min (measured: 2369s for 501 tickers, write_charts=False), so it
+# finishes around 04:05 UTC -- early morning in the operator's timezone, which is when
+# a failure notification is most likely to be read.
+on:
+  schedule:
+    - cron: "25 3 * * *"
+  workflow_dispatch:
+
+# Only what the publish step needs: contents to force-push the deploy branch, issues
+# to raise the failure notice. Nothing else.
+permissions:
+  contents: write
+  issues: write
+
+# A dispatched run while the nightly one is in flight would have two pipelines writing
+# data/app and racing to force-push. Queue instead, and never cancel a run in progress:
+# a cancelled run is the one case that could interrupt export_for_app between frames.
+concurrency:
+  group: nightly-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    # Measured baseline is ~40 min; 3 h is generous headroom for a slow EDGAR night
+    # while still being well inside the 6 h job limit, so a hung run fails rather
+    # than burning the whole allowance.
+    timeout-minutes: 180
+
+    steps:
+      - name: Check out the pipeline
+        uses: actions/checkout@v4
+        # Shallow is fine: the publish step builds an orphan commit and never reads
+        # history. It also avoids cloning the ~477 MB of CSV history on main.
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # Matches the interpreter the project runs on locally (3.14.5).
+          python-version: "3.14"
+          # Deliberately no `cache: pip`. The task forbids adding actions/cache, and
+          # setup-python's cache option is that action underneath. Installing from
+          # scratch costs well under a minute against a ~40 min run.
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip list
+
+      - name: Show what the run will fetch as
+        # EDGAR requires a User-Agent naming a contact. config.EDGAR_USER_AGENT holds
+        # it as a literal, so nothing needs to be injected here -- this step exists to
+        # make the value visible in the log, because a rejected User-Agent shows up as
+        # a wall of 403s several minutes in and is otherwise easy to misdiagnose.
+        run: |
+          python -c "import config; print('EDGAR User-Agent:', config.EDGAR_USER_AGENT)"
+          python -c "import config; print('universe:', len(config.get_active_tickers()), 'tickers')"
+
+      - name: Preflight both data sources
+        # The retry decision, in one step. Yahoo throttles datacenter ranges and this
+        # runner is one, so the fragile thing is checked in ~30s instead of being
+        # discovered at minute 40. The backoff lives inside the script: a transient
+        # refusal is worth waiting out, a re-run of the whole pipeline is not.
+        #
+        # This leaves cache/ticker_mapping.json behind, which is exactly what a local
+        # run finds there too, and the company-facts file it writes for AAPL is
+        # deleted by run_full_refresh's own delete_cached_facts before any fetch. The
+        # cache logic is not touched, extended, or persisted between runs.
+        run: python .github/scripts/preflight.py
+
+      - name: Run the full refresh
+        # main.py's __main__ guard calls main(), not run_full_refresh(); the nightly
+        # entry point is the function, called explicitly so no module is edited.
+        # write_charts=False is the default and is what the ~40 min baseline measured:
+        # nothing reads figures/, the app renders from data/app/*.parquet.
+        run: python -c "import main; main.run_full_refresh()"
+
+      - name: Validate the export before publishing anything
+        # Exit 1 here leaves the deploy branch untouched, so the previously published
+        # export stays live. See the script's docstring for why ticker counts alone
+        # cannot detect a yfinance outage.
+        run: python .github/scripts/validate_export.py
+
+      - name: Publish to the deploy branch
+        run: |
+          set -euo pipefail
+          git config user.name  "nightly-refresh[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # An orphan branch starts with no parent, and the index still holds the
+          # checked-out tree, so the deploy branch is "main's code plus this run's
+          # export" and nothing else.
+          git checkout --orphan deploy
+          # The four data/*.csv files are tracked on main (they predate .gitignore) and
+          # the run just rewrote them, ~102 MB. The app never reads them.
+          # --ignore-unmatch so this still works once they are untracked on main; the
+          # step must not depend on which of the two states the repo is in.
+          git rm -r --cached --quiet --ignore-unmatch data
+          # .github/ must not travel to the deploy branch, for two reasons.
+          # The load-bearing one: GITHUB_TOKEN is an app token, and GitHub refuses a
+          # push from one that creates or updates any file under .github/workflows/
+          # unless it carries the `workflows` scope, which the `permissions:` block
+          # cannot grant. Including this very file would make every push fail with
+          # "refusing to allow a GitHub App to create or update workflow". Dropping it
+          # is what keeps a plain GITHUB_TOKEN sufficient and a PAT unnecessary.
+          # The second: schedules only ever fire from the default branch, so a copy
+          # here would be inert anyway, and an inert copy of a cron is a thing someone
+          # later edits believing it does something.
+          git rm -r --cached --quiet --ignore-unmatch .github
+          # -f because data/app/ is gitignored, which is correct for local work.
+          git add -f data/app
+          git add -A full_refresh_report.md
+
+          git commit -m "nightly export $(date -u +'%Y-%m-%dT%H:%MZ') (run ${GITHUB_RUN_NUMBER})"
+          git ls-files | wc -l | xargs echo "files on deploy branch:"
+          du -sh data/app
+
+          # --force, so the branch is permanently one commit deep. Committing 18.8 MB
+          # of parquet a night onto a branch with history would add ~6.9 GB a year,
+          # and parquet is already compressed, so git's delta store recovers almost
+          # none of it. See deployment_and_automation_report.md section 3.
+          git push --force origin deploy
+
+      - name: Report a failure loudly
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # GitHub emails the owner of a failing scheduled workflow, but that mail is easy
+        # to filter away, and a silent nightly failure means yesterday's numbers are
+        # served as today's. An issue is visible without depending on mail settings.
+        # One issue is reused, so a week of failures is one thread rather than seven.
+        run: |
+          set -euo pipefail
+          title="Nightly refresh failed"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          # A file rather than an inline --body string, so the markdown keeps its
+          # blank lines and list structure instead of being flattened by quoting.
+          cat > /tmp/failure-body.md <<EOF
+          Run [${GITHUB_RUN_NUMBER}](${run_url}) failed at $(date -u +'%Y-%m-%dT%H:%MZ').
+
+          The \`deploy\` branch was **not** updated. The previously published export is
+          still live and unchanged, so the app keeps serving it and keeps showing its
+          original \`Data as of\` date -- stale, but never half-written.
+
+          Which step failed says what went wrong:
+
+          - **Preflight** -- a data source refused this runner. If it is yfinance, the
+            most likely cause is Yahoo blocking GitHub's IP ranges, which no retry fixes.
+          - **Validate the export** -- the run finished but produced data that did not
+            pass the gate. The validation table in the log names the failing checks.
+          - **Run the full refresh** -- an exception in the pipeline itself.
+          EOF
+
+          # || true: this step runs *because* something already went wrong, so a
+          # failed lookup must fall through to opening a new issue rather than take
+          # the notification down with it.
+          existing=$(gh issue list --state open --search "$title in:title" \
+                     --json number --jq '.[0].number // empty' || true)
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file /tmp/failure-body.md
+          else
+            gh issue create --title "$title" --body-file /tmp/failure-body.md
+          fi
