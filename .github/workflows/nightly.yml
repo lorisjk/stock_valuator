@@ -86,6 +86,35 @@ jobs:
         # cache logic is not touched, extended, or persisted between runs.
         run: python .github/scripts/preflight.py
 
+      - name: Debug mapping
+        run: |
+          python - <<'EOF'
+          import os, json
+          from fetchers.edgar import fetch_or_cache, build_ticker_to_cik, get_cik
+          from config import EDGAR_USER_AGENT
+
+          p = "cache/ticker_mapping.json"
+          print("cache exists before:", os.path.exists(p))
+          if os.path.exists(p):
+              print("cache size:", os.path.getsize(p))
+
+          mapping = fetch_or_cache(
+              url="https://www.sec.gov/files/company_tickers.json",
+              cache_path=p,
+              headers={"User-Agent": EDGAR_USER_AGENT},
+          )
+          cik_mapping = build_ticker_to_cik(mapping)
+
+          print("mapping type:", type(mapping).__name__, "entries:", len(mapping))
+          print("cik entries:", len(cik_mapping))
+          print("AEP in cik_mapping:", "AEP" in cik_mapping)
+          print("first 2 mapping items:", list(mapping.items())[:2])
+          try:
+              print("get_cik('AEP'):", get_cik("AEP", cik_mapping))
+          except Exception as ex:
+              print("get_cik failed:", ex)
+          EOF
+
       - name: Run the full refresh
         # main.py's __main__ guard calls main(), not run_full_refresh(); the nightly
         # entry point is the function, called explicitly so no module is edited.
