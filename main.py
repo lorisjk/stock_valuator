@@ -16,6 +16,7 @@ from config import (
     TICKERS,
     CONCEPT_CANDIDATES,
     TTM_CONCEPTS,
+    CIK_OVERRIDES,
     FFO_GAINS_REPORTED,
     FFO_GAINS_IMPUTED_ZERO,
     PERIOD,
@@ -62,6 +63,7 @@ from metrics import (
     MIN_REVENUE_SELF_SCALE_RATIO,
     MIN_PEG_REVENUE_GROWTH,
     MAX_PEG_RATIO_ABS,
+
 )
 from figures import (plot_fundamentals, plot_valuation, plot_growth)
 from quality import print_data_quality
@@ -93,6 +95,7 @@ def load_facts(splits: dict = None) -> pd.DataFrame:
         headers={"User-Agent": EDGAR_USER_AGENT},
     )
     cik_mapping = build_ticker_to_cik(mapping)
+    cik_mapping.update(CIK_OVERRIDES)
 
     all_dfs = []
     for ticker in TICKERS:

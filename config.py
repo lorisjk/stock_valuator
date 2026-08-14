@@ -615,6 +615,10 @@ TICKER_PROFILES = {
     "APO": "alt_asset_manager",
 }
 
+CIK_OVERRIDES = {
+    "AEP": "0000004904",   
+}
+
 PROFILE_HIDDEN = {
     "standard": {
         "net_interest_margin",
