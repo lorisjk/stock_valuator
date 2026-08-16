@@ -864,7 +864,8 @@ def render_analysis(ticker: str, as_of, tickers: list[str], profiles: dict) -> N
 
     with tab_fund:
         ids, labels = metric_options("fundamentals", ticker)
-        chosen = st.multiselect("Metrics", ids, default=ids,
+        default = [i for i in ids if i in ("revenue_yoy_growth")]
+        chosen = st.multiselect("Metrics", ids, default=default,
                                 format_func=lambda i: labels[i], key="fund_metrics")
         years = st.slider("Window (years)", 1, 15, 15, key="fundamentals_years")
         render(
@@ -875,7 +876,8 @@ def render_analysis(ticker: str, as_of, tickers: list[str], profiles: dict) -> N
 
     with tab_growth:
         ids, labels = metric_options("growth", ticker)
-        chosen = st.multiselect("Concepts", ids, default=ids,
+        default = [i for i in ids if i in ("Revenueyoy_growth")]
+        chosen = st.multiselect("Concepts", ids, default=default,
                                 format_func=lambda i: labels[i], key="growth_metrics")
         years = st.slider("Window (years)", 1, 15, 15, key="growth_years")
         render(
@@ -886,7 +888,8 @@ def render_analysis(ticker: str, as_of, tickers: list[str], profiles: dict) -> N
 
     with tab_val:
         ids, labels = metric_options("valuation", ticker)
-        chosen = st.multiselect("Multiples", ids, default=ids,
+        default = [i for i in ids if i in ("pe_ratio")]
+        chosen = st.multiselect("Multiples", ids, default=default,
                                 format_func=lambda i: labels[i], key="val_metrics")
         years = st.slider("Window (years)", 1, 15, 5, key="valuation_years")
         render(
