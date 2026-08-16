@@ -1,0 +1,12 @@
+pandas>=2.0,<3.0
+numpy>=1.24
+plotly>=6.0
+pyarrow>=15.0
+requests>=2.28
+streamlit>=1.50
+yfinance>=0.2.40
+# main.py does `from certifi import where` at line 1. It resolves today only
+# because requests pulls certifi in, which is exactly the transitive dependency
+# that breaks a first CI run when the chain changes. Pinned here so the import
+# does not rely on somebody else's dependency tree.
+certifi>=2024.0

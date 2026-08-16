@@ -1,0 +1,26 @@
+venv/
+__pycache__/
+*.pyc
+.env
+debug_tags.py
+
+# Everything the pipeline generates. cache/ is the EDGAR fetch cache, figures/ the
+# chart files (not written at all unless run_full_refresh(write_charts=True)), and
+# data/ holds both the human-facing CSVs and data/app/, the frontend's Parquet
+# inputs. None of it belongs in a working branch: a local run rewrites all of it,
+# and committing one person's run would put ~120 MB into history per commit.
+cache/
+figures/
+data/
+
+# data/app/ is the one exception, and only in CI. The nightly workflow force-pushes
+# it to the `deploy` branch with `git add -f data/app`, which is why that directory
+# stays ignored here: ignoring it is what stops a local run from being committed by
+# accident, and -f is what lets the one place that is allowed to publish it do so.
+#
+# NOTE: data/*.csv were committed before this file existed, so they are *tracked*
+# and .gitignore does not apply to them -- a local run still shows them as modified.
+# Untrack them (keeping the files on disk) with:
+#     git rm --cached data/current_snapshot.csv data/metrics_long.csv \
+#                     data/quarterly_facts.csv data/valuation_history.csv
+# See deployment_and_automation_report.md, section 3.
