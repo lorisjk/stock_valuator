@@ -21,14 +21,14 @@ on:
     - cron: "25 3 * * *"
   workflow_dispatch:
 
-# Only what the publish step needs: contents to force-push the deploy branch, issues
-# to raise the failure notice. Nothing else.
+# Only what the publish step needs: contents to push the deploy branch, issues to
+# raise the failure notice. Nothing else.
 permissions:
   contents: write
   issues: write
 
 # A dispatched run while the nightly one is in flight would have two pipelines writing
-# data/app and racing to force-push. Queue instead, and never cancel a run in progress:
+# data/app and racing to push. Queue instead, and never cancel a run in progress:
 # a cancelled run is the one case that could interrupt export_for_app between frames.
 concurrency:
   group: nightly-refresh
@@ -45,10 +45,12 @@ jobs:
     steps:
       - name: Check out the pipeline
         uses: actions/checkout@v4
-        # Shallow is fine: the publish step builds an orphan commit and never reads
-        # history. It also avoids cloning the ~477 MB of CSV history on main.
+        # fetch-depth: 0 because the publish step now appends to the deploy branch
+        # rather than replacing it, and a fast-forward push needs the branch's history
+        # present locally to build on. A shallow clone would make every push a
+        # non-fast-forward and be rejected.
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -86,35 +88,6 @@ jobs:
         # cache logic is not touched, extended, or persisted between runs.
         run: python .github/scripts/preflight.py
 
-      - name: Debug mapping
-        run: |
-          python - <<'EOF'
-          import os, json
-          from fetchers.edgar import fetch_or_cache, build_ticker_to_cik, get_cik
-          from config import EDGAR_USER_AGENT
-
-          p = "cache/ticker_mapping.json"
-          print("cache exists before:", os.path.exists(p))
-          if os.path.exists(p):
-              print("cache size:", os.path.getsize(p))
-
-          mapping = fetch_or_cache(
-              url="https://www.sec.gov/files/company_tickers.json",
-              cache_path=p,
-              headers={"User-Agent": EDGAR_USER_AGENT},
-          )
-          cik_mapping = build_ticker_to_cik(mapping)
-
-          print("mapping type:", type(mapping).__name__, "entries:", len(mapping))
-          print("cik entries:", len(cik_mapping))
-          print("AEP in cik_mapping:", "AEP" in cik_mapping)
-          print("first 2 mapping items:", list(mapping.items())[:2])
-          try:
-              print("get_cik('AEP'):", get_cik("AEP", cik_mapping))
-          except Exception as ex:
-              print("get_cik failed:", ex)
-          EOF
-
       - name: Run the full refresh
         # main.py's __main__ guard calls main(), not run_full_refresh(); the nightly
         # entry point is the function, called explicitly so no module is edited.
@@ -134,10 +107,44 @@ jobs:
           git config user.name  "nightly-refresh[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # An orphan branch starts with no parent, and the index still holds the
-          # checked-out tree, so the deploy branch is "main's code plus this run's
-          # export" and nothing else.
-          git checkout --orphan deploy
+          # Normal commits, not an orphan force-push. Streamlit Community Cloud polls
+          # the tracked branch and pulls; a force-pushed orphan commit is not a
+          # fast-forward, so the pull fails silently and the app keeps serving the
+          # export it first cloned. Measured on 2026-08-15: the nightly export landed
+          # on deploy and the app only picked it up after a manual reboot, and there
+          # is no API to automate that reboot (streamlit/streamlit#9384 is still open).
+          # Appending keeps every push a fast-forward, which is what the poller acts on.
+          #
+          # The cost is history: ~18.8 MB of parquet a night, and parquet is already
+          # compressed so git's delta store recovers almost none of it. That is
+          # ~560 MB a month. The intended maintenance is a manual orphan reset roughly
+          # monthly to flatten it -- which IS a force-push, so it needs one manual
+          # reboot afterwards. Twelve a year instead of 365.
+
+          # Save the export before switching branches: data/app is gitignored, so a
+          # checkout would not carry it across, and full_refresh_report.md is tracked
+          # on main and would be reverted to main's copy.
+          mkdir -p /tmp/publish
+          cp -r data/app /tmp/publish/app
+          cp full_refresh_report.md /tmp/publish/full_refresh_report.md
+
+          # Check out deploy if it exists, create it as an orphan if this is the first
+          # run. The orphan path is the bootstrap only; every subsequent run appends.
+          if git ls-remote --exit-code --heads origin deploy >/dev/null 2>&1; then
+            git fetch origin deploy
+            git checkout -B deploy origin/deploy
+          else
+            echo "deploy does not exist yet -- bootstrapping it as an orphan branch"
+            git checkout --orphan deploy
+            git rm -rf --cached --quiet . || true
+            git clean -fd -e data -e full_refresh_report.md || true
+          fi
+
+          # Bring this run's code onto deploy, so the branch is "the code that ran plus
+          # the export it produced". GITHUB_SHA rather than a branch name, so a run
+          # dispatched from a non-default branch publishes the code it actually ran.
+          git checkout "${GITHUB_SHA}" -- .
+
           # The four data/*.csv files are tracked on main (they predate .gitignore) and
           # the run just rewrote them, ~102 MB. The app never reads them.
           # --ignore-unmatch so this still works once they are untracked on main; the
@@ -154,19 +161,32 @@ jobs:
           # here would be inert anyway, and an inert copy of a cron is a thing someone
           # later edits believing it does something.
           git rm -r --cached --quiet --ignore-unmatch .github
+          rm -rf .github
+
+          # Restore the export saved above, after the code checkout has overwritten
+          # the working tree.
+          rm -rf data/app
+          mkdir -p data
+          cp -r /tmp/publish/app data/app
+          cp /tmp/publish/full_refresh_report.md full_refresh_report.md
+
           # -f because data/app/ is gitignored, which is correct for local work.
           git add -f data/app
           git add -A full_refresh_report.md
 
-          git commit -m "nightly export $(date -u +'%Y-%m-%dT%H:%MZ') (run ${GITHUB_RUN_NUMBER})"
+          # --allow-empty so a night whose export is byte-identical to the last one
+          # still produces a commit. Without it the step would exit 1 on an unchanged
+          # export and open a spurious failure issue.
+          git commit --allow-empty \
+            -m "nightly export $(date -u +'%Y-%m-%dT%H:%MZ') (run ${GITHUB_RUN_NUMBER})"
           git ls-files | wc -l | xargs echo "files on deploy branch:"
           du -sh data/app
+          echo "commits on deploy: $(git rev-list --count HEAD)"
 
-          # --force, so the branch is permanently one commit deep. Committing 18.8 MB
-          # of parquet a night onto a branch with history would add ~6.9 GB a year,
-          # and parquet is already compressed, so git's delta store recovers almost
-          # none of it. See deployment_and_automation_report.md section 3.
-          git push --force origin deploy
+          # No --force: the push must be a fast-forward, which is exactly what makes
+          # Streamlit pick it up. If this ever fails as non-fast-forward, someone has
+          # rewritten deploy out of band -- do not add --force to paper over it.
+          git push origin deploy
 
       - name: Report a failure loudly
         if: failure()
