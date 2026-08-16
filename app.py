@@ -776,7 +776,7 @@ def render_update_notice() -> None:
 
 
 def main() -> None:
-    st.set_page_config(page_title="Kyhestlo", layout="wide")
+    st.set_page_config(page_title="Kyhestlo", page_icon="▪", layout="wide")
     st.title("Kyhestlo")
 
     absent = missing_files()
