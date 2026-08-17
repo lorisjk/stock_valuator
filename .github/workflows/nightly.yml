@@ -135,7 +135,7 @@ jobs:
           # run. The orphan path is the bootstrap only; every subsequent run appends.
           if git ls-remote --exit-code --heads origin deploy >/dev/null 2>&1; then
             git fetch origin deploy
-            git checkout -B deploy origin/deploy
+            git checkout -f -B deploy origin/deploy
 
           else
             echo "deploy does not exist yet -- bootstrapping it as an orphan branch"
