@@ -127,11 +127,11 @@ jobs:
           mkdir -p /tmp/publish
           cp -r data/app /tmp/publish/app
           cp full_refresh_report.md /tmp/publish/full_refresh_report.md
-          
+
           # Der Report ist auf main versioniert und wurde vom Lauf gerade neu
           # geschrieben. Ein Branchwechsel bricht sonst ab, weil er die Änderung
           # überschreiben müsste. Die Kopie oben liegt bereits in /tmp.
-          git checkout -- full_refresh_report.md
+          git reset --hard HEAD
 
           # Check out deploy if it exists, create it as an orphan if this is the first
           # run. The orphan path is the bootstrap only; every subsequent run appends.
