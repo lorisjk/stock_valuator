@@ -24,3 +24,4 @@ data/
 #     git rm --cached data/current_snapshot.csv data/metrics_long.csv \
 #                     data/quarterly_facts.csv data/valuation_history.csv
 # See deployment_and_automation_report.md, section 3.
+full_refresh_report.md
