@@ -129,7 +129,7 @@ jobs:
           cp full_refresh_report.md /tmp/publish/full_refresh_report.md
 
           # Reset local changes before switching branches
-          git checkout HEAD -- full_refresh_report.md || true
+          git rm -f --quiet full_refresh_report.md
 
           # Check out deploy if it exists, create it as an orphan if this is the first
           # run. The orphan path is the bootstrap only; every subsequent run appends.
