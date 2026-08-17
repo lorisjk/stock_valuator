@@ -128,16 +128,15 @@ jobs:
           cp -r data/app /tmp/publish/app
           cp full_refresh_report.md /tmp/publish/full_refresh_report.md
 
-          # Der Report ist auf main versioniert und wurde vom Lauf gerade neu
-          # geschrieben. Ein Branchwechsel bricht sonst ab, weil er die Änderung
-          # überschreiben müsste. Die Kopie oben liegt bereits in /tmp.
-          git reset --hard HEAD
+          # Reset local changes before switching branches
+          git checkout HEAD -- full_refresh_report.md || true
 
           # Check out deploy if it exists, create it as an orphan if this is the first
           # run. The orphan path is the bootstrap only; every subsequent run appends.
           if git ls-remote --exit-code --heads origin deploy >/dev/null 2>&1; then
             git fetch origin deploy
             git checkout -B deploy origin/deploy
+
           else
             echo "deploy does not exist yet -- bootstrapping it as an orphan branch"
             git checkout --orphan deploy
