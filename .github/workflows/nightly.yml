@@ -129,7 +129,7 @@ jobs:
           cp full_refresh_report.md /tmp/publish/full_refresh_report.md
 
           # Reset local changes before switching branches
-          git rm -f --quiet full_refresh_report.md
+          rm -f full_refresh_report.md
 
           # Check out deploy if it exists, create it as an orphan if this is the first
           # run. The orphan path is the bootstrap only; every subsequent run appends.
@@ -176,7 +176,7 @@ jobs:
 
           # -f because data/app/ is gitignored, which is correct for local work.
           git add -f data/app
-          git add -A full_refresh_report.md
+          git add -f full_refresh_report.md
 
           # --allow-empty so a night whose export is byte-identical to the last one
           # still produces a commit. Without it the step would exit 1 on an unchanged
