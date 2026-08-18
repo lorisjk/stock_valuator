@@ -768,7 +768,7 @@ def render_update_notice() -> None:
         # land here, and all three mean the same thing: draw nothing. Not an empty box.
         return
 
-    with st.container(horizontal=True, horizontal_alignment="right"):
+    with st.container(horizontal=True, horizontal_alignment="left"):
         with st.container(border=True, width="content"):
             st.markdown(text)
             st.button("Dismiss", key="dismiss_update_notice",
@@ -892,13 +892,63 @@ def render_analysis(ticker: str, as_of, tickers: list[str], profiles: dict) -> N
         chosen = st.multiselect("Multiples", ids, default=default,
                                 format_func=lambda i: labels[i], key="val_metrics")
         years = st.slider("Window (years)", 1, 15, 5, key="valuation_years")
+
+        # The control is built from the same frame the chart will be drawn from, and
+        # the same window, so what it offers to hide is exactly what would be hidden.
+        # It is absent entirely when there is nothing to hide: a toggle that appears on
+        # a clean chart teaches the reader to ignore it.
+        val_frame = frame_for("valuation")
+        outliers = figures.outlier_report(
+            figures._window_frame(val_frame, years, as_of), ticker, chosen)
+
+        mask_outliers = False
+        if outliers:
+            mask_outliers = st.toggle(
+                "Hide extreme values", key="val_mask_outliers",
+                help=(f"Hides points more than {figures.OUTLIER_MEDIAN_RATIO:g}x the "
+                      f"panel's own median. Applies per panel, only where such points "
+                      f"exist, and only to what is drawn — the values stay in the data "
+                      f"tab and the exports."),
+            )
+
         render(
-            figures.build_valuation(ticker, frame_for("valuation"), years=years,
+            figures.build_valuation(ticker, val_frame, years=years,
                                     concepts=chosen, as_of=as_of,
                                     snapshot=load_frame(DATA_FILES["snapshot"]),
-                                    width=None),
+                                    width=None, mask_outliers=mask_outliers),
             "Nothing selected, or no valuation data for this ticker.",
         )
+
+        if outliers:
+            summary = ", ".join(
+                f"{labels.get(c, c)} ({len(rows)} point{'s' if len(rows) > 1 else ''})"
+                for c, rows in outliers.items()
+            )
+            if mask_outliers:
+                # Stated at the point of the change, not only in the toggle's help:
+                # a reader watching points disappear will otherwise assume the average
+                # moved with them, which is the one thing that did not happen.
+                st.caption(f"**Hidden:** {summary}. "
+                           f"**The mean lines are unchanged** — they are still computed "
+                           f"over the full series, including the hidden points.")
+            else:
+                st.caption(f"Extreme values present in: {summary}.")
+
+            # A silent filter would be the wrong thing in a tool whose argument is
+            # auditability, so every hidden number is one click away, with the ratio
+            # that got it hidden.
+            with st.expander(f"Show the {sum(len(r) for r in outliers.values())} "
+                             f"extreme value(s)"):
+                for c, rows in outliers.items():
+                    series = figures._window_frame(val_frame, years, as_of)
+                    series = series[(series["ticker"] == ticker)
+                                    & (series["concept"] == c)]["value"].dropna()
+                    median = series.median()
+                    table = rows.rename(columns={"end": "Period", "value": "Value"}).copy()
+                    table["x median"] = (table["Value"] / median).round(1)
+                    st.markdown(f"**{labels.get(c, c)}** — median {median:,.2f}")
+                    st.dataframe(table, hide_index=True, width="stretch")
+
         st.caption(
             "The green circle is the current multiple — today's price against the "
             "latest available fundamentals — not a filed period. It is excluded from "
@@ -920,6 +970,7 @@ def render_analysis(ticker: str, as_of, tickers: list[str], profiles: dict) -> N
             default=tickers[:min(figures.SUGGESTED_MAX_COMPARISON_TICKERS, len(tickers))],
             format_func=lambda t: f"{t} — {profiles.get(t, '')}", key="cmp_tickers",
         )
+        years = st.slider("Window (years)", 1, 15, 15, key="comparison_years")
         st.caption(
             f"At least {figures.MIN_COMPARISON_TICKERS} tickers; "
             f"{figures.SUGGESTED_MAX_COMPARISON_TICKERS} stay comfortably readable."
@@ -928,11 +979,58 @@ def render_analysis(ticker: str, as_of, tickers: list[str], profiles: dict) -> N
         if frame is None:
             st.info("That metric is not plottable.")
         else:
+            # Same shape as the valuation tab, and the same rule underneath -- so a
+            # reader moving between the two tabs does not have to learn a second
+            # meaning of "outlier". The report is keyed by ticker here rather than by
+            # concept, because this chart holds one concept and several lines.
+            cmp_outliers = figures.comparison_outlier_report(
+                picked, concept, frame, years=years, as_of=as_of)
+
+            cmp_mask = False
+            if cmp_outliers:
+                cmp_mask = st.toggle(
+                    "Hide extreme values", key="cmp_mask_outliers",
+                    help=(f"Hides points more than {figures.OUTLIER_MEDIAN_RATIO:g}x "
+                          f"**that line's own** median. Each ticker is judged against "
+                          f"itself, so a company simply trading at a higher multiple "
+                          f"than its peers loses nothing."),
+                )
+
             fig, excluded = figures.build_ticker_comparison(
-                picked, concept, frame, as_of=as_of, width=None)
+                picked, concept, frame, as_of=as_of, years=years, width=None,
+                mask_outliers=cmp_mask)
             for dropped, reason in excluded:
                 st.warning(f"**{dropped}** not shown — {reason}")
             render(fig, "Pick at least two tickers that can show this metric.")
+
+            if cmp_outliers:
+                summary = ", ".join(
+                    f"{t} ({len(rows)} point{'s' if len(rows) > 1 else ''})"
+                    for t, rows in cmp_outliers.items()
+                )
+                if cmp_mask:
+                    # This chart draws no mean lines, so the sentence the valuation tab
+                    # needs -- "the average did not move" -- has nothing to refer to.
+                    # Saying what *did* stay instead: every line keeps its own scale.
+                    st.caption(f"**Hidden:** {summary}. Each line was judged against its "
+                               f"own median, so the remaining points are unchanged and "
+                               f"still on their original scale.")
+                else:
+                    st.caption(f"Extreme values present in: {summary}.")
+
+                with st.expander(f"Show the {sum(len(r) for r in cmp_outliers.values())} "
+                                 f"extreme value(s)"):
+                    windowed = figures._window_frame(frame, years, as_of)
+                    for t, rows in cmp_outliers.items():
+                        col = rows.columns[-1]
+                        series = windowed[(windowed["ticker"] == t)
+                                          & (windowed["concept"] == concept)][col].dropna()
+                        median = series.median()
+                        table = rows.rename(columns={"end": "Period",
+                                                     col: "Value"}).copy()
+                        table["x median"] = (table["Value"] / median).round(1)
+                        st.markdown(f"**{t}** — own median {median:,.2f}")
+                        st.dataframe(table, hide_index=True, width="stretch")
     with tab_raw:
             st.write("Concepts as filed, before any metric is computed.")
             facts_full = load_frame(DATA_FILES["facts"])

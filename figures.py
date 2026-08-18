@@ -159,6 +159,94 @@ def _window_frame(frame: pd.DataFrame, years: int, as_of: pd.Timestamp | None) -
     return windowed
 
 
+# --- optional outlier masking -------------------------------------------------
+#
+# A rendering concern and nothing else. The values stay in the data, in the exports
+# and in the data tab; what this controls is whether one panel draws them.
+#
+# The rule is ratio-to-median rather than a percentile, because a percentile cut always
+# removes something -- including from a series that has nothing wrong with it -- while a
+# ratio test fires only when a value genuinely stands apart.
+#
+# k = 5, calibrated against fifteen real series rather than chosen round. The nine
+# well-behaved ones (KO, JNJ, PG, MSFT pe_ratio; PLD, O p_ffo; JPM, BAC p_tbv; BA)
+# top out at 1.05x-1.52x their median, and the two "difficult but readable" cases at
+# 2.25x (XOM) and 3.30x (CCL). The pathological ones start at 12.0x (CRM), 22.0x (DAL)
+# and 70.9x (INTC). k=5 sits in that gap: zero false positives on all nine, and on the
+# reference case it flags exactly the four points that flatten the chart, leaving a
+# 2.51x margin to the highest kept point. k=4 additionally hides DAL's 47.2 (4.90x),
+# which does not need hiding; k=6 keeps CRM's 337.8 (5.14x), which does.
+OUTLIER_MEDIAN_RATIO = 5.0
+
+# Below this many usable points the rule does not apply at all. There is no knee in the
+# data to find -- median stability improves smoothly with length (a trailing-8 median is
+# off the full-series median by more than 25% in 26.7% of series, a trailing-4 in 39.0%)
+# -- so this is a judgement, stated as one. Eight is the length at which hiding the
+# typical two-to-four outliers still leaves something to read; at four it would not.
+# It excludes 9.5% of valuation series, almost all of them recently-listed tickers.
+OUTLIER_MIN_POINTS = 8
+
+# High only. Measured before building: across the fifteen calibration series not one
+# point sits below 0.2x its median, and the lowest ratio anywhere in the set is 0.29x.
+# A two-sided rule would be machinery for a case that does not occur.
+#
+# Valuation multiples only, also measured. The rule needs a positive median to mean
+# anything, and only the valuation frame has one everywhere: 0.0% of its 3,260 series
+# have a non-positive median, against 6.2% of fundamentals and 24.7% of growth. Growth
+# is the clear case against extending -- it crosses zero constantly, its median
+# max-to-median ratio is 10.65, and 85% of its series would fire at k=4. That is not the
+# rule finding outliers, it is the rule being meaningless.
+
+
+def outlier_points(
+    values: pd.Series,
+    k: float = OUTLIER_MEDIAN_RATIO,
+    min_points: int = OUTLIER_MIN_POINTS,
+) -> pd.Series:
+    """Boolean mask over `values`, True where a value is a high outlier.
+
+    All-False -- never all-True -- when the rule does not apply: too few usable points,
+    or a median that is not positive. Returning a mask rather than a filtered series is
+    deliberate, so the caller keeps the index and can report *which* points it hid.
+    """
+    mask = pd.Series(False, index=values.index)
+    usable = values[np.isfinite(values)]
+    if len(usable) < min_points:
+        return mask
+    median = usable.median()
+    if not (median > 0):
+        return mask
+    mask.loc[usable.index] = (usable / median) > k
+    return mask
+
+
+def outlier_report(
+    frame: pd.DataFrame,
+    ticker: str,
+    concepts: list[str],
+    value_col: str = "value",
+    k: float = OUTLIER_MEDIAN_RATIO,
+    min_points: int = OUTLIER_MIN_POINTS,
+) -> dict:
+    """{concept: DataFrame of the rows a masked panel would omit}, concepts with none left out.
+
+    The app calls this to name what it is about to hide; plot_metric applies the same
+    `outlier_points` to decide what to draw. Two callers of one rule rather than two
+    implementations of it -- a silent filter would be the wrong thing in a tool whose
+    argument is auditability, and a filter that disagrees with its own description
+    would be worse.
+    """
+    out = {}
+    for concept in concepts:
+        sub = frame[(frame["ticker"] == ticker) & (frame["concept"] == concept)]
+        if sub.empty:
+            continue
+        hidden = outlier_points(sub[value_col], k=k, min_points=min_points)
+        if hidden.any():
+            out[concept] = sub.loc[hidden, ["end", value_col]].sort_values("end")
+    return out
+
+
 def _make_subplot_figure(rows: int, cols: int, titles: list[str]) -> go.Figure:
     n = len(titles)
     specs = [
@@ -257,6 +345,7 @@ def plot_metric(
     harmonic: bool = False,
     snapshot_point: "tuple[pd.Timestamp, float] | None" = None,
     snapshot_in_legend: bool = False,
+    mask_outliers: bool = False,
 ) -> None:
 
     filtered = metrics_long[
@@ -270,10 +359,26 @@ def plot_metric(
         _annotate_no_data(fig, row, col)
         return
 
+    # `drawn` is what the trace shows; `filtered` is what the mean is computed from,
+    # and the two are allowed to differ only here. Recomputing the mean on the
+    # truncated series would compare today's multiple against a benchmark with the bad
+    # years taken out -- a different and flattering quantity. Same principle that keeps
+    # the snapshot marker out of the mean, for the same reason.
+    #
+    # Kept as `filtered` unless masking was asked for, so the default path is not merely
+    # equivalent to the old one but literally the same object.
+    drawn = filtered
+    hidden_count = 0
+    if mask_outliers:
+        hidden = outlier_points(filtered["value"])
+        hidden_count = int(hidden.sum())
+        if hidden_count:
+            drawn = filtered.loc[~hidden]
+
     fig.add_trace(
         go.Scatter(
-            x=filtered["end"],
-            y=filtered["value"],
+            x=drawn["end"],
+            y=drawn["value"],
             mode="lines + markers",
             name=concept,
             line=dict(color=_PRIMARY_COLOR),
@@ -287,7 +392,27 @@ def plot_metric(
    
     _style_axes(fig, row, col, ylabel, percent)
 
+    # Self-describing when the figure is exported as a file rather than read in the
+    # app, where the note next to the toggle would carry this instead. Bottom-right,
+    # because the mean label occupies the top-left of the same panel.
+    if hidden_count:
+        fig.add_annotation(
+            text=f"{hidden_count} outlier{'s' if hidden_count > 1 else ''} hidden "
+                 f"(&gt;{OUTLIER_MEDIAN_RATIO:g}x median) &middot; Ø unchanged",
+            x=0.98,
+            y=0.02,
+            xref="x domain",
+            yref="y domain",
+            xanchor="right",
+            yanchor="bottom",
+            showarrow=False,
+            font=dict(color="#888888", size=9),
+            row=row,
+            col=col,
+        )
+
     if show_mean:
+        # `filtered`, not `drawn`. The invariance this whole feature is built around.
         mean_value = (
             harmonic_mean(filtered["value"])
             if harmonic
@@ -588,6 +713,7 @@ def build_valuation(
     snapshot: pd.DataFrame | None = None,
     width: int | None = KEEP,
     height: int | None = KEEP,
+    mask_outliers: bool = False,
 ) -> go.Figure | None:
     """Build the valuation grid over the trailing `years` window. None when empty.
 
@@ -599,6 +725,12 @@ def build_valuation(
     trace, so it never enters the mean line, and it is suppressed for an `as_of`
     earlier than the snapshot itself (see _snapshot_point). Omitting it is the
     default and reproduces this function's output exactly as before.
+
+    `mask_outliers` hides points more than OUTLIER_MEDIAN_RATIO times their panel's
+    median. **Per panel, not per figure**: the flag is passed to every panel, but the
+    rule is evaluated against each panel's own series, so a grid where one multiple is
+    pathological and eight are not loses points from the one. Mean lines are unaffected
+    everywhere -- see plot_metric.
 
     Not mirrored in build_ticker_comparison, deliberately: see that docstring.
     """
@@ -619,7 +751,8 @@ def build_valuation(
         point = _snapshot_point(snapshot, ticker, concept, as_of)
         plot_metric(fig, r, c, filtered, ticker, concept, ylabel, ref_line, percent,
                     show_mean=True, harmonic=concept in HARMONIC_MEAN_CONCEPTS,
-                    snapshot_point=point, snapshot_in_legend=not snapshot_shown)
+                    snapshot_point=point, snapshot_in_legend=not snapshot_shown,
+                    mask_outliers=mask_outliers)
         # one legend entry for all of them, on whichever panel got the first marker
         snapshot_shown = snapshot_shown or point is not None
 
@@ -686,6 +819,87 @@ def concept_source(concept: str) -> str | None:
     return spec[0] if spec else None
 
 
+def _comparison_selection(
+    tickers: list[str],
+    concept: str,
+    data: pd.DataFrame,
+    years: int,
+    as_of: "pd.Timestamp | None",
+    value_column: "str | None",
+):
+    """(spec, column, plotted, excluded) for a comparison request, or None if unbuildable.
+
+    Extracted so `build_ticker_comparison` and `comparison_outlier_report` cannot answer
+    "which tickers, which window, which column" differently. The app decides whether to
+    offer outlier masking from the report and then asks the builder to apply it; if the
+    two derived their series separately, the control could name points the chart does not
+    draw, or miss ones it does.
+    """
+    spec = _concept_plot_spec(concept)
+    if spec is None:
+        print(f"[ticker_comparison] '{concept}' is not a plotted concept, nothing to build.")
+        return None
+    _source, _ylabel, _ref_line, _percent, is_valuation, default_column = spec
+    column = value_column or default_column
+
+    requested = list(dict.fromkeys(tickers))
+    if len(requested) < MIN_COMPARISON_TICKERS:
+        print(f"[ticker_comparison] {concept}: {len(requested)} distinct ticker(s) "
+              f"requested, need at least {MIN_COMPARISON_TICKERS}, nothing to build.")
+        return None
+
+    frame = _window_frame(data, years, as_of) #if is_valuation else data
+
+    plotted, excluded = [], []
+    for position, ticker in enumerate(requested):
+        if is_hidden(ticker, concept):
+            profile = TICKER_PROFILES.get(ticker, DEFAULT_PROFILE)
+            excluded.append((ticker, f"for profile '{profile}' not shown"))
+            continue
+        series = frame[
+            (frame["ticker"] == ticker) & (frame["concept"] == concept)
+        ].sort_values("end")
+        if series.dropna(subset=["end", column]).empty:
+            excluded.append((ticker, "No Data"))
+            continue
+        plotted.append((position, ticker, series))
+
+    return spec, column, plotted, excluded
+
+
+def comparison_outlier_report(
+    tickers: list[str],
+    concept: str,
+    data: pd.DataFrame,
+    years: int = 5,
+    as_of: "pd.Timestamp | None" = None,
+    value_column: "str | None" = None,
+) -> dict:
+    """{ticker: DataFrame of the rows a masked comparison would omit}. Empty when none.
+
+    **Each line is judged against its own median, never against a pooled one.** Measured
+    on the alternative: for NVDA/KO/JPM on `pe_ratio` -- three series with nothing wrong
+    with any of them -- a pooled median flags two NVDA points, purely because NVDA trades
+    at a higher multiple than a bank. Punishing a ticker for sitting at a different level
+    is the opposite of what a comparison chart is for. The same pooled rule
+    simultaneously over-masks CRM (7 points against 4) and under-masks INTC (1 against
+    3, while its 812.4 sits there), because one threshold cannot serve series whose
+    medians differ by 6x.
+    """
+    selection = _comparison_selection(tickers, concept, data, years, as_of, value_column)
+    if selection is None:
+        return {}
+    spec, column, plotted, _excluded = selection
+    if not spec[4]:                    # is_valuation -- see outlier_points' scope note
+        return {}
+    out = {}
+    for _position, ticker, series in plotted:
+        hidden = outlier_points(series[column])
+        if hidden.any():
+            out[ticker] = series.loc[hidden, ["end", column]].sort_values("end")
+    return out
+
+
 def build_ticker_comparison(
     tickers: list[str],
     concept: str,
@@ -695,6 +909,7 @@ def build_ticker_comparison(
     as_of: pd.Timestamp | None = None,
     width: int | None = KEEP,
     height: int | None = KEEP,
+    mask_outliers: bool = False,
 ) -> tuple[go.Figure | None, list[tuple[str, str]]]:
     """One metric, one line per ticker, for comparison. Returns (fig, excluded).
 
@@ -716,6 +931,12 @@ def build_ticker_comparison(
     reference line stays because it does not depend on the ticker. Per-ticker
     show/hide is left to Plotly's legend, which does it natively.
 
+    `mask_outliers` hides points more than OUTLIER_MEDIAN_RATIO times **their own
+    line's** median, and only for valuation concepts. The mean-line invariance that
+    governs build_valuation has no counterpart to protect here, precisely because this
+    chart draws no means -- the only computed line is `ref_line`, which is a property of
+    the metric and not of any series, so masking cannot move it.
+
     **No snapshot point either, deliberately** -- build_valuation grows one and
     this does not. Same reasoning as the mean lines: n markers, one per ticker,
     all at the same x just past the last filed period, would cluster into what
@@ -724,34 +945,11 @@ def build_ticker_comparison(
     where the shape of the history is the content; the current level for several
     tickers side by side is what the snapshot table already shows better.
     """
-    spec = _concept_plot_spec(concept)
-    if spec is None:
-        print(f"[ticker_comparison] '{concept}' is not a plotted concept, nothing to build.")
+    selection = _comparison_selection(tickers, concept, data, years, as_of, value_column)
+    if selection is None:
         return None, []
-    _source, ylabel, ref_line, percent, is_valuation, default_column = spec
-    column = value_column or default_column
-
-    requested = list(dict.fromkeys(tickers))
-    if len(requested) < MIN_COMPARISON_TICKERS:
-        print(f"[ticker_comparison] {concept}: {len(requested)} distinct ticker(s) "
-              f"requested, need at least {MIN_COMPARISON_TICKERS}, nothing to build.")
-        return None, []
-
-    frame = _window_frame(data, years, as_of) if is_valuation else data
-
-    plotted, excluded = [], []
-    for position, ticker in enumerate(requested):
-        if is_hidden(ticker, concept):
-            profile = TICKER_PROFILES.get(ticker, DEFAULT_PROFILE)
-            excluded.append((ticker, f"for profile '{profile}' not shown"))
-            continue
-        series = frame[
-            (frame["ticker"] == ticker) & (frame["concept"] == concept)
-        ].sort_values("end")
-        if series.dropna(subset=["end", column]).empty:
-            excluded.append((ticker, "No Data"))
-            continue
-        plotted.append((position, ticker, series))
+    spec, column, plotted, excluded = selection
+    _source, ylabel, ref_line, percent, is_valuation, _default_column = spec
 
     excluded_text = [f"{ticker} ({reason})" for ticker, reason in excluded]
     if excluded:
@@ -764,11 +962,29 @@ def build_ticker_comparison(
 
     fig = _make_subplot_figure(1, 1, [concept])
 
+    # Per line, against that line's own median -- never a pooled one; see
+    # comparison_outlier_report for the measurement behind that choice. Gated on
+    # is_valuation, so picking a fundamentals or growth concept ignores the flag
+    # rather than applying a rule whose precondition does not hold there.
+    #
+    # Worth more here than in the valuation grid, and for a structural reason: these
+    # lines share one y-axis, so a single ticker's outlier flattens every other line
+    # too. On CRM/KO/MSFT it costs the whole chart a 5.0x y-range expansion.
+    hidden_by_ticker = {}
+    if mask_outliers and is_valuation:
+        for _position, ticker, series in plotted:
+            hidden = outlier_points(series[column])
+            if hidden.any():
+                hidden_by_ticker[ticker] = hidden
+
     for position, ticker, series in plotted:
+            drawn = series
+            if ticker in hidden_by_ticker:
+                drawn = series.loc[~hidden_by_ticker[ticker]]
             fig.add_trace(
                 go.Scatter(
-                    x=series["end"],
-                    y=series[column],
+                    x=drawn["end"],
+                    y=drawn[column],
                     mode="lines+markers",
                     name=ticker,
                     line=dict(color=_COMPARISON_COLORS[position % len(_COMPARISON_COLORS)]),
@@ -804,6 +1020,24 @@ def build_ticker_comparison(
             font=dict(color="red", size=10),
         )
 
+    # Same reasoning as the per-panel note in plot_metric: a file exported from here
+    # has no toggle beside it to explain why a line is shorter than the data.
+    if hidden_by_ticker:
+        hidden_text = ", ".join(
+            f"{t} ({int(h.sum())})" for t, h in hidden_by_ticker.items())
+        fig.add_annotation(
+            text=f"Outliers hidden (&gt;{OUTLIER_MEDIAN_RATIO:g}x each line's own median): "
+                 f"{hidden_text}",
+            x=1.0,
+            xref="paper",
+            xanchor="right",
+            y=1.04,
+            yref="paper",
+            yanchor="bottom",
+            showarrow=False,
+            font=dict(color="#888888", size=10),
+        )
+
     fig.update_layout(
         title_text=f"{ylabel} — {', '.join(t for _, t, _ in plotted)}",
         **_size(width, height, 900, 520),
@@ -816,6 +1050,9 @@ def build_ticker_comparison(
             "concept": concept,
             "tickers": [ticker for _, ticker, _ in plotted],
             "excluded": [{"ticker": t, "reason": r} for t, r in excluded],
+            **({"outliers_hidden": {t: int(h.sum())
+                                    for t, h in hidden_by_ticker.items()}}
+               if hidden_by_ticker else {}),
         },
     )
     return fig, excluded

@@ -2,5 +2,5 @@
  enter update date here
 -->
 **Latest update:**
-Fixed split adjustions by back looking double checking against yfinance data to approximate split count.
-Before we simply compared a outlier against th most recent data point, which led to false approximations and wrong multiples. Now fixed, for more info see: [Repo](https://github.com/lorisjk/stock_valuator.git)
+Added a slider to comparison chart, also looked into unmasked multiples of CRM. Created a feature which allows to fruthermore exclude outliers that pass code based masking due to actual realness but disturb viewing possibillities.
+Now fixed, for more info see: [Repo](https://github.com/lorisjk/stock_valuator.git)
