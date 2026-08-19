@@ -501,6 +501,43 @@ def render_snapshot_section(snapshot: pd.DataFrame, ticker: str) -> None:
         st.code(text, language="text")
 
 
+# The four tickers that render blank valuation panels are a symptom, not a list.
+# Measured over the 500-ticker export: no count-based threshold separates the
+# tickers that produce a multiple from the ones that do not -- the thinnest
+# working ticker has 3 EPS_TTM_CALC points, and EA has 70 and still produces
+# nothing (it was taken private, so the price side is gone). The distributions
+# overlap completely, so the only reliable test is the direct one: is the slice
+# the panel would draw actually empty?
+def empty_valuation_panels(frame: pd.DataFrame, ticker: str, concepts: list[str],
+                           years: int, as_of) -> list[str]:
+    """Which of `concepts` have no value at all in the window the chart will draw."""
+    if not concepts:
+        return []
+    windowed = figures._window_frame(frame, years, as_of)
+    sub = windowed[windowed["ticker"] == ticker]
+    empty = []
+    for concept in concepts:
+        values = sub.loc[sub["concept"] == concept, "value"]
+        if values.notna().sum() == 0:
+            empty.append(concept)
+    return empty
+
+
+def share_history_absent(ticker: str) -> bool:
+    """True when the ticker has no SharesOutstanding value at all.
+
+    This is the one cause the app can establish from its own data, and it is
+    deliberately the strict case -- zero, not "thin". BKR has two points and
+    PSKY seven, which is too few to produce a multiple but is not the same
+    statement, and EA has seventy and still produces none. Claiming a cause the
+    data does not support is worse than naming only the symptom.
+    """
+    facts = load_frame(DATA_FILES["facts"])
+    series = facts.loc[(facts["ticker"] == ticker)
+                       & (facts["concept"] == "SharesOutstanding"), "value"]
+    return series.notna().sum() == 0
+
+
 def render(fig, empty_message: str) -> None:
     if fig is None:
         st.info(empty_message)
@@ -919,6 +956,32 @@ def render_analysis(ticker: str, as_of, tickers: list[str], profiles: dict) -> N
             "Nothing selected, or no valuation data for this ticker.",
         )
 
+        # An empty panel still renders as an axis grid, because build_valuation
+        # returns a figure as long as any selected concept has data. Without this
+        # the reader sees a chart frame with no line and no reason for it, next to
+        # a working current multiple at the top of the page.
+        blank = empty_valuation_panels(val_frame, ticker, chosen, years, as_of)
+        if blank:
+            names = ", ".join(labels.get(c, c) for c in blank)
+            cause = (
+                " No share-count history is available for this ticker in the SEC's "
+                "structured data, and every per-share multiple needs one as its "
+                "denominator."
+                if share_history_absent(ticker) else ""
+            )
+            # Deliberately neutral about the cause. 170 of the 500 exported tickers
+            # have at least one empty panel and 97 of those are `dividend_yield` on a
+            # company that pays no dividend -- a true statement about the business,
+            # not a defect. The only claim made unconditionally is the one that always
+            # holds: the value is absent, and it was not filtered away.
+            st.info(
+                f"**No data for: {names}** — nothing to draw in this window.{cause} "
+                "The current multiple above still works because it is computed from "
+                "market data, which has no filed-history equivalent. "
+                "**Nothing was hidden or filtered** — the value is absent from the "
+                "source data, and the empty column is still listed in the **Data** tab."
+            )
+
         if outliers:
             summary = ", ".join(
                 f"{labels.get(c, c)} ({len(rows)} point{'s' if len(rows) > 1 else ''})"
@@ -999,8 +1062,17 @@ def render_analysis(ticker: str, as_of, tickers: list[str], profiles: dict) -> N
             fig, excluded = figures.build_ticker_comparison(
                 picked, concept, frame, as_of=as_of, years=years, width=None,
                 mask_outliers=cmp_mask)
+            # figures.py reports the fact ("No Data"); the wording is the app's
+            # job, and it has to match the valuation tab's notice. Two different
+            # explanations of the same absence in two tabs is the failure to avoid.
             for dropped, reason in excluded:
-                st.warning(f"**{dropped}** not shown — {reason}")
+                if reason == "No Data":
+                    detail = ("no values in this window"
+                              + (" — no share-count history is available for it"
+                                 if share_history_absent(dropped) else ""))
+                else:
+                    detail = reason
+                st.warning(f"**{dropped}** not shown — {detail}.")
             render(fig, "Pick at least two tickers that can show this metric.")
 
             if cmp_outliers:

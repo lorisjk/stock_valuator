@@ -6,6 +6,111 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-08-19 — Empty valuation panels now say why, and the premise needed fixing first
+
+The brief was that V, STZ, ERIE and BKR "render no valuation metrics at all". **They do not.**
+V has **456** non-null valuation values across seven multiples spanning 2008-2026; STZ 418, ERIE
+203. `pb_ratio`, `pfcf_ratio`, `ev_sales`, `ev_ebitda` and `ev_fcf` all work, because they come
+from market capitalisation rather than the EDGAR `SharesOutstanding` series. What is blank is the
+per-share family -- `pe_ratio`, `pe_to_revenue_growth`, and `dividend_yield` for three of them --
+because `EPS_TTM_CALC` is `NetIncomeLoss_TTM / SharesOutstanding`. Full derivation in
+`empty_valuation_notice_report.md`.
+
+**The reader still saw exactly what the brief described, for a reason the brief did not name:
+the valuation tab defaults to `pe_ratio`.** And a blank panel is not the "no data" message --
+`build_valuation` returns a figure as long as *any* selected concept has data, so `render()`'s
+`empty_message` never fires and the reader gets an axis grid with no line, under a working
+current multiple.
+
+**No count-based threshold can detect this, measured.** Across the 471 tickers where `pe_ratio`
+is plottable, the thinnest ticker that **produces** one has **3** `EPS_TTM_CALC` points, and the
+one with the most that produces **none** has **70**. The distributions overlap completely, so the
+rule is the direct test instead: does the slice the panel would draw contain a non-null value.
+
+**Six tickers have a blank `pe_ratio`, not four, with four different causes:** V/STZ/ERIE (0
+shares, 0 EPS -- the settled case), BKR (2/2, thin), PSKY (7 shares but 2 EPS -- a different link
+in the chain), and **EA (70/70/72 and not one non-null value in any real multiple)**. EA was taken
+private -- `25-NSE` 2026-08-04, `15-12G` 2026-08-14 -- and this export ran 2026-08-16, so its
+fundamentals are complete and its price side is gone. EA is why the notice states the symptom
+unconditionally and the cause only where it can prove it.
+
+**Scope forced the wording.** 170 of 500 tickers have at least one empty panel and **97 of those
+are `dividend_yield` on a company that pays no dividend** -- a true statement about the business.
+The first draft said "this is a gap in the source data"; that would have been wrong for the
+largest group, so the unconditional text is now "Nothing was hidden or filtered -- the value is
+absent from the source data", with the share-count explanation appended only for the three
+tickers where `SharesOutstanding` is genuinely empty.
+
+**Checked and already correct, so unchanged:** the snapshot marker does not strand a lone green
+diamond on V's empty `pe_ratio` -- the figure has zero traces, because `build_snapshot` omits
+`pe_ratio` for V for the same reason. And the data tab already surfaces the empty multiple, since
+`pivot_ticker` passes `dropna=False` and the caption counts all-null columns. Its blind spot is
+the *input*: V has zero `SharesOutstanding` rows, and a concept with no rows never becomes a
+column. Recorded, not fixed.
+
+**The comparison tab said "No Data"** while the new notice said something else. `figures.py` was
+out of scope, so the fact stays there and the wording moved to the app, which translates it and
+appends the same conditional clause.
+
+**Only `app.py` changed.** Chart output verified identical to `HEAD:figures.py` across 11 cases in
+a process that never imports streamlit. *Harness note: extracting `HEAD:figures.py` with
+`subprocess.run(text=True)` decodes git's bytes as cp1252 and mangles the `Ø` in the mean-line
+label, making nine byte-identical figures look different.*
+
+---
+
+## 2026-08-19 — The `dei` share-count fallback, twice rejected, now rejected with a number
+
+Revisited because the argument had changed, not because the earlier calls were wrong. Both
+prior rejections (2026-08-03 Plotly Phase 3, and the dual-class review) turned on the same
+correct point -- `dei:EntityCommonStockSharesOutstanding` is a cover-page count as of the
+filing date, not a period weighted average. What was new was that the provenance machinery
+(`ttm_source`, `ffo_gains_source`) now exists, so "supply it and mark it" was available for
+the first time. Full derivation in `dei_shares_fallback_report.md`.
+
+**Threshold fixed before measuring** (median |dei/us-gaap - 1| <= 2%, p90 <= 5%, chosen as
+half of the existing `MIN_SHARE_COUNT_DISAGREEMENT = 0.10` line). **Measured across 27,887
+comparable quarters on 545 tickers: median 1.19%, p90 5.20% -- FAIL.** Excluding a class of
+decimal-scaling defect the guard does not cover, p90 is 4.90%; that pass is not claimed,
+because building the guard is a prerequisite rather than a footnote. The disagreement is also
+**one-directional** -- median per-ticker level bias **-1.03%** -- which makes it a different
+quantity rather than a noisier one. Split by basis, the `dei` value is within **0.04%** of a
+point-in-time `CommonStockSharesOutstanding` and **1.21%** off a weighted average, which is
+exactly the stated objection, now quantified.
+
+**The decisive finding was not the threshold: it was that the premise is wrong.** The brief
+named V, STZ, ERIE and BKR. `EntityCommonStockSharesOutstanding` **does not exist** in STZ's
+or ERIE's `dei` namespace; **V has exactly two facts**, dated 2009-11-13 and 2010-01-27; and
+**BKR was never a full failure** -- it has two `us-gaap` values and `dei` reaches back only to
+2023-02. Confirmed at the source, not just in the cache: SEC `companyconcept` returns **404**
+for `us-gaap/CommonStockSharesOutstanding` on all three and for
+`dei/EntityCommonStockSharesOutstanding` on STZ and ERIE.
+
+**Root cause identified, and it is not a tag gap.** V and STZ are missing the share count
+**and** `EarningsPerShareBasic`/`Diluted` **together** -- the whole per-share layer. That is
+the signature of dimensional tagging: `companyfacts` returns only non-dimensional facts, the
+same mechanism already recorded for share classes. These three are class **C** in both
+namespaces, and no tag anywhere fixes them. The real route is the `frames` API, dimensional
+`companyconcept`, or the R-files -- a fetch-layer change, carried forward.
+
+**Also measured and also rejected:** `NetIncomeLoss / EarningsPerShareDiluted` reconstructs
+the filer's own weighted average and is materially better centred (median **0.49%**, signed
+bias **+0.03%** against `dei`'s -1.01%) -- but EPS is reported to two decimals, so the implied
+count has precision `0.005/|EPS|`, i.e. +/-10% at EPS 0.05. BKR is the worst case for it: its
+quarterly EPS runs -0.02 to +0.37 and the derived series swings +/-20% a quarter. It also
+derives **0** quarters for V, STZ and ERIE, which have no EPS either.
+
+**Independent check, which the rejection does not contradict:** BKR's latest `dei` cover-page
+count is **992,674,071** and the yfinance count the pipeline already uses is **992,674,071** --
+ratio 1.0000. The `dei` data is correct. It is the wrong quantity for this series, absent for
+the tickers that need it, and unvalidatable for the one that would use it (BKR has **zero**
+quarters where a `us-gaap` and a `dei` value coexist).
+
+**Nothing was changed.** `CONCEPT_CANDIDATES["SharesOutstanding"]` is untouched and the parser
+still reads only the `us-gaap` namespace, so no `dei` value can reach any series by any path.
+
+---
+
 ## 2026-08-19 — 112 candidate tickers surveyed; the fix was to add almost nothing
 
 First per-category pass over `next_500_candidates.md`: the 112 proposed `standard` tickers,
