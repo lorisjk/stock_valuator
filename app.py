@@ -804,7 +804,7 @@ def main() -> None:
     render_update_notice()
 
     st.caption(
-        "This pipeline fetches SEC EDGAR 10k and 10q filings of every S&P 500 company, extracts the XBRL "
+        "This pipeline fetches SEC EDGAR 10k and 10q filings of more than 600 companies, extracts the XBRL "
         "facts, computes derived metrics, and links them to yfinance course data. "
         "This data stream is as pure as possible."
     )

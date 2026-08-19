@@ -88,18 +88,23 @@ Verantwortlich für den Inhalt: Loris-Joona Köhn, Birkenhof 3, 15831 Mahlow
 **No accounts, no tracking, no advertising.** This site requires no registration and
 sets no tracking or advertising cookies. It does not embed third-party analytics.
 
-**What the server records.** Like most web servers, requests are written to a log that
-may include your IP address, the time of the request, the page requested, and your
-browser's user-agent string. This data is used solely to operate the site and to
-identify technical faults and abuse. The legal basis is Art. 6(1)(f) GDPR (legitimate
-interest in secure and reliable operation). Logs are deleted after [RETENTION PERIOD].
+**Cookies.** One technically necessary cookie (_streamlit_xsrf) is set by the application framework to
+maintain the connection between your browser and the server. It contains no personal
+information, is not used to recognise you across visits, and is discarded when you
+close the tab. No consent banner is shown because no cookie beyond this technical
+minimum is used.
+
+**What the server records.** This site does not keep access logs. The web server is
+configured without request logging, so visits are not recorded and no IP addresses are
+stored. Operational error messages may be written to the system journal for
+troubleshooting; these do not routinely contain visitor data and are rotated by the
+operating system.
 
 **Session state.** The application keeps a small amount of state in your browser
 session so the interface remembers your selections while you use it. It is discarded
 when you close the tab and is not transmitted to any third party.
 
-**Hosting.** The site is operated on infrastructure provided by Streamlit Community Cloud,
-USA. 
+**Hosting.** The site is operated on infrastructure provided by Hetzner Online GmbH, Industriestr. 25, 91710 Gunzenhausen, Germany, in a data centre in Helsinki, Finland. No data is transferred outside the EU/EEA. 
 
 **Your rights.** You have the right to information, correction, deletion, restriction
 of processing, and to object to processing, as well as the right to lodge a complaint

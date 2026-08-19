@@ -6,6 +6,64 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-08-19 — 112 candidate tickers surveyed; the fix was to add almost nothing
+
+First per-category pass over `next_500_candidates.md`: the 112 proposed `standard` tickers,
+added provisionally to `TICKER_PROFILES` so they could be fetched at all. Full derivation in
+`standard_candidates_tag_report.md`.
+
+**274 flags across 107 of 112 tickers -- 2.45 per ticker against the universe's 1.47 -- and
+92.3% of them are not fixable by any tag.** Class A 21, class B 128, class C 125. The single
+largest group is `DividendsPerShare` at 89 flags and **0% actionable**: 80 of those filers carry
+no dividend-family tag of any kind, because they have never declared a dividend. `StockRepurchased`
+comes out 0 of 54, reconfirming the 0 of 126 from the `StockIssued`/SBC investigation on a
+disjoint population. Read the other way, `ShareBasedCompensation` is **twelve points better**
+in the candidates than in the universe -- the tag appended in July is how software companies
+tag SBC.
+
+**Not one candidate tag survived as a global `CONCEPT_CANDIDATES` addition, and that is the
+main result.** All ten were measured against the existing 500 first. `LineOfCredit`: 173
+existing holders, median ratio to their current long-term debt **0.002**, 756 values it would
+have injected. `DebtInstrumentCarryingAmount` looks safe at 53.7% identical and a median ratio
+of 1.008, and would still have put $7.05bn of debt on BALL where the pipeline has $2m -- it is
+a per-instrument footnote tag that equals the total only for single-instrument filers.
+`ProfitLoss` flips sign on ACGL, because it includes noncontrolling interests where
+`NetIncomeLoss` excludes them. **`sum` versus `fallback` never arose**: the question is upstream
+of the mode, because none of these belongs in a shared list in either mode.
+
+**Seven per-ticker `TICKER_CONCEPT_OVERRIDES` applied**, each verified on the filer's own data:
+`ProfitLoss` for GWRE/MORN/SMTC (identical on 8/8, 30/30 and 33/33 overlapping quarters, the
+existing KEYS precedent); `SeniorNotes` for GWRE and `LineOfCredit` for MORN (identical on 5/5
+and 12/12); `DebtInstrumentCarryingAmount` for RGTI and APPF (matching each filer's own
+separately tagged maturity schedule, exactly and within 2.0%). Rejected with evidence:
+restricted cash for SITM/NAVN (+96.99% on NAVN), `LineOfCredit` for SNEX (-70%) and MELI
+(-99.99%), FN and AXTI (fail against their own maturity schedules), EVR (36 ends, no
+overlapping quarter and no schedule -- unverifiable, left open), and TRNO's 64-quarter `Capex`
+find, which is a profile decision wearing a tag decision's clothes.
+
+**A deleted value that is correct.** GWRE `LongTermDebt` 2022-07-31 disappears, because
+`SeniorNotes` brings in 2022-08-01 and `merge_duplicate_period_ends` keeps the later of two
+ends within seven days. They are different measurements: four years of accretion at
+$2.9-3.7M/quarter, then **+$37.25M in one day**, then $422-432K/quarter. Guidewire adopted
+**ASU 2020-06** on the first day of FY2023 and reclassified the equity-conversion component
+into debt. Keeping the later end gives 27 points on one accounting basis instead of 28 with a
+$37M discontinuity.
+
+**Non-regression:** the existing 500 are **0 appeared, 0 changed, 0 disappeared** on both base
+facts (incl. `_TTM`) and `metrics_long`, 733 flags before and after, zero new flags. Anchor
+invariant 0 backward moves, now 0/0 for twelve tasks. All 27 changed candidate values are
+`NaN -> a number`. Candidate flags 274 -> 269; GWRE and APPF `LongTermDebt` improve (9 ends to
+27, +2) without clearing, because the flag measures coverage.
+
+**Also found:** none of the 112 has the 1,000x unit-scaling defect that TBLA/RPAY/MODD show --
+all 112 parse a `SharesOutstanding` series, zero flags, implied prices $5.27 to $1,787. The two
+survey-flagged tickers in this category (OWL, MBLY) were dual-class understatement in the
+survey's own frames-based estimator, which the pipeline never touches. And SHOP, the largest
+candidate, is class B on **twelve** concepts: it filed 40-F under IFRS until recently, so its
+us-gaap record is the thinnest in the category despite 13.5 years of price history.
+
+---
+
 ## 2026-08-18 — One unresolvable ticker killed the whole run, and a stale cache hid it
 
 The first CI run of the nightly workflow died after ~5 minutes on
