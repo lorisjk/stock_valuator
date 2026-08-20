@@ -616,10 +616,34 @@ TICKER_PROFILES = {
     "CBRE": "standard", "CSGP": "standard",
     "APP": "standard", "NOW": "standard",
 
+    "SHOP": "standard", "SNOW": "standard", "NET": "standard", "MELI": "standard", "CRWV": "standard", "ALAB": "standard",
+    "CRDO": "standard", "CLS": "standard", "TEAM": "standard", "P": "standard", "UI": "standard", "MDB": "standard",
+    "TWLO": "standard", "ZM": "standard", "ZS": "standard", "LPLA": "standard", "CPNG": "standard", "RBLX": "standard",
+    "MTSI": "standard", "OKTA": "standard", "IOT": "standard", "SITM": "standard", "TW": "standard", "FN": "standard",
+    "RBRK": "standard", "U": "standard", "TOST": "standard", "IONQ": "standard", "LSCC": "standard",
+    "SSNC": "standard", "NTNX": "standard", "JLL": "standard", "FLUT": "standard",
+    "DOCN": "standard", "AMKR": "standard", "RBA": "standard", "TRU": "standard", "NXT": "standard", "TTMI": "standard",
+    "LOGI": "standard", "SMTC": "standard", "CACI": "standard", "GWRE": "standard", "W": "standard", "AUR": "standard",
+    "DT": "standard", "FIG": "standard", "AAOI": "standard", "PINS": "standard", "FROG": "standard",
+    "EVR": "standard", "SANM": "standard", "MANH": "standard", "DOCU": "standard", "VIAV": "standard", "CART": "standard",
+    "SCI": "standard", "ARW": "standard", "RMBS": "standard", "FORM": "standard", "HUBS": "standard", "SAIL": "standard",
+    "BSY": "standard", "PAYC": "standard", "COMP": "standard", "CHWY": "standard", "BAH": "standard",
+    "IDCC": "standard", "APLD": "standard", "PCOR": "standard", "SNAP": "standard", "HLI": "standard", "PL": "standard",
+    "MTCH": "standard", "ESTC": "standard", "HQY": "standard", "QRVO": "standard", "TTAN": "standard", "PATH": "standard",
+    "SNEX": "standard", "ALGM": "standard", "AVT": "standard", "PCTY": "standard", "ESE": "standard", "MBLY": "standard",
+    "MORN": "standard", "MXL": "standard", "Z": "standard", "S": "standard", "LNWO": "standard",
+    "SLAB": "standard", "PLXS": "standard", "VCTR": "standard", "NAVN": "standard", "DBX": "standard", "ZETA": "standard",
+    "ETSY": "standard", "HNGE": "standard", "APPF": "standard", "ACT": "standard", "GTLB": "standard", "LYFT": "standard",
+    "WEX": "standard", "QLYS": "standard", "AXTI": "standard", "RGTI": "standard",
+
     "BX": "alt_asset_manager",
     "KKR": "alt_asset_manager",
     "ARES": "alt_asset_manager",
     "APO": "alt_asset_manager",
+    "TPG": "alt_asset_manager",
+    "OWL": "alt_asset_manager",
+    "CG": "alt_asset_manager",
+    "AMG": "alt_asset_manager",
 }
 
 
@@ -1904,6 +1928,137 @@ TICKER_CONCEPT_OVERRIDES = {
             "mode": "fallback",
         },
     },
+
+    "GWRE": {
+        "NetIncomeLoss": {
+            "tags": [
+                "NetIncomeLoss",
+                "NetIncomeLossAvailableToCommonStockholdersBasic",
+                "ProfitLoss",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+        "LongTermDebt": {
+            "sources": [
+                {"type": "tag", "tag": "LongTermDebt"},
+                {"type": "tag", "tag": "DebtLongtermAndShorttermCombinedAmount"},
+                {"type": "tag", "tag": "LongTermNotesAndLoans"},
+                {"type": "tag", "tag": "ConvertibleLongTermNotesPayable"},
+                {"type": "tag", "tag": "ConvertibleDebtNoncurrent"},
+                {
+                    "type": "sum",
+                    "tags": ["LongTermDebtNoncurrent", "LongTermDebtCurrent", "NotesPayableCurrent"],
+                    "require": "LongTermDebtNoncurrent",
+                },
+                {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligations"},
+                {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities"},
+                {"type": "tag", "tag": "UnsecuredLongTermDebt"},
+                {"type": "tag", "tag": "ConvertibleDebtCurrent"},
+                {"type": "tag", "tag": "ConvertibleNotesPayableCurrent"},
+                {"type": "tag", "tag": "SeniorNotes"},
+            ],
+            "point_in_time": True,
+            "mode": "priority_merge",
+            "non_negative": True,
+        },
+    },
+    "SMTC": {
+        "NetIncomeLoss": {
+            "tags": [
+                "NetIncomeLoss",
+                "NetIncomeLossAvailableToCommonStockholdersBasic",
+                "ProfitLoss",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+    },
+    "MORN": {
+        "NetIncomeLoss": {
+            "tags": [
+                "NetIncomeLoss",
+                "NetIncomeLossAvailableToCommonStockholdersBasic",
+                "ProfitLoss",
+            ],
+            "point_in_time": False,
+            "mode": "fallback",
+        },
+        "LongTermDebt": {
+            "sources": [
+                {"type": "tag", "tag": "LongTermDebt"},
+                {"type": "tag", "tag": "DebtLongtermAndShorttermCombinedAmount"},
+                {"type": "tag", "tag": "LongTermNotesAndLoans"},
+                {"type": "tag", "tag": "ConvertibleLongTermNotesPayable"},
+                {"type": "tag", "tag": "ConvertibleDebtNoncurrent"},
+                {
+                    "type": "sum",
+                    "tags": ["LongTermDebtNoncurrent", "LongTermDebtCurrent", "NotesPayableCurrent"],
+                    "require": "LongTermDebtNoncurrent",
+                },
+                {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligations"},
+                {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities"},
+                {"type": "tag", "tag": "UnsecuredLongTermDebt"},
+                {"type": "tag", "tag": "ConvertibleDebtCurrent"},
+                {"type": "tag", "tag": "ConvertibleNotesPayableCurrent"},
+                {"type": "tag", "tag": "LineOfCredit"},
+            ],
+            "point_in_time": True,
+            "mode": "priority_merge",
+            "non_negative": True,
+        },
+    },
+    "RGTI": {
+        "LongTermDebt": {
+            "sources": [
+                {"type": "tag", "tag": "LongTermDebt"},
+                {"type": "tag", "tag": "DebtLongtermAndShorttermCombinedAmount"},
+                {"type": "tag", "tag": "LongTermNotesAndLoans"},
+                {"type": "tag", "tag": "ConvertibleLongTermNotesPayable"},
+                {"type": "tag", "tag": "ConvertibleDebtNoncurrent"},
+                {
+                    "type": "sum",
+                    "tags": ["LongTermDebtNoncurrent", "LongTermDebtCurrent", "NotesPayableCurrent"],
+                    "require": "LongTermDebtNoncurrent",
+                },
+                {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligations"},
+                {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities"},
+                {"type": "tag", "tag": "UnsecuredLongTermDebt"},
+                {"type": "tag", "tag": "ConvertibleDebtCurrent"},
+                {"type": "tag", "tag": "ConvertibleNotesPayableCurrent"},
+                {"type": "tag", "tag": "DebtInstrumentCarryingAmount"},
+            ],
+            "point_in_time": True,
+            "mode": "priority_merge",
+            "non_negative": True,
+        },
+    },
+    "APPF": {
+        "LongTermDebt": {
+            "sources": [
+                {"type": "tag", "tag": "LongTermDebt"},
+                {"type": "tag", "tag": "DebtLongtermAndShorttermCombinedAmount"},
+                {"type": "tag", "tag": "LongTermNotesAndLoans"},
+                {"type": "tag", "tag": "ConvertibleLongTermNotesPayable"},
+                {"type": "tag", "tag": "ConvertibleDebtNoncurrent"},
+                {
+                    "type": "sum",
+                    "tags": ["LongTermDebtNoncurrent", "LongTermDebtCurrent", "NotesPayableCurrent"],
+                    "require": "LongTermDebtNoncurrent",
+                },
+                {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligations"},
+                {"type": "tag", "tag": "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities"},
+                {"type": "tag", "tag": "UnsecuredLongTermDebt"},
+                {"type": "tag", "tag": "ConvertibleDebtCurrent"},
+                {"type": "tag", "tag": "ConvertibleNotesPayableCurrent"},
+                {"type": "tag", "tag": "DebtInstrumentCarryingAmount"},
+            ],
+            "point_in_time": True,
+            "mode": "priority_merge",
+            "non_negative": True,
+        },
+    },
+
 }
 
 
