@@ -22,3 +22,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# The root .gitignore now anchors its pattern as `/data/`, so src/data/ -- where
+# the export loaders live -- is no longer swallowed. This re-inclusion is kept as
+# a guard: an unanchored `data/` there matches that name at ANY depth, and the
+# failure is silent, since the whole data layer still builds and runs while being
+# absent from the commit. Re-including the directory has to come before anything
+# inside it can be re-included.
+!/src/data/
