@@ -6,6 +6,71 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-08-22 — Per-ticker JSON: two files, not five, and the comparison axis is not needed
+
+The six parquet frames are 309 MB as JSON. The export now also writes
+**`data/app/tickers/{TICKER}.json`** (the four chart frames) and
+**`{TICKER}.facts.json`** — 1,218 files, **140.5 MB raw, 21.7 MB gzipped**, written by
+`export_for_app` before `meta.json`. Per-ticker schema **1**; export schema **3 → 4**. Full
+derivation in `per_ticker_export_report.md`.
+
+**Two files rather than the five the inventory proposed, on the measurement.** `facts_full` is
+**62%** of a ticker's payload and only two of the six tabs read it; the other four frames together
+are **14.0 kB gzipped**, so splitting them as well would have tripled the file count to save under
+10 kB on a first paint. The split that was kept pays for itself twice: a comparison never needs
+`.facts.json` either, so the core file *is* the comparison payload.
+
+**Column-major, and the alternative that looked better was worse.** Records
+(`[{concept: …, value: …}]`) are 580 kB for AAPL; `{columns, data}` is **324 kB**. Nesting by
+concept is smaller again raw (236 kB) but **larger gzipped** (54.3 kB against 52.3 kB) — and it
+cannot reproduce the parquet's row order, because `valuation_history` is stored date-major and its
+(ticker, concept) groups are interleaved, with 110 groups across the frames not even ascending in
+`end`. Column-major reconstructs the slice row for row without sorting anything.
+
+**JSON cannot carry ±inf, and the data has 44 of them.** `Infinity` is not valid JSON and
+`JSON.parse` rejects it, so the value array gets `null` — what a chart would draw anyway — and the
+true value is recorded in a `nonfinite` sidecar keyed by row index. They come from division by
+zero: `EPS_TTM_CALC` / `EPS_QUARTERLY_CALC` on 7 tickers, `operating_margin_quarterly` /
+`fcf_margin_quarterly` on 3. **The parquet keeps them, so Streamlit is unaffected.**
+
+**Dates are `YYYY-MM-DD`.** Every `end` value in all five frames is midnight — these are period
+ends, not timestamps — so the bare date is lossless and a third the width of a full ISO stamp.
+Verified across all 2,344,025 exported values including the earliest (2005-03-31) and latest
+(2026-08-21).
+
+**Per-ticker files carry no timestamp, deliberately.** A ticker whose data did not change produces
+a byte-identical file, so the nightly commit stores nothing for it. Measured over five simulated
+price-only nights: **613 files change, 609 of them core and zero of them facts.** The deploy branch
+grows **+6.9 MB/night** for the JSON against **+0.23 MB/night** for the parquet — git dedupes the
+four unchanged parquet files, so the workflow's standing "~18.8 MB a night" is itself pessimistic
+on a night without filings. About **210 MB/month**, flattened by the same monthly orphan reset.
+
+**The comparison axis was measured and rejected.** A concept-major file averages **186 kB gzipped**
+(`pe_ratio` the largest at 327 kB). `SUGGESTED_MAX_COMPARISON_TICKERS` is **3**, and three core
+files are **42 kB** — already cached if the user browsed those tickers. Break-even is **13
+tickers**, more than four times the suggested maximum, and the axis would add 13 files and 12.3 MB
+to every nightly commit. Not built.
+
+**Round-trip verified on all 3,045 (ticker, frame) slices, not a sample** — `assert_frame_equal`
+with `check_exact=True` and dtypes, including AAPL, JPM, O, V/STZ/ERIE/BKR and CRWV/FIG. Float
+`repr` is byte-identical after the round-trip across 463,069 sampled values.
+
+**A sampled validator check was written first and thrown away.** It passed eight of twelve
+deliberate corruptions because none of them landed on a sampled ticker. All 1,218 files are opened
+and checked against the parquet slice they were cut from instead: **1.9 s**, 3.6 s for the whole
+validator. 12/12 mutations now rejected.
+
+**Found and recorded, not fixed:** `current_snapshot.parquet` holds 4 rows for **EA**, which is not
+in the universe (it produced no metrics, valuation or growth), so the per-ticker export does not
+carry them. The validator asserts exactly this — every unexported row belongs to a ticker the
+universe does not list.
+
+**`config.py`, `figures.py` and `app.py` are untouched.** The six parquet frames come back
+content-identical and byte-identical across two runs, and so do all 1,218 JSON files.
+`export_for_app` now takes **45.8 s** end to end against a ~40 min pipeline run.
+
+---
+
 ## 2026-08-22 — The config registry is exported as JSON, and profile beats ticker by 6.6x
 
 `streamlit_inventory.md` §1.5 called the missing registry export "the single biggest gap in the

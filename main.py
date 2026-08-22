@@ -1802,7 +1802,8 @@ APP_EXPORT_SUBDIR = "app"
 APP_EXPORT_DIR = os.path.join(DATA_DIR, APP_EXPORT_SUBDIR)
 # 2: added facts_full.parquet and current_snapshot.parquet for the data tab.
 # 3: added registry.json and concept_candidates.json, and meta.registry.
-APP_EXPORT_SCHEMA = 3
+# 4: added tickers/{TICKER}.json + {TICKER}.facts.json, and meta.per_ticker.
+APP_EXPORT_SCHEMA = 4
 
 
 def _write_parquet_atomic(df: pd.DataFrame, path: str) -> int:
@@ -1829,16 +1830,21 @@ REGISTRY_FILE = "registry.json"
 CANDIDATES_FILE = "concept_candidates.json"
 
 
-def _write_json_atomic(payload: dict, path: str) -> int:
+def _write_json_atomic(payload: dict, path: str, indent: int | None = 1) -> int:
     """Same convention as _write_parquet_atomic; returns the bytes written.
 
     sort_keys is deliberately off: the metric list and the chart order are
     meaningful (panel order follows METRICS order) and dicts here are ordered by
     construction, so sorting would destroy information rather than normalise it.
+
+    indent=1 for the registry, which people read. indent=None for the per-ticker
+    files, which nothing reads by hand: pretty-printing 1,218 data files costs
+    63 MB of whitespace per run, on a branch that keeps every night's commit.
     """
     tmp = path + ".tmp"
+    separators = None if indent else (",", ":")
     with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh, indent=1, ensure_ascii=False)
+        json.dump(payload, fh, indent=indent, separators=separators, ensure_ascii=False)
     size = os.path.getsize(tmp)
     os.replace(tmp, path)
     return size
@@ -1959,6 +1965,106 @@ def export_registry(tickers: list[str], out_dir: str) -> dict:
     }
 
 
+# The per-ticker export. The six parquet frames are 309 MB as JSON, which is not
+# shippable; one ticker's slice is ~242 kB raw / ~36 kB gzipped, which is a
+# fetch. Two files rather than five: facts_full is 62% of a ticker's payload and
+# only two of the six tabs read it, while the other four frames together are
+# 14 kB gzipped -- splitting those as well would triple the file count to save
+# under 10 kB on a first paint.
+#
+# 1: {TICKER}.json (four chart frames) + {TICKER}.facts.json.
+TICKER_EXPORT_SCHEMA = 1
+TICKER_EXPORT_SUBDIR = "tickers"
+TICKER_CORE_FRAMES = ("metrics_long", "valuation_history", "facts_growth", "current_snapshot")
+TICKER_FACTS_FRAMES = ("facts_full",)
+
+
+def _columnar(sub: pd.DataFrame) -> dict:
+    """One ticker's slice of one frame as {columns, data} -- column-major.
+
+    Column-major rather than a list of {column: value} records because it drops
+    every repeated key name: measured on AAPL, 324 kB against 580 kB. Nesting it
+    further by concept is smaller again raw (236 kB) but *larger* gzipped, and it
+    cannot reproduce the parquet's row order -- valuation_history is stored
+    date-major, so its (ticker, concept) groups are interleaved, and 110 groups
+    across the frames are not even ascending in `end`. Column-major reconstructs
+    the slice row for row without sorting anything.
+
+    Non-finite floats are the one thing JSON cannot carry: `Infinity` is not
+    valid JSON and JSON.parse rejects it. The array gets `null` there -- which is
+    what a chart would draw anyway -- and the true value is recorded beside it,
+    so the round-trip is still exact. 44 values in the whole export.
+    """
+    columns = list(sub.columns)
+    data, nonfinite = [], {}
+    for name in columns:
+        col = sub[name]
+        if col.dtype == "float64":
+            arr = col.to_numpy(dtype=float)
+            data.append([float(v) if ok else None for v, ok in zip(arr, np.isfinite(arr))])
+            spots = {str(i): ("Infinity" if arr[i] > 0 else "-Infinity")
+                     for i in np.nonzero(np.isinf(arr))[0]}
+            if spots:
+                nonfinite[name] = spots
+        else:
+            # NaN in an object column (ttm_source, ffo_gains_source) is absence,
+            # not a value; v != v is the NaN test that also leaves strings alone.
+            data.append([None if v is None or v != v else v for v in col])
+    payload = {"columns": columns, "data": data}
+    if nonfinite:
+        payload["nonfinite"] = nonfinite
+    return payload
+
+
+def _ticker_slices(frame: pd.DataFrame) -> dict:
+    """{ticker: slice without the ticker column}, dates already ISO strings.
+
+    `end` is datetime64[ns] and JSON has no date type. Every value in all five
+    frames is midnight -- these are period ends, not timestamps -- so YYYY-MM-DD
+    is lossless and a third the width of a full ISO timestamp. Formatted once
+    for the whole frame rather than per ticker, which is where the time goes.
+    """
+    prepared = frame.copy()
+    prepared["end"] = prepared["end"].dt.strftime("%Y-%m-%d")
+    return {ticker: group.drop(columns=["ticker"]).reset_index(drop=True)
+            for ticker, group in prepared.groupby("ticker", sort=False)}
+
+
+def export_per_ticker(frames: dict, tickers: list[str], out_dir: str) -> dict:
+    """Write {TICKER}.json and {TICKER}.facts.json for every ticker.
+
+    Deliberately carries no timestamp: a ticker whose data did not change
+    produces a byte-identical file, so the nightly commit stores nothing new for
+    it. meta.json holds the run's time, once.
+    """
+    target = os.path.join(out_dir, TICKER_EXPORT_SUBDIR)
+    os.makedirs(target, exist_ok=True)
+
+    sliced = {name: _ticker_slices(frame) for name, frame in frames.items()}
+    written, total_bytes = 0, 0
+    for ticker in tickers:
+        for suffix, names in ((".json", TICKER_CORE_FRAMES),
+                              (".facts.json", TICKER_FACTS_FRAMES)):
+            payload = {
+                "schema": TICKER_EXPORT_SCHEMA,
+                "ticker": ticker,
+                "frames": {name: _columnar(sliced[name][ticker])
+                           for name in names if ticker in sliced[name]},
+            }
+            total_bytes += _write_json_atomic(
+                payload, os.path.join(target, ticker + suffix), indent=None)
+            written += 1
+
+    return {
+        "schema": TICKER_EXPORT_SCHEMA,
+        "directory": TICKER_EXPORT_SUBDIR,
+        "tickers": len(tickers),
+        "files": written,
+        "bytes": total_bytes,
+        "core_frames": list(TICKER_CORE_FRAMES),
+        "facts_frames": list(TICKER_FACTS_FRAMES),
+    }
+
 def export_for_app(
     metrics_long: pd.DataFrame,
     valuation_history: pd.DataFrame,
@@ -1969,7 +2075,7 @@ def export_for_app(
     out_dir: str = APP_EXPORT_DIR,
 ) -> dict:
     """Write the frontend's inputs: the chart frames, the data-tab frames, the
-    universe, the config registry, and meta.
+    universe, the config registry, the per-ticker JSON, and meta.
 
     Parquet rather than CSV because `end` must survive as a real datetime --
     build_valuation and build_ticker_comparison compare it against a
@@ -2017,6 +2123,11 @@ def export_for_app(
 
     # Before meta.json, so meta.json's presence still means "everything is here".
     registry = export_registry(produced, out_dir)
+    per_ticker = export_per_ticker(
+        {"metrics_long": metrics_long, "valuation_history": valuation_history,
+         "facts_growth": facts_growth, "current_snapshot": snapshot,
+         "facts_full": facts_out},
+        produced, out_dir)
 
     meta = {
         "schema": APP_EXPORT_SCHEMA,
@@ -2028,6 +2139,7 @@ def export_for_app(
         "tickers_without_data": sorted(set(requested_tickers) - set(produced)),
         "rows": rows,
         "registry": registry,
+        "per_ticker": per_ticker,
     }
     # written last, so its presence means every frame above is already in place
     meta_tmp = os.path.join(out_dir, "meta.json.tmp")
@@ -2038,7 +2150,9 @@ def export_for_app(
     print(f"[export] {len(produced)} tickers, "
           f"{sum(rows.values())} rows across {len(rows)} frames, "
           f"registry {registry['metrics']} metrics / {registry['profiles']} profiles / "
-          f"{registry['candidate_variants']} candidate variants -> {out_dir}")
+          f"{registry['candidate_variants']} candidate variants, "
+          f"{per_ticker['files']} per-ticker files "
+          f"({per_ticker['bytes'] / 1e6:.0f} MB) -> {out_dir}")
     return meta
 
 

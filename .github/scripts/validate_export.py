@@ -12,6 +12,13 @@ no exception anywhere. EDGAR would still supply every fundamental, so
 therefore cannot detect it; counting *price-derived values* can, which is what
 PRICE_* below do.
 
+The per-ticker JSON under `tickers/` fails in a third way: 1,218 files of which
+any one could be missing, truncated or misaligned while the population total
+looks healthy. All of them are opened and checked against the parquet slice they
+were cut from -- 1.9 s for 1,218 files, against a ~40 min run. A sampled version
+of this check was written first and rejected: it passed eight deliberate
+corruptions because none of them landed on a sampled ticker.
+
 The registry files (`registry.json`, `concept_candidates.json`) fail differently
 again: they describe `config.py`, not the filings, so their sizes do not drift
 and a floor tells you nothing. What matters is that they still answer the
@@ -59,8 +66,9 @@ ROW_FLOOR = 0.90          # of the measured baseline
 TICKER_FLOOR = 0.95       # of the universe requested by this run
 PRICE_FLOOR = 0.95        # of the tickers this run produced data for
 MAX_EXPORT_AGE_HOURS = 6  # the run that wrote it must be the one that just ran
-EXPECTED_SCHEMA = 3
+EXPECTED_SCHEMA = 4
 EXPECTED_REGISTRY_SCHEMA = 1
+EXPECTED_TICKER_SCHEMA = 1
 
 FRAMES = ["metrics_long.parquet", "valuation_history.parquet", "facts_growth.parquet",
           "facts_full.parquet", "current_snapshot.parquet", "universe.parquet"]
@@ -71,6 +79,18 @@ FRAMES = ["metrics_long.parquet", "valuation_history.parquet", "facts_growth.par
 # every universe ticker resolvable to a profile, every profile's visibility row
 # complete, every ticker pointing at a candidate variant that exists.
 REGISTRY_FILES = ["registry.json", "concept_candidates.json"]
+
+# The per-ticker JSON. Unlike the registry, these DO grow with new quarters, so a
+# floor is the right instrument -- but one floor on the population, not 1,218 of
+# them, because a per-file table is not something anyone reads. The floor that
+# matters per file is a different question: a file can be present and still be
+# empty or truncated, which the population total would not notice, so the
+# smallest file is checked against a hard minimum rather than a fraction.
+TICKER_SUBDIR = "tickers"
+TICKER_FRAMES = ["metrics_long", "valuation_history", "facts_growth",
+                 "current_snapshot", "facts_full"]
+TICKER_BYTES_BASELINE = 140_501_901   # measured 2026-08-22, 609 tickers
+MIN_TICKER_FILE_BYTES = 4_096         # half the smallest measured file (8,249 B)
 
 
 class Checks:
@@ -224,6 +244,87 @@ def main(out_dir: str, max_age_hours: float = MAX_EXPORT_AGE_HOURS) -> int:
         c.add("candidates cover the universe",
               universe_tickers <= set(index),
               f"{len(universe_tickers - set(index))} missing", "0 missing")
+
+    # --- the per-ticker JSON ----------------------------------------------------
+    ticker_dir = os.path.join(out_dir, TICKER_SUBDIR)
+    universe_tickers = sorted(frames["universe.parquet"]["ticker"])
+    if not os.path.isdir(ticker_dir):
+        c.add(f"{TICKER_SUBDIR}/ present", False, "missing", "directory exists")
+    else:
+        on_disk = set(os.listdir(ticker_dir))
+        expected = {f"{t}{suffix}" for t in universe_tickers
+                    for suffix in (".json", ".facts.json")}
+        c.add("per-ticker files", on_disk == expected,
+              f"{len(on_disk):,} files", f"exactly {len(expected):,} (2 x universe)")
+        missing = sorted(expected - on_disk)[:3]
+        c.add("no ticker missing a file", not (expected - on_disk),
+              f"{len(expected - on_disk)} missing {missing}", "0 missing")
+        c.add("no file for a ticker outside the universe", not (on_disk - expected),
+              f"{len(on_disk - expected)} strays", "0 strays")
+
+        sizes = {f: os.path.getsize(os.path.join(ticker_dir, f)) for f in on_disk & expected}
+        total = sum(sizes.values())
+        floor = int(TICKER_BYTES_BASELINE * ROW_FLOOR)
+        c.add("per-ticker bytes", total >= floor, f"{total:,}",
+              f">= {floor:,} ({ROW_FLOOR:.0%} of {TICKER_BYTES_BASELINE:,})")
+        # A present-but-empty file is the failure a population total hides: 1,218
+        # files each 200 bytes would still be 1,218 files.
+        runts = sorted(f for f, n in sizes.items() if n < MIN_TICKER_FILE_BYTES)
+        c.add("no truncated per-ticker file", not runts,
+              f"{len(runts)} under {MIN_TICKER_FILE_BYTES:,} B {runts[:3]}",
+              f"all >= {MIN_TICKER_FILE_BYTES:,} B")
+
+        # Every file, not a sample. Sampling was tried and rejected: it passed
+        # eight deliberate corruptions because none of them happened to land on a
+        # sampled ticker. Parsing all 1,218 files costs 1.9 s against a ~40 min
+        # pipeline run, which is not a trade worth making.
+        expected_rows = {name: frames[f"{name}.parquet"]["ticker"].value_counts().to_dict()
+                         for name in TICKER_FRAMES}
+        expected_cols = {name: [c for c in frames[f"{name}.parquet"].columns if c != "ticker"]
+                         for name in TICKER_FRAMES}
+        problems, rows_seen = [], 0
+        for ticker in universe_tickers:
+            try:
+                payload = {}
+                for suffix in (".json", ".facts.json"):
+                    with open(os.path.join(ticker_dir, ticker + suffix), encoding="utf-8") as fh:
+                        doc = json.load(fh)
+                    if doc.get("schema") != EXPECTED_TICKER_SCHEMA:
+                        problems.append(f"{ticker}{suffix}: schema {doc.get('schema')}")
+                    if doc.get("ticker") != ticker:
+                        problems.append(f"{ticker}{suffix}: ticker {doc.get('ticker')!r}")
+                    payload.update(doc.get("frames", {}))
+                for name in TICKER_FRAMES:
+                    block = payload.get(name)
+                    if not block or not block.get("columns"):
+                        problems.append(f"{ticker}: no {name}")
+                        continue
+                    # Column-major: every column must be the same length, and that
+                    # length must be the parquet slice's row count. A misaligned
+                    # export shows up here and nowhere else.
+                    want = expected_rows[name].get(ticker, 0)
+                    lengths = {len(col) for col in block["data"]}
+                    if lengths != {want}:
+                        problems.append(f"{ticker}/{name}: rows {sorted(lengths)} vs {want}")
+                    else:
+                        rows_seen += want
+                    if block["columns"] != expected_cols[name]:
+                        problems.append(f"{ticker}/{name}: columns {block['columns']}")
+            except Exception as exc:                   # noqa: BLE001 -- any failure disqualifies
+                problems.append(f"{ticker}: {type(exc).__name__}")
+        c.add(f"every per-ticker file ({len(universe_tickers) * 2:,})", not problems,
+              f"{len(problems)} problems {problems[:2]}",
+              "parses, right schema and ticker, all 5 frames, rows and columns match parquet")
+
+        # The rows the per-ticker export does not carry must all belong to tickers
+        # the universe does not list -- otherwise a ticker is silently short.
+        universe_set = set(universe_tickers)
+        orphan = sum(int((~frames[f"{name}.parquet"]["ticker"].isin(universe_set)).sum())
+                     for name in TICKER_FRAMES)
+        parquet_rows = sum(len(frames[f"{name}.parquet"]) for name in TICKER_FRAMES)
+        c.add("per-ticker rows account for the parquet",
+              not problems and rows_seen + orphan == parquet_rows,
+              f"{rows_seen:,} + {orphan} outside the universe", f"== {parquet_rows:,}")
 
     val = frames["valuation_history.parquet"]
     nonnull = int(val["value"].notna().sum())
