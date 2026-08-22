@@ -6,6 +6,64 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-08-22 — The config registry is exported as JSON, and profile beats ticker by 6.6x
+
+`streamlit_inventory.md` §1.5 called the missing registry export "the single biggest gap in the
+current export": `app.py` imports `config.py` and calls into it at runtime for every picker label,
+axis label, reference line, percent flag and the whole encyclopedia. A browser cannot. The export
+now writes **`registry.json`** (83.4 kB raw, **11.7 kB gzipped**) and **`concept_candidates.json`**
+(242.9 kB raw, **7.8 kB gzipped**) alongside the six parquet frames, from `export_for_app`, before
+`meta.json`. Registry schema **1**; export schema **2 → 3**, because `meta.json` gained a
+`registry` block and the directory gained two files. Full derivation in
+`registry_export_report.md`.
+
+**The size question the brief posed had a measurable answer, and it went the cheap way twice.**
+Exporting `get_plottable_metrics(chart, ticker)` for 609 tickers × 3 charts inlines to **274 kB**;
+exporting `profile_visibility()` plus each ticker's profile is **42 kB — 6.6× smaller**. The
+substitution is only legitimate if the two agree, so it was checked for **all 1,827 (chart,
+ticker) pairs**: same ids, same order, same labels, **1,827/1,827 identical**. That is not luck.
+`is_hidden` looks the ticker up in `TICKER_PROFILES` and then consults `PROFILE_HIDDEN` and
+`_DERIVED_CONCEPT_CONSUMERS`, both keyed by profile; there is no per-ticker branch in that path.
+The same argument applies to `get_concept_candidates`, where ticker overrides *do* exist — but
+they produce only **39 distinct resolved dicts across 609 tickers**, so storing the variants once
+and indexing into them is **2,837 kB → 243 kB, 11.7×**.
+
+**The id-namespace trap is now impossible to walk into from the export.** Every metric carries
+`id_namespace` and `value_column` explicitly, and the `charts` block carries them per chart. Ten
+registry ids are also `facts_full` concept names — `Revenue`, `NetIncomeLoss`,
+`SharesOutstanding`, `EPS_TTM_CALC`, `FCF_TTM`, `FFO_TTM`, `OperatingIncomeLoss_TTM`, `PPNR`,
+`CoreOperatingEarnings`, `StockholdersEquity` — and **all ten declare `value_column:
+"yoy_growth"`**, so no id in the export both sets `percent` and claims to describe the facts
+frame's `value` column. That is the `10941700000000.00%` bug closed off at the contract rather
+than re-argued in the frontend.
+
+**`METRICS` fields are exported via `dataclasses.asdict`, not a hand-written list**, plus the
+three computed properties. A field added to `Metric` therefore reaches the frontend
+automatically instead of being silently dropped — which is the failure this project keeps
+producing and the reason the registry task made `METRICS` the single source of truth in the first
+place. All 10 fields and 3 properties round-trip, values equal to the live objects, `ref_line`'s
+`int` 0 versus `float` 0.4 distinction intact.
+
+**The validator gained 10 structural checks, not a row floor.** These files describe `config.py`,
+not the filings: their sizes do not drift with new quarters, so a 90% floor would detect nothing.
+What matters is that they still answer the question the app asks — every universe ticker
+resolvable to a profile whose visibility row covers every metric, every candidate index resolving,
+every metric carrying the fields a frontend formats on. **11 deliberate mutations were rejected,
+each by the intended check.**
+
+**Found and recorded, not fixed:** `TICKER_CONCEPT_OVERRIDES["ARE"]` is an empty dict — a no-op
+that resolves to the `reit` baseline. 33 universe tickers have an override entry; only 32 change
+anything.
+
+**`config.py`, `figures.py` and `app.py` are untouched** (empty `git diff`). The six parquet
+frames come back content-identical and byte-identical across two runs of the new code. *Harness
+note: the published `data/app/*.parquet` differ byte-wise from a local rewrite because CI writes
+with `parquet-cpp-arrow 25.0.1` and this machine has pyarrow 24.0.0 — pre-existing, and why
+`DataFrame.equals` is the right comparison there and byte equality is the right one within one
+environment.*
+
+---
+
 ## 2026-08-19 — Empty valuation panels now say why, and the premise needed fixing first
 
 The brief was that V, STZ, ERIE and BKR "render no valuation metrics at all". **They do not.**
