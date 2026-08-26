@@ -1,15 +1,20 @@
 import { useState } from "react";
-import Chart from "./Chart";
-import ValuationChart from "./ValuationChart.tsx";
+import ChartView from "./ChartView.tsx";
+import type { ChartId } from "./contracts.ts";
 import { useData } from "./data/DataContext.ts";
 import { DataProvider } from "./data/DataProvider.tsx";
 
-type ChartType = "valuation" | "fundamentals" | "growth";
+// Every chart is now built from the raw series -- items 4, 5 and 6 -- so the
+// `REBUILT` list and the pre-rendered fallback behind it are both gone. The
+// fallback only ever had figures for AAPL and MSFT; keeping it would have meant
+// one path that works for 609 tickers and one that works for two. `Chart.tsx`
+// and the six `public/*_{chart}.json` files it read are now unreferenced.
+// Which chart ids are actually built is stated once, in ChartView's BUILDERS.
 
 function Workspace() {
   const { registry, universe, error, loading } = useData();
   const [ticker, setTicker] = useState("AAPL");
-  const [type, setType] = useState<ChartType>("valuation");
+  const [type, setType] = useState<ChartId>("valuation");
 
   if (error) return <p role="alert">Could not load the export: {error.message}</p>;
   if (loading || !registry) return <p>Loading the registry…</p>;
@@ -27,7 +32,7 @@ function Workspace() {
             </option>
           ))}
         </select>{" "}
-        <select value={type} onChange={(e) => setType(e.target.value as ChartType)}>
+        <select value={type} onChange={(e) => setType(e.target.value as ChartId)}>
           <option value="valuation">Valuation</option>
           <option value="fundamentals">Fundamentals</option>
           <option value="growth">Growth</option>
@@ -37,22 +42,7 @@ function Workspace() {
         </span>
       </p>
 
-      {type === "valuation" ? (
-        <ValuationChart registry={registry} ticker={ticker} />
-      ) : (
-        // Items 5 and 6. Until those are built these two tabs keep loading the
-        // pre-rendered figure the scaffold shipped -- it only exists for AAPL
-        // and MSFT, which is why it says so rather than failing silently.
-        <>
-          <p>
-            <em>
-              Not rebuilt yet (rebuild list items 5 and 6). Showing the pre-rendered figure, which
-              exists for AAPL and MSFT only.
-            </em>
-          </p>
-          <Chart ticker={ticker} type={type} />
-        </>
-      )}
+      <ChartView registry={registry} ticker={ticker} chart={type} />
     </>
   );
 }

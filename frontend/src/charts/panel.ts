@@ -24,6 +24,8 @@ import type { MeanLine } from "./mean.ts";
 
 /** figures.py:19-24 -- pinned, not left to plotly's cycle. */
 export const PRIMARY_COLOR = "#1f77b4";
+/** The quarterly line on a dual fundamentals panel. */
+export const SECONDARY_COLOR = "#ff7f0e";
 export const PERCENT_TICKFORMAT = ".1~%";
 const REFERENCE_COLOR = "red";
 
@@ -147,19 +149,50 @@ export function panelRefs(idx: number, cols: number) {
   };
 }
 
+/**
+ * One line in a panel. A panel holds a list of these rather than one x/y pair.
+ *
+ * The valuation chart draws one; the fundamentals chart draws a TTM line and,
+ * where a quarterly counterpart exists and has values, a second thinner one
+ * behind it. Item 12's comparison chart is the same shape again -- one entry per
+ * ticker, each with its own colour and name -- and item 13's snapshot marker is
+ * one more entry with `mode: "markers"`. A sibling `drawDualPanel` would have
+ * served this chart and none of those.
+ *
+ * Every style field is explicit because figures.py:19-36 pins them: an automatic
+ * colour cycle would give each subplot a different colour and imply a
+ * distinction that is not there.
+ */
+export interface PanelTrace {
+  /** Legend and hover name. `pe_ratio`, `operating_margin · TTM`, ... */
+  name: string;
+  x: (Date | string)[];
+  /** Nulls kept in place. `connectgaps` decides how they render, not a filter. */
+  y: (number | null)[];
+  mode: string;
+  color: string;
+  /** Omitted from the emitted trace when undefined, as the reference omits it. */
+  width?: number;
+  opacity?: number;
+  connectgaps?: boolean;
+}
+
 export interface PanelSpec {
-  /** Subplot title and trace name: the metric id. */
+  /** Subplot title: the metric id. */
   concept: string;
   /** y-axis title: the metric's registry label. */
   ylabel: string;
   percent: boolean;
   refLine: number | null;
-  x: (Date | string)[];
-  /** Nulls kept in place. `connectgaps` decides how they render, not a filter. */
-  y: (number | null)[];
-  /** Computed over the selected series, never over `y`. Null = no line. */
+  /** Drawn in order. Empty is legal only when `empty` is true. */
+  traces: PanelTrace[];
+  /**
+   * Computed over the selected series, never over any trace's `y`. Null = no
+   * line -- which is also what the fundamentals chart always passes, because
+   * `build_fundamentals` never sets `show_mean`.
+   */
   mean: MeanLine | null;
-  /** True when no row in the window carries a value: the "No Data" panel. */
+  /** True when the panel's own empty rule fired: the "No Data" panel. */
   empty: boolean;
 }
 
@@ -231,11 +264,13 @@ function hline(fig: FigureSpec, idx: number, y: number): void {
 }
 
 /**
- * One panel, drawn into `fig` at position `idx` -- the `plot_metric` equivalent.
+ * One panel, drawn into `fig` at position `idx` -- `plot_metric` and
+ * `plot_metric_dual` in one function, because they differ only in how many
+ * traces they push.
  *
- * Order matches the reference: trace, axes, mean line and its label, then the
- * reference line. It matters for the annotation and shape ordering a
- * comparison against the Python figure sees.
+ * Order matches both references: every trace, then the axes, then the mean line
+ * and its label, then the reference line. It matters, because the comparison
+ * against the Python figure reads annotations and shapes in order.
  */
 export function drawPanel(fig: FigureSpec, idx: number, panel: PanelSpec): void {
   if (panel.empty) {
@@ -243,21 +278,28 @@ export function drawPanel(fig: FigureSpec, idx: number, panel: PanelSpec): void 
     return;
   }
   const refs = panelRefs(idx, fig.cols);
-  fig.data.push({
-    type: "scatter",
-    mode: "lines+markers",
-    name: panel.concept,
-    x: panel.x,
-    y: panel.y,
-    line: { color: PRIMARY_COLOR },
-    // As in the reference. The nulls stay in `y` -- they are never dropped, so
-    // the x positions still exist and the markers still go missing there; what
-    // this decides is only whether the line bridges the hole.
-    connectgaps: true,
-    hovertemplate: "Date: %{x|%d.%m.%Y}<br>Value: %{y}<extra></extra>",
-    xaxis: refs.xaxis,
-    yaxis: refs.yaxis,
-  });
+  for (const series of panel.traces) {
+    // Conditional spreads rather than assignment after the fact: an absent
+    // `opacity` or `connectgaps` must be absent from the emitted trace, exactly
+    // as the reference omits it, and the key order has to stay fixed so a
+    // single-trace panel still serialises byte-for-byte as it did before this
+    // list existed.
+    fig.data.push({
+      type: "scatter",
+      mode: series.mode,
+      name: series.name,
+      x: series.x,
+      y: series.y,
+      line: series.width === undefined
+        ? { color: series.color }
+        : { color: series.color, width: series.width },
+      ...(series.opacity === undefined ? {} : { opacity: series.opacity }),
+      ...(series.connectgaps === undefined ? {} : { connectgaps: series.connectgaps }),
+      hovertemplate: "Date: %{x|%d.%m.%Y}<br>Value: %{y}<extra></extra>",
+      xaxis: refs.xaxis,
+      yaxis: refs.yaxis,
+    });
+  }
   styleAxes(fig, idx, panel.ylabel, panel.percent);
 
   if (panel.mean) {

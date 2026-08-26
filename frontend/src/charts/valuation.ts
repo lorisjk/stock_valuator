@@ -8,7 +8,13 @@
  */
 import type { Frames, Registry } from "../contracts.ts";
 import { meanOver } from "./mean.ts";
-import { createGrid, drawPanel, type FigureSpec, type PanelSpec } from "./panel.ts";
+import {
+  PRIMARY_COLOR,
+  createGrid,
+  drawPanel,
+  type FigureSpec,
+  type PanelSpec,
+} from "./panel.ts";
 import { hasAnyValue, seriesFor, selectMetricIds, windowCutoff } from "./select.ts";
 
 /** figures.py: `_size(width, height, 500 * cols, 400 * rows)`. */
@@ -64,12 +70,18 @@ export function buildValuation(
       ylabel: metric.label,
       percent: metric.percent,
       refLine: metric.ref_line,
-      x: series.x,
-      y: series.y,
-      // `series.y` here and `series.y` in the trace are the same array *today*.
-      // They are passed as two separate arguments so that item 13's snapshot
-      // point and item 14's outlier mask change what is drawn without being
-      // able to reach this. The invariant is structural, not a convention.
+      traces: [{
+        name: id,
+        x: series.x,
+        y: series.y,
+        mode: "lines+markers",
+        color: PRIMARY_COLOR,
+        connectgaps: true,
+      }],
+      // `series.y` here and the array inside the trace are the same *today*.
+      // They are reached through two different fields so that item 13's
+      // snapshot point and item 14's outlier mask change what is drawn without
+      // being able to reach this. The invariant is structural, not a convention.
       mean: empty ? null : meanOver(series.y, metric.harmonic, metric.percent),
       empty,
     };
