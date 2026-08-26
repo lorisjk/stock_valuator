@@ -1121,9 +1121,14 @@ def build_raw_facts(
 
     for idx, concept in enumerate(available):
         r, c = idx // cols + 1, idx % cols + 1
-        series = dict(filtered[
+        series = filtered[
             (filtered["ticker"] == ticker) & (filtered["concept"] == concept)
-        ].sort_values("end"))
+        ].sort_values("end")
+
+        series_values = series.dropna(subset=["end", "value"])
+        if series_values.empty:
+            _annotate_no_data(fig, r, c)
+            continue
 
         fig.add_trace(
             go.Bar(

@@ -2,5 +2,5 @@
  enter update date here
 -->
 **Latest update:**
-Added a slider to comparison chart, also looked into unmasked multiples of CRM. Created a feature which allows to fruthermore exclude outliers that pass code based masking due to actual realness but disturb viewing possibillities.
+Caught a bug in raw facts; annotat_no_data wasnt implemented in the raw facts pipeline. Now fixed, figures without data behave as expected now.
 Now fixed, for more info see: [Repo](https://github.com/lorisjk/stock_valuator.git)
