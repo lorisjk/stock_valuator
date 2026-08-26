@@ -1,120 +1,112 @@
-# Task: The "No Data" Placeholder Lands on the Wrong Panel
+# Task: Metric Pickers — Item 7
 
-**Read first:** `frontend_valuation_chart_report.md` — especially §4.1, which claims this was
-verified — and `figures.py`'s `_annotate_no_data` and `plot_metric` as the reference. Then
-`frontend/src/charts/panel.ts`.
+**Read first:** `frontend_growth_chart_report.md` §5 (five findings that bear directly on this
+item, especially #4 on the Streamlit picker's defaults), `frontend_fundamentals_chart_report.md`,
+`frontend_valuation_chart_report.md` §1 (the design this extends), `streamlit_inventory.md` §2.2 and
+§3.1, and `app.py`'s three `st.multiselect` calls with their surrounding code.
 
-## The observed defect
+## Context
 
-Rendering AEP's valuation chart in a browser:
+All three charts now build from raw series, and each builder already accepts a `concepts` narrowing
+list — the valuation report's §1 established `selectPanels` and the growth report verified across
+six request shapes that a request only ever narrows, never widens.
 
-- **Panel 1 (`pe_ratio`) has data *and* a red "No Data" annotation**, and its x-axis is wrecked:
-  the dates render as dense vertical categorical labels instead of `%Y` ticks at a 2-year interval.
-- **Panel 6 (`dividend_yield`), which genuinely has no data, shows nothing at all** — no
-  annotation, no axes.
+**The machinery is in place; this item is the control that drives it.** That makes it smaller than
+it looks, and it makes the questions mostly product questions rather than technical ones.
 
-So the placeholder treatment — the annotation *and* the axis blanking that goes with it — is being
-applied to the wrong subplot, and the panel that should receive it receives nothing.
+**Explicitly NOT in this task:** no years slider (item 8), no comparison, no snapshot marker, no
+outlier masking, no data tab, no reference views. No changes to `main.py`, `config.py`,
+`figures.py`, `metrics.py`, `parsers/` or the export. No Streamlit changes — including the two
+latent defects named below, which are findings to reproduce-or-not, not bugs to fix in `app.py`.
 
-**This is a recurrence.** The same class of bug hit the Streamlit implementation during the Plotly
-migration, and the Phase 1 report recorded the cause: annotations in a subplot grid must be placed
-either with plotly.py's `row`/`col` arguments, which resolve the reference internally, or with an
-explicitly numbered domain reference. An unnumbered `"x domain"` / `"y domain"` refers to the
-**first** axis regardless of which cell was intended.
+---
 
-**Verify the cause before fixing it.** The above is a strong hypothesis from the symptom pattern
-and the project's history, not an established fact. Establish what the code actually emits.
+## Step 1 — What the Streamlit version actually does
 
-## Part 1 — Why the verification passed
+Read all three `st.multiselect` calls and report each: the label, the options, the default, the key,
+and what happens when the selection is empty.
 
-Before touching the rendering code: `frontend_valuation_chart_report.md` §4.1 states that subplot
-titles, "No Data" counts, **all 196 axis objects** and every shape were compared against
-`build_valuation` and found identical. That check ran and reported success while this defect was
-present.
+**Two of them contain a defect the growth report found**, and the brief for this item has to decide
+what to do about it rather than porting it blindly:
 
-**Determine exactly what the comparison did not cover**, and report it. Candidates to check rather
-than assume:
+```python
+default = [i for i in ids if i in ("Revenueyoy_growth")]   # app.py:916
+default = [i for i in ids if i in ("pe_ratio")]            # app.py:928
+```
 
-- whether annotations were compared at all, or only counted;
-- whether `xref` / `yref` were among the compared fields;
-- whether the axis comparison covered the properties the blanking modifies (`visible`, `showgrid`,
-  `zeroline`, `type`, `dtick`, `tickformat`) or only domain and anchor;
-- whether plotly.py's own output was read correctly — its annotations carry resolved references,
-  and a comparison that normalised them away would match anything.
+Those are **strings, not tuples**, so `in` is a substring test. `"Revenue" in "Revenueyoy_growth"`
+is true, and so is `"pe_ratio" in "pe_ratio"` — both happen to select the intended single metric, by
+coincidence rather than by expression. Confirm this reading against the code, then state what the
+*intended* default set is and implement that. A rebuild that ports the coincidence would be
+reproducing a bug in the name of fidelity.
 
-This matters more than the fix. Six further items build on this layer and will be verified the same
-way; a check with a hole in it is worse than no check, because it produces a report that says the
-thing works.
+Also establish: what does the fundamentals picker default to, and is it the same shape?
 
-## Part 2 — Diagnose
+## Step 2 — Design
 
-Emit the figure spec for a ticker with at least one empty panel that is **not** the first one — AEP
-is the observed case — and inspect what is actually produced:
+State each decision.
 
-1. Every annotation: its text, its `xref` and `yref`, its `x` and `y`.
-2. Every axis object the placeholder path modifies.
-3. The same three from `build_valuation` for the identical ticker and data.
+1. **Where the selection state lives.** One selection per chart, or one shared across all three?
+   They have different catalogues and the growth report showed 19 of 24 profiles share a growth
+   catalogue of 7 while valuation has 13 — a shared state would be meaningless across them. If
+   per-chart, say where it sits relative to `ChartView`.
+2. **What happens on ticker change.** The catalogue changes with the profile — a `standard` ticker
+   offers 9 valuation metrics, a `financial` one a different 9. A selection carried across a ticker
+   switch may name metrics the new ticker does not offer. Decide: reset to default, intersect with
+   the new catalogue, or something else. State the reasoning; this is the decision a user notices.
+3. **Empty selection.** All three builders return no figure for an empty request — the growth report
+   tested this on both sides. Decide what the UI shows. Note that this is a different state from
+   "this ticker has no data for any of these metrics", which is the item 17 case.
+4. **Label or id in the control.** The registry carries both, and the panel titles show ids while
+   the y-axes show labels (item 4's finding). Pick one for the picker and justify it — this is the
+   first place a user reads a metric name outside a chart.
+5. **Ordering.** The catalogue order is authoritative for rendering. Decide whether the picker
+   presents metrics in that order too, and whether the selection's own order is preserved anywhere
+   (it is not, in the builders — the growth report verified a reversed request comes back in
+   catalogue order).
 
-State the difference plainly. If the hypothesis above is right, say so with the evidence; if the
-cause is something else, the diagnosis is the finding.
+## Step 3 — Implement
 
-**Also check whether the mean-line annotation has the same problem.** It is placed the same way —
-top-left of its panel, via a domain reference — and the screenshot shows `Ø` labels on panels that
-do have data, so it may be correct, or it may be landing on panel 1 too and merely looking
-plausible there. Panel 1's `Ø (harm.) 17.0` should be checked against what `pe_ratio`'s mean
-actually is.
+Wire the three pickers to the three builders' `concepts` option. Reuse the existing registry load
+and `selectPanels`; do not add a second path for computing what a ticker offers.
 
-## Part 3 — Fix
+Note what the builders already return: the growth report records that they report the full
+`offerable` list even when the request is empty or the frame is missing. Use that rather than
+recomputing the option list separately — a second computation is a second thing that can drift from
+`is_hidden`.
 
-Correct the reference so each panel's furniture lands in its own cell. Two constraints:
+**The narrowing rule is the one hard constraint.** A picker must not be able to surface a metric
+that `profile_visibility` hides for the ticker. The builders enforce this already; the picker must
+not offer it in the first place, so a user never sees an option that would silently do nothing.
 
-1. **The fix belongs in the shared layer**, `charts/panel.ts` — `drawPanel` and `createGrid` are
-   what items 5, 6, 12, 13 and 14 reuse. A fix applied at the valuation chart's call site would
-   leave the same bug waiting for the next chart.
-2. **Axis numbering in plotly is not uniform**: the first subplot's axes are `xaxis`/`yaxis` and
-   are referenced as `"x"`/`"y"`, while subsequent ones are `xaxis2`, `xaxis3` and `"x2"`, `"x3"`.
-   Whatever numbering helper exists must handle cell 1 correctly — that asymmetry is a likely place
-   for an off-by-one to hide, and a fix that works for panels 2–13 and breaks panel 1 would look
-   correct in every screenshot that has data in the first cell.
+## Step 4 — Verify
 
-Do not restructure beyond what the fix requires.
-
-## Part 4 — Close the verification hole
-
-Extend the comparison so this defect could not pass again. At minimum:
-
-- **Annotations compared field by field** against plotly.py's — text, resolved reference, position —
-  not merely counted.
-- **The placeholder's axis modifications** compared per axis, not just domain and anchor.
-- **A ticker whose empty panel is not the first** must be in the verification set. The original set
-  had empty panels but the check apparently could not tell which panel they were on; a set that
-  cannot distinguish panel 1 from panel 6 is the hole.
-
-Then re-run the full comparison from the original report and confirm the other claims still hold —
-panel sets, mean values and labels, the grid, percent axes.
-
-## Part 5 — Verify
-
-1. **AEP renders correctly**: `pe_ratio` draws its data with a proper `%Y` x-axis and no
-   placeholder; `dividend_yield` shows the red "No Data" with its own ticks and grid switched off.
-2. **The spec matches `build_valuation`** for AEP, annotation by annotation and axis by axis.
-3. **At least three more tickers** whose empty panels sit in different cells — including one where
-   the empty panel *is* the first — produce matching specs.
-4. **The tickers from the original report still match**, so the fix did not trade one defect for
-   another.
-5. **`npx tsc -b`, `npx eslint .` and `npx vite build`** all clean.
-6. **Nothing outside `frontend/` changed** — confirm by diff.
-7. State what was verified from the spec and what, if anything, was confirmed in a browser.
+1. **Option lists match `get_plottable_metrics`** for every (chart, ticker) pair in a set spanning
+   all 24 profiles — same ids, same order. The registry export verified the underlying equivalence
+   over all 1,827 pairs; this verifies the UI path reaches the same answer.
+2. **A hidden metric cannot be selected**, tested directly: attempt to drive a selection containing
+   an id hidden for the ticker's profile and confirm the rendered panel set is unchanged.
+3. **Narrowing produces the right grid.** For several tickers, a subset selection must produce the
+   panel set and the grid dimensions `_make_grid` gives for that count — 1, 2, 4, 7 and the full
+   catalogue at minimum. The figures must match `build_*` called with the same `concepts` list.
+4. **Empty selection** behaves as Step 2.3 designed, on all three charts.
+5. **Ticker switch** behaves as Step 2.2 designed, including the case where the outgoing selection
+   names a metric the incoming ticker does not offer.
+6. **Items 4, 5 and 6 unchanged** — the full-catalogue path must produce byte-identical specs to the
+   current baseline for all three charts.
+7. `npx tsc -b`, `npx eslint .`, `npx vite build` clean. Nothing outside `frontend/` changed.
 
 ## Output
 
-One file, `no_data_placeholder_fix_report.md`:
+One file, `frontend_pickers_report.md`:
 
-1. **Part 1: why the original verification passed** — the specific gap, named.
-2. The diagnosis, with the actual emitted references against plotly.py's.
-3. Whether the mean-line annotation shares the defect.
-4. What was fixed and where, and why it belongs in the shared layer.
-5. The extended checks, and the re-run of the original comparison.
-6. The Part 5 results.
+1. The Step 1 reading of the Streamlit defaults, including the substring defect and what the
+   intended defaults are.
+2. The Step 2 decisions with reasoning — especially the ticker-switch behaviour.
+3. What was implemented, by file.
+4. The Step 4 results, with the option-list comparison across profiles.
+5. Confirmation that the three charts' full-catalogue output is unchanged.
+6. Anything the reference or the existing frontend turned out to be that items 8, 12, 13, 14 and 17
+   should know.
 
 No scratch files left behind.
