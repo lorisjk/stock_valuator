@@ -1,19 +1,20 @@
 {
   "schema": 2,
-  "run_start": "2026-08-25T04:06:07",
-  "exported_at": "2026-08-25T04:23:01",
+  "run_start": "2026-08-26T04:08:19",
+  "exported_at": "2026-08-26T04:22:39",
   "period": "quarterly",
   "tickers_requested": 610,
-  "tickers_with_data": 609,
+  "tickers_with_data": 608,
   "tickers_without_data": [
-    "EA"
+    "EA",
+    "EQR"
   ],
   "rows": {
-    "metrics_long.parquet": 571182,
-    "valuation_history.parquet": 352678,
-    "facts_growth.parquet": 242208,
-    "facts_full.parquet": 1153024,
-    "current_snapshot.parquet": 25366,
-    "universe.parquet": 609
+    "metrics_long.parquet": 571145,
+    "valuation_history.parquet": 352592,
+    "facts_growth.parquet": 242163,
+    "facts_full.parquet": 1152817,
+    "current_snapshot.parquet": 25229,
+    "universe.parquet": 608
   }
 }
