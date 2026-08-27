@@ -18,15 +18,30 @@
  * the Streamlit app caches frames and never figures.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { Frames, Registry } from "../contracts.ts";
+import type { ConceptCandidates, Frame, Frames, Meta, Registry } from "../contracts.ts";
 import { DataContext, type DataContextValue, type UniverseEntry } from "./DataContext.ts";
-import { fetchRegistry, fetchTickerFrames } from "./load.ts";
+import {
+  fetchCandidates,
+  fetchMeta,
+  fetchNotice,
+  fetchRegistry,
+  fetchTickerFacts,
+  fetchTickerFrames,
+} from "./load.ts";
 
 export function DataProvider({ children }: { children: ReactNode }) {
   const [registry, setRegistry] = useState<Registry | null>(null);
   const [universe, setUniverse] = useState<UniverseEntry[]>([]);
+  const [meta, setMeta] = useState<Meta | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const cache = useRef(new Map<string, Promise<Frames>>());
+  // Same policy as `cache`, one per file. `facts_full` is the bigger of the two
+  // (21 kB gzipped against 14 kB) and no chart tab needs it, so it is kept in
+  // its own map rather than merged into a ticker's core frames -- a merged
+  // cache would have to fetch both to answer for either.
+  const factsCache = useRef(new Map<string, Promise<Frame>>());
+  const candidatesCache = useRef<Promise<ConceptCandidates> | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -36,11 +51,19 @@ export function DataProvider({ children }: { children: ReactNode }) {
         if (!r.ok) throw new Error(`/universe.json -- ${r.status} ${r.statusText}`);
         return r.json() as Promise<UniverseEntry[]>;
       }),
+      // Neither of these can fail the app. `meta.json` feeds one caption and the
+      // notice is allowed to be absent, so both resolve to null rather than
+      // rejecting -- putting them in the same Promise.all as the two contracts
+      // and letting them throw would turn a missing caption into a guard screen.
+      fetchMeta().catch(() => null),
+      fetchNotice().catch(() => null),
     ])
-      .then(([loadedRegistry, loadedUniverse]) => {
+      .then(([loadedRegistry, loadedUniverse, loadedMeta, loadedNotice]) => {
         if (!live) return;
         setRegistry(loadedRegistry);
         setUniverse(loadedUniverse);
+        setMeta(loadedMeta);
+        setNotice(loadedNotice);
       })
       .catch((e: unknown) => {
         if (live) setError(e instanceof Error ? e : new Error(String(e)));
@@ -63,9 +86,42 @@ export function DataProvider({ children }: { children: ReactNode }) {
     return request;
   }, []);
 
+  const factsFor = useCallback((ticker: string) => {
+    const pending = factsCache.current.get(ticker);
+    if (pending) return pending;
+    const request = fetchTickerFacts(ticker).catch((e: unknown) => {
+      factsCache.current.delete(ticker);
+      throw e;
+    });
+    factsCache.current.set(ticker, request);
+    return request;
+  }, []);
+
+  // Ticker-independent, so one slot rather than a map: it is the same 7.8 kB
+  // for every ticker and it changes only when config.py does.
+  const candidatesFile = useCallback(() => {
+    if (candidatesCache.current) return candidatesCache.current;
+    const request = fetchCandidates().catch((e: unknown) => {
+      candidatesCache.current = null;
+      throw e;
+    });
+    candidatesCache.current = request;
+    return request;
+  }, []);
+
   const value = useMemo<DataContextValue>(
-    () => ({ registry, universe, error, loading: !registry && !error, framesFor }),
-    [registry, universe, error, framesFor],
+    () => ({
+      registry,
+      meta,
+      notice,
+      universe,
+      error,
+      loading: !registry && !error,
+      framesFor,
+      factsFor,
+      candidatesFile,
+    }),
+    [registry, meta, notice, universe, error, framesFor, factsFor, candidatesFile],
   );
   return <DataContext value={value}>{children}</DataContext>;
 }

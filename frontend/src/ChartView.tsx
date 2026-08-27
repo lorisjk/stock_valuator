@@ -3,12 +3,15 @@
  * the chart id, because all three charts need the identical shell -- the only
  * thing that varies between them is which builder runs.
  *
- * The figure is rebuilt whenever the ticker, the chart or the selection changes
- * -- `useMemo` over exactly those. That is not a performance choice: a selection
- * change alters the panel count, `makeGrid` derives rows and columns from it,
- * and a finished figure cannot be re-tiled (inventory 4.1). The only genuinely
+ * The figure is rebuilt whenever the ticker, the chart, the selection or the
+ * window changes -- `useMemo` over exactly those. That is not a performance
+ * choice. A selection change alters the panel count directly; a *window* change
+ * alters it indirectly but just as really, because `_window_frame` runs before
+ * the empty rule and a panel with no value left in the window becomes a blank
+ * one. Either way `makeGrid` derives rows and columns from the count, and a
+ * finished figure cannot be re-tiled (inventory 4.1). The only genuinely
  * client-side control in the whole app is the comparison chart's legend, and
- * this is not it.
+ * neither of these is it.
  *
  * **The selection is stored raw and resolved at render**, never migrated in
  * place. State holds what the user last ticked for each chart; what the builder
@@ -25,9 +28,10 @@
 import { useMemo, useState } from "react";
 import Plot from "react-plotly.js";
 import MetricPicker from "./MetricPicker.tsx";
+import WindowSlider from "./WindowSlider.tsx";
 import type { ChartId, Frames, Registry } from "./contracts.ts";
 import { useTickerFrames } from "./data/DataContext.ts";
-import { defaultSelection, migrateSelection } from "./charts/defaults.ts";
+import { DEFAULT_YEARS, defaultSelection, migrateSelection } from "./charts/defaults.ts";
 import { buildFundamentals } from "./charts/fundamentals.ts";
 import { buildGrowth } from "./charts/growth.ts";
 import { buildValuation } from "./charts/valuation.ts";
@@ -84,6 +88,15 @@ export default function ChartView({
   // is what selects the default. Not the same as `[]`, which is a deliberately
   // cleared picker and is honoured as one -- see migrateSelection.
   const [picked, setPicked] = useState<Partial<Record<ChartId, readonly string[]>>>({});
+  // The window, also per chart, because the three builders default it
+  // differently -- 5 for valuation against 15 for the other two -- and a single
+  // shared value cannot honour three different defaults at once. Streamlit does
+  // the same thing with three separate keys (`fundamentals_years`,
+  // `growth_years`, `valuation_years`). Unlike the selection this needs no
+  // migration: the range is 1-15 for every chart, ticker and profile, so a
+  // value the user sets is simply carried.
+  const [windowYears, setWindowYears] = useState<Partial<Record<ChartId, number>>>({});
+  const years = windowYears[chart] ?? DEFAULT_YEARS[chart];
 
   // The option list, from `selectMetricIds(registry, chart, ticker, null)` --
   // the same call every builder makes for its own narrowing, not a second
@@ -108,8 +121,11 @@ export default function ChartView({
 
   const build = BUILDERS[chart];
   const result = useMemo(
-    () => (frames && build ? build(registry, frames, ticker, { requested: selected }) : null),
-    [build, registry, frames, ticker, selected],
+    () =>
+      frames && build
+        ? build(registry, frames, ticker, { requested: selected, years })
+        : null,
+    [build, registry, frames, ticker, selected, years],
   );
 
   if (!build) return <p role="status">The {LABELS[chart]} chart is not rebuilt yet.</p>;
@@ -132,6 +148,12 @@ export default function ChartView({
         selected={selected}
         byId={byId}
         onChange={(next) => setPicked({ ...picked, [chart]: next })}
+      />
+
+      <WindowSlider
+        chart={chart}
+        years={years}
+        onChange={(next) => setWindowYears({ ...windowYears, [chart]: next })}
       />
 
       {!result ? (

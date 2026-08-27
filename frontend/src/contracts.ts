@@ -13,6 +13,25 @@
 
 export const REGISTRY_SCHEMA = 1;
 export const TICKER_SCHEMA = 1;
+/** `concept_candidates.json`, the registry export's second file. */
+export const CANDIDATES_SCHEMA = 1;
+
+/**
+ * `meta.json`'s schema, as `main.py`'s APP_EXPORT_SCHEMA currently writes it.
+ *
+ * **Not enforced the way the other two are**, and the difference is deliberate.
+ * The registry and the per-ticker files are *interpreted* -- a version this
+ * build cannot read means it cannot draw anything, so a mismatch is fatal.
+ * `meta.json` feeds one caption. A mismatch there is worth saying out loud and
+ * is not worth refusing to start over, so `Shell` shows the freshness block it
+ * can and flags the version rather than replacing the app with an error.
+ *
+ * That is not hypothetical: the export currently in `data/app/` and
+ * `frontend/public/` declares **schema 2**, predates the registry and
+ * per-ticker blocks `main.py` now writes into it, and is therefore stale
+ * against the very `registry.json` sitting beside it. See the report.
+ */
+export const META_SCHEMA = 4;
 
 /* -------------------------------------------------------------- registry.json */
 
@@ -60,13 +79,44 @@ export interface Registry {
   notes: { growth_mechanism: string; valuation_mechanism: string };
 }
 
+/* -------------------------------------------------------------- meta.json */
+
+/**
+ * Run provenance, for the sidebar's freshness block (`render_freshness`,
+ * app.py:619). Every field is optional because this file is read leniently --
+ * see META_SCHEMA.
+ */
+export interface Meta {
+  schema?: number;
+  run_start?: string;
+  exported_at?: string;
+  period?: string;
+  tickers_requested?: number;
+  tickers_with_data?: number;
+  tickers_without_data?: string[];
+}
+
 /* ------------------------------------------------------ tickers/{TICKER}.json */
 
-export type FrameName =
+/**
+ * The four frames in `tickers/{TICKER}.json` -- 14 kB gzipped, and what every
+ * chart tab needs.
+ */
+export type CoreFrameName =
   | "metrics_long"
   | "valuation_history"
   | "facts_growth"
   | "current_snapshot";
+
+/**
+ * The one frame in `tickers/{TICKER}.facts.json`, split off because it is 62%
+ * of a ticker's payload on its own (per_ticker_export_report §1.1). No chart
+ * reads it; the data tab and item 16's Raw Facts tab do, so it is fetched when
+ * one of them is opened and never before.
+ */
+export type FactsFrameName = "facts_full";
+
+export type FrameName = CoreFrameName | FactsFrameName;
 
 /** One frame's slice, column-major, exactly as the exporter writes it. */
 export interface ColumnarFrame {
@@ -85,6 +135,29 @@ export interface TickerFile {
   schema: number;
   ticker: string;
   frames: Partial<Record<FrameName, ColumnarFrame>>;
+}
+
+/* ------------------------------------------------- concept_candidates.json */
+
+/**
+ * `get_concept_candidates(ticker)`, deduplicated.
+ *
+ * 577 of 609 tickers resolve to their profile's baseline verbatim, so the
+ * resolved dicts collapse to **39 variants** and each ticker points at one by
+ * index -- 11.7x smaller than inlining, and lossless
+ * (registry_export_report §2.2).
+ *
+ * Only the **keys** matter here. They are the concept names the pipeline asked
+ * EDGAR for, which is exactly what makes everything else in `facts_full`
+ * derived; the tag lists and `mode`/`point_in_time` flags inside each entry
+ * describe the extraction and nothing in the browser reads them.
+ */
+export interface ConceptCandidates {
+  schema: number;
+  /** One resolved `{concept: spec}` dict per variant. */
+  variants: Record<string, unknown>[];
+  /** `{ticker: index into variants}`, covering every universe ticker. */
+  ticker_variant: Record<string, number>;
 }
 
 /* ------------------------------------------------------------ reconstruction */

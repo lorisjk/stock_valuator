@@ -72,24 +72,67 @@ export interface Axis {
   domain: [number, number];
   dtick?: string;
   tickformat?: string | null;
-  title?: { text: string; font: { size: number } };
+
+  title?: {
+    text: string;
+    font: {
+      size: number;
+      color?: string;
+    };
+  };
+
   showticklabels?: boolean;
   showgrid?: boolean;
   zeroline?: boolean;
+
+  color?: string;
+  gridcolor?: string;
+  zerolinecolor?: string;
 }
 
 export interface FigureSpec {
   data: Trace[];
+
   layout: {
-    title: { text: string };
+    title: {
+      text: string;
+      font?: {
+        color?: string;
+        size?: number;
+        family?: string;
+      };
+    };
+
     height: number;
+
     hovermode: string;
-    legend: { font: { size: number } };
+
+    font?: {
+      color?: string;
+      size?: number;
+      family?: string;
+    };
+
+    legend: {
+      font: {
+        size: number;
+        color?: string;
+        family?: string;
+      };
+    };
+
     annotations: Annotation[];
+
     shapes: Shape[];
-    /** `xaxis`, `xaxis2`, ... and `yaxis`, `yaxis2`, ... */
+
+    paper_bgcolor?: string;
+    plot_bgcolor?: string;
+
+    template?: unknown;
+
     [axis: string]: unknown;
   };
+
   rows: number;
   cols: number;
 }
@@ -103,14 +146,43 @@ export interface FigureSpec {
  * title "the metric's label", and the reference implementation disagrees with
  * it. See the report.
  */
-export function createGrid(titles: string[], perRowHeight: number, title: string): FigureSpec {
+export function createGrid(
+  titles: string[],
+  perRowHeight: number,
+  title: string
+): FigureSpec {
   const n = titles.length;
   const { rows, cols } = makeGrid(n);
+
   const layout: FigureSpec["layout"] = {
-    title: { text: title },
+    title: {
+      text: title,
+      font: {
+        color: "#f3f4f6",
+      },
+    },
+
     height: perRowHeight * rows,
+
     hovermode: "x unified",
-    legend: { font: { size: 9 } },
+
+    // App background
+    paper_bgcolor: "#16171d",
+    plot_bgcolor: "#16171d",
+
+    // Default text color
+    font: {
+      color: "#9ca3af",
+      family: "system-ui, 'Segoe UI', Roboto, sans-serif",
+    },
+
+    legend: {
+      font: {
+        size: 9,
+        color: "#9ca3af",
+      },
+    },
+
     annotations: [],
     shapes: [],
   };
@@ -120,8 +192,31 @@ export function createGrid(titles: string[], perRowHeight: number, title: string
     const k = axisNumber(row, col, cols);
     const suffix = axisSuffix(k);
     const domain = cellDomain(row, col, rows, cols);
-    layout[`xaxis${suffix}`] = { anchor: `y${suffix}`, domain: domain.x } satisfies Axis;
-    layout[`yaxis${suffix}`] = { anchor: `x${suffix}`, domain: domain.y } satisfies Axis;
+
+    layout[`xaxis${suffix}`] = {
+      anchor: `y${suffix}`,
+      domain: domain.x,
+
+      // Axis text / tick labels
+      color: "#9ca3af",
+
+      // Grid + zero line
+      gridcolor: "#2e303a",
+      zerolinecolor: "#2e303a",
+    } satisfies Axis;
+
+    layout[`yaxis${suffix}`] = {
+      anchor: `x${suffix}`,
+      domain: domain.y,
+
+      // Axis text / tick labels
+      color: "#9ca3af",
+
+      // Grid + zero line
+      gridcolor: "#2e303a",
+      zerolinecolor: "#2e303a",
+    } satisfies Axis;
+
     layout.annotations.push({
       text: titles[idx],
       x: (domain.x[0] + domain.x[1]) / 2,
@@ -131,9 +226,15 @@ export function createGrid(titles: string[], perRowHeight: number, title: string
       xanchor: "center",
       yanchor: "bottom",
       showarrow: false,
-      font: { size: 16 },
+
+      // Panel title
+      font: {
+        size: 16,
+        color: "#f3f4f6",
+      },
     });
   }
+
   return { data: [], layout, rows, cols };
 }
 
@@ -239,12 +340,30 @@ function annotateNoData(fig: FigureSpec, idx: number): void {
 }
 
 /** figures.py `_style_axes`: two-year x ticks, y title, percent tickformat. */
-function styleAxes(fig: FigureSpec, idx: number, ylabel: string, percent: boolean): void {
+function styleAxes(
+  fig: FigureSpec,
+  idx: number,
+  ylabel: string,
+  percent: boolean
+): void {
   const refs = panelRefs(idx, fig.cols);
-  Object.assign(fig.layout[refs.xKey] as Axis, { dtick: "M24", tickformat: "%Y" });
+
+  Object.assign(fig.layout[refs.xKey] as Axis, {
+    dtick: "M24",
+    tickformat: "%Y",
+    color: "#9ca3af",
+  });
+
   Object.assign(fig.layout[refs.yKey] as Axis, {
-    title: { text: ylabel, font: { size: 11 } },
+    title: {
+      text: ylabel,
+      font: {
+        size: 11,
+        color: "#9ca3af",
+      },
+    },
     tickformat: percent ? PERCENT_TICKFORMAT : null,
+    color: "#9ca3af",
   });
 }
 

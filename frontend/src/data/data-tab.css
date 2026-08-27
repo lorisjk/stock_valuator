@@ -1,0 +1,197 @@
+/*
+ * The data tab's tables. Palette variables come from `.app` in shell.css --
+ * this file defines none of its own, so the two cannot drift.
+ */
+
+.data-tab > p {
+  margin: 0.6rem 0;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1.5rem;
+  margin: 1rem 0 0.4rem;
+}
+
+.control {
+  cursor: pointer;
+}
+
+.control--radio {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.control--radio legend {
+  float: left;
+  color: var(--shell-strong);
+  font-weight: 600;
+  padding: 0 0.6rem 0 0;
+}
+
+.control--radio label {
+  cursor: pointer;
+}
+
+.section {
+  margin: 2rem 0;
+}
+
+.section h2 {
+  color: var(--shell-strong);
+  font-size: 1.15rem;
+  margin: 0 0 0.3rem;
+}
+
+/*
+ * `.notice-inline` is `st.info`'s slot -- the "no rows for this ticker" answers.
+ * A separate class from `.notice` in shell.css on purpose: that one is the
+ * page-level update callout and grew to full width when it stopped being prose
+ * (see frontend_notice_width_fix_report.md). This one wraps a single sentence
+ * and is sized by its own content, so it does not want that treatment.
+ */
+.notice-inline {
+  display: inline-block;
+  border: 1px solid var(--shell-line);
+  border-left: 3px solid var(--shell-warn);
+  border-radius: 4px;
+  background: var(--shell-panel);
+  padding: 0.5rem 0.8rem;
+  margin: 0.4rem 0;
+}
+
+/*
+ * The horizontal scroll lives here rather than on `.content`, which carries
+ * `min-width: 0` precisely so a wide child scrolls inside the grid cell instead
+ * of pushing it. A 43-column facts table is that child.
+ *
+ * **`width: max-content` is the sizing fix.** As a plain block this box was
+ * always 100% of `.content`, whatever it held: measured at a 1600px viewport,
+ * CRWV's snapshot drew a 339px table inside a 1189px bordered box -- 850px of
+ * empty box, and 887px for WAT -- while the quality-flag tables wasted 249px
+ * each. `max-content` sizes the box to the table and `max-width: 100%` hands
+ * the overflow back to the scroll, so a narrow table gets a narrow box and a
+ * wide one still scrolls.
+ *
+ * `scrollbar-gutter: stable` is load-bearing next to it, not decoration: a
+ * `max-content` box is exactly as wide as its content, so the moment a vertical
+ * scrollbar appears it eats into that width and a *horizontal* scrollbar
+ * appears under a table that fits perfectly well. Reserving the gutter makes it
+ * part of the box `max-content` measures.
+ *
+ * The height cap stays and is raised from 32rem to 36rem. Vertical sizing was
+ * already hugging content -- CRWV's 12-row facts table drew a 458px box -- but
+ * 32rem (576px) sat one pixel under the 577px a 16-row table needs, so the
+ * default view scrolled by a single row for no reason. 36rem clears it, and
+ * still caps the case the cap is for: WAT with "Show all periods" has a 3,257px
+ * facts table, and five uncapped sections would make a ~13,000px page.
+ */
+.table-scroll {
+  width: max-content;
+  max-width: 100%;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  max-height: 36rem;
+  border: 1px solid var(--shell-line);
+  border-radius: 4px;
+  margin: 0.5rem 0;
+}
+
+.data-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.data-table th,
+.data-table td {
+  padding: 0.3rem 0.6rem;
+  border-bottom: 1px solid var(--shell-line);
+  text-align: right;
+}
+
+.data-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--shell-panel);
+  color: var(--shell-strong);
+  font-weight: 600;
+  text-align: right;
+}
+
+/*
+ * The period column is pinned so a wide table stays readable while it scrolls
+ * sideways -- without it the reader loses which quarter a number belongs to
+ * exactly when there are enough columns to need scrolling. `z-index: 3` on the
+ * corner so it wins against the sticky header row it crosses.
+ */
+.data-table__corner {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--shell-panel);
+  color: var(--shell-strong);
+  font-weight: 500;
+  text-align: left;
+}
+
+.data-table thead .data-table__corner {
+  z-index: 3;
+}
+
+.data-table--pairs .data-table__corner {
+  font-weight: 400;
+}
+
+/*
+ * A null is not a zero and must not look like one. The dash is dimmed and
+ * centred where a number would be right-aligned, so the two are distinguishable
+ * at a glance and in a column scan -- which is the whole reason `dropna=False`
+ * keeps these cells in the first place.
+ *
+ * Selected as `.data-table .cell--null` rather than `.cell--null`: the
+ * right-alignment above is `.data-table td`, one class plus one type, which
+ * outranks a bare class. Measured on a real render before this was written --
+ * the bare selector applied its colour and lost its alignment silently, which
+ * is exactly the way a specificity bug hides.
+ *
+ * The colour is `--shell-text` at half strength rather than `--shell-line`.
+ * `--shell-line` is the grid-line colour, and a dash drawn in it against
+ * `--shell-bg` is very nearly invisible -- recessive is the intent, illegible
+ * is not, because the reader has to be able to see that the gap is a gap.
+ */
+.data-table .cell--null {
+  color: var(--shell-text);
+  opacity: 0.5;
+  text-align: center;
+}
+
+/*
+ * +-inf, which JSON cannot carry: the export writes null and names the cell in
+ * a sidecar. Marked distinctly from both a gap and a number, because the
+ * pipeline had a value here (a division by zero) and reporting it as missing
+ * would point at the wrong problem.
+ */
+.data-table .cell--inf {
+  color: var(--shell-warn);
+  text-align: center;
+}
+
+.download {
+  background: var(--shell-bg);
+  color: var(--shell-strong);
+  border: 1px solid var(--shell-line);
+  border-radius: 4px;
+  padding: 0.3rem 0.7rem;
+  font: inherit;
+  cursor: pointer;
+}
