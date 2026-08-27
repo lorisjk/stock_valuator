@@ -35,7 +35,17 @@ from config import (
     CACHE_DIR,
     HARMONIC_MEAN_CONCEPTS,
     METRICS,
+    CHART_FUNDAMENTALS,
+    CHART_VALUATION,
     CHART_GROWTH,
+    CHART_SPECS,
+    LANGUAGE_PRIMARY,
+    QUARTERLY_COUNTERPART,
+    GROWTH_MECHANISM_NOTE,
+    VALUATION_MECHANISM_NOTE,
+    profile_visibility,
+    get_plottable_metrics,
+    undocumented_metrics,
 )
 from metrics import (
     add_ttm_concepts,
@@ -71,6 +81,7 @@ from quality import print_data_quality
 import os
 import json
 import time
+import dataclasses
 import numpy as np
 import pandas as pd
 
@@ -1790,7 +1801,9 @@ def write_full_refresh_report(
 APP_EXPORT_SUBDIR = "app"
 APP_EXPORT_DIR = os.path.join(DATA_DIR, APP_EXPORT_SUBDIR)
 # 2: added facts_full.parquet and current_snapshot.parquet for the data tab.
-APP_EXPORT_SCHEMA = 2
+# 3: added registry.json and concept_candidates.json, and meta.registry.
+# 4: added tickers/{TICKER}.json + {TICKER}.facts.json, and meta.per_ticker.
+APP_EXPORT_SCHEMA = 4
 
 
 def _write_parquet_atomic(df: pd.DataFrame, path: str) -> int:
@@ -1805,6 +1818,253 @@ def _write_parquet_atomic(df: pd.DataFrame, path: str) -> int:
     return len(df)
 
 
+# The registry export. `config.py` is imported at runtime by app.py; a browser
+# cannot do that, so everything the charts, pickers and encyclopedia read out of
+# it has to be on disk as JSON. Written by the same run as the frames below, so
+# the registry can never describe a different pipeline than the one that
+# produced them.
+#
+# 1: registry.json + concept_candidates.json.
+REGISTRY_SCHEMA = 1
+REGISTRY_FILE = "registry.json"
+CANDIDATES_FILE = "concept_candidates.json"
+
+
+def _write_json_atomic(payload: dict, path: str, indent: int | None = 1) -> int:
+    """Same convention as _write_parquet_atomic; returns the bytes written.
+
+    sort_keys is deliberately off: the metric list and the chart order are
+    meaningful (panel order follows METRICS order) and dicts here are ordered by
+    construction, so sorting would destroy information rather than normalise it.
+
+    indent=1 for the registry, which people read. indent=None for the per-ticker
+    files, which nothing reads by hand: pretty-printing 1,218 data files costs
+    63 MB of whitespace per run, on a branch that keeps every night's commit.
+    """
+    tmp = path + ".tmp"
+    separators = None if indent else (",", ":")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=indent, separators=separators, ensure_ascii=False)
+    size = os.path.getsize(tmp)
+    os.replace(tmp, path)
+    return size
+
+
+def _metric_entry(metric) -> dict:
+    """One METRICS entry as JSON, every dataclass field plus the three properties.
+
+    dataclasses.asdict rather than a hand-written field list: a field added to
+    Metric then reaches the export automatically, instead of being silently
+    dropped until someone notices a blank label in the frontend. The three
+    computed properties are not fields, so they are added explicitly --
+    id_namespace and value_column especially, because without them a consumer
+    cannot tell the growth entry `Revenue` (a YoY percentage) from the
+    facts-frame column `Revenue` (absolute dollars).
+    """
+    entry = dataclasses.asdict(metric)
+    entry["documented"] = metric.documented
+    entry["id_namespace"] = metric.id_namespace
+    entry["value_column"] = metric.value_column
+    return entry
+
+
+def build_registry(tickers: list[str]) -> dict:
+    """Everything app.py reads out of config.py, for the tickers in the export.
+
+    Visibility is exported per *profile*, not per ticker, because is_hidden
+    consults nothing but the ticker's profile -- PROFILE_HIDDEN and
+    _DERIVED_CONCEPT_CONSUMERS are both keyed by profile and there is no
+    per-ticker branch in that path. The equivalence is asserted for every
+    ticker in the verification rather than taken on trust, and it is what makes
+    this block ~41 kB instead of ~268 kB.
+    """
+    profiles = profile_visibility()
+    return {
+        "schema": REGISTRY_SCHEMA,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "language_primary": LANGUAGE_PRIMARY,
+        "default_profile": DEFAULT_PROFILE,
+        # id_namespace and value_column live on the chart, and each chart's
+        # metric order is panel order -- figures.py renders the catalogue order,
+        # never the caller's selection order.
+        "charts": {
+            chart: {
+                **spec,
+                "metric_ids": [m.id for m in METRICS if m.chart == chart],
+            }
+            for chart, spec in CHART_SPECS.items()
+        },
+        "metrics": [_metric_entry(m) for m in METRICS],
+        "undocumented": undocumented_metrics(),
+        # {profile: {metric_id: visible}} -- straight from is_hidden.
+        "profile_visibility": profiles,
+        "ticker_profile": {t: TICKER_PROFILES.get(t, DEFAULT_PROFILE) for t in tickers},
+        # Derived from the `quarterly` / `harmonic` flags above, but exported
+        # rather than left implicit: the "<id>_quarterly" naming rule is a rule,
+        # and a frontend rebuilding it from a format string is a fifth place it
+        # could go wrong.
+        "quarterly_counterpart": dict(QUARTERLY_COUNTERPART),
+        "harmonic_mean_concepts": sorted(HARMONIC_MEAN_CONCEPTS),
+        "notes": {
+            "growth_mechanism": GROWTH_MECHANISM_NOTE,
+            "valuation_mechanism": VALUATION_MECHANISM_NOTE,
+        },
+    }
+
+
+def build_concept_candidates(tickers: list[str]) -> dict:
+    """get_concept_candidates(ticker) for every ticker, deduplicated.
+
+    The resolved dict is the base candidates plus the profile's overrides plus
+    the ticker's, and each layer replaces a concept's whole entry. Inlining it
+    per ticker is ~2.8 MB for 609 tickers; almost every ticker shares its
+    profile's resolved dict verbatim, so the variants are stored once and each
+    ticker points at one by index. Ticker overrides are preserved exactly --
+    a ticker with one simply gets a variant of its own.
+    """
+    variants: list[dict] = []
+    index: dict[str, int] = {}
+    by_signature: dict[str, int] = {}
+    for ticker in tickers:
+        resolved = get_concept_candidates(ticker)
+        # sort_keys only for the identity test -- the stored variant keeps its
+        # own key order.
+        signature = json.dumps(resolved, sort_keys=True, default=str)
+        position = by_signature.get(signature)
+        if position is None:
+            position = len(variants)
+            by_signature[signature] = position
+            variants.append(resolved)
+        index[ticker] = position
+    return {
+        "schema": REGISTRY_SCHEMA,
+        "variants": variants,
+        "ticker_variant": index,
+    }
+
+
+def export_registry(tickers: list[str], out_dir: str) -> dict:
+    """Write registry.json and concept_candidates.json; return their inventory.
+
+    Called from export_for_app before meta.json, so meta.json's presence still
+    means the whole export -- frames and registry alike -- is on disk.
+    """
+    registry = build_registry(tickers)
+    candidates = build_concept_candidates(tickers)
+    registry_bytes = _write_json_atomic(registry, os.path.join(out_dir, REGISTRY_FILE))
+    candidates_bytes = _write_json_atomic(candidates, os.path.join(out_dir, CANDIDATES_FILE))
+    return {
+        "schema": REGISTRY_SCHEMA,
+        # Named counts rather than an entry in meta's `rows`: "rows" is a
+        # parquet row count and neither of these files has rows.
+        "metrics": len(registry["metrics"]),
+        "profiles": len(registry["profile_visibility"]),
+        "tickers": len(registry["ticker_profile"]),
+        "candidate_variants": len(candidates["variants"]),
+        "bytes": {REGISTRY_FILE: registry_bytes, CANDIDATES_FILE: candidates_bytes},
+    }
+
+
+# The per-ticker export. The six parquet frames are 309 MB as JSON, which is not
+# shippable; one ticker's slice is ~242 kB raw / ~36 kB gzipped, which is a
+# fetch. Two files rather than five: facts_full is 62% of a ticker's payload and
+# only two of the six tabs read it, while the other four frames together are
+# 14 kB gzipped -- splitting those as well would triple the file count to save
+# under 10 kB on a first paint.
+#
+# 1: {TICKER}.json (four chart frames) + {TICKER}.facts.json.
+TICKER_EXPORT_SCHEMA = 1
+TICKER_EXPORT_SUBDIR = "tickers"
+TICKER_CORE_FRAMES = ("metrics_long", "valuation_history", "facts_growth", "current_snapshot")
+TICKER_FACTS_FRAMES = ("facts_full",)
+
+
+def _columnar(sub: pd.DataFrame) -> dict:
+    """One ticker's slice of one frame as {columns, data} -- column-major.
+
+    Column-major rather than a list of {column: value} records because it drops
+    every repeated key name: measured on AAPL, 324 kB against 580 kB. Nesting it
+    further by concept is smaller again raw (236 kB) but *larger* gzipped, and it
+    cannot reproduce the parquet's row order -- valuation_history is stored
+    date-major, so its (ticker, concept) groups are interleaved, and 110 groups
+    across the frames are not even ascending in `end`. Column-major reconstructs
+    the slice row for row without sorting anything.
+
+    Non-finite floats are the one thing JSON cannot carry: `Infinity` is not
+    valid JSON and JSON.parse rejects it. The array gets `null` there -- which is
+    what a chart would draw anyway -- and the true value is recorded beside it,
+    so the round-trip is still exact. 44 values in the whole export.
+    """
+    columns = list(sub.columns)
+    data, nonfinite = [], {}
+    for name in columns:
+        col = sub[name]
+        if col.dtype == "float64":
+            arr = col.to_numpy(dtype=float)
+            data.append([float(v) if ok else None for v, ok in zip(arr, np.isfinite(arr))])
+            spots = {str(i): ("Infinity" if arr[i] > 0 else "-Infinity")
+                     for i in np.nonzero(np.isinf(arr))[0]}
+            if spots:
+                nonfinite[name] = spots
+        else:
+            # NaN in an object column (ttm_source, ffo_gains_source) is absence,
+            # not a value; v != v is the NaN test that also leaves strings alone.
+            data.append([None if v is None or v != v else v for v in col])
+    payload = {"columns": columns, "data": data}
+    if nonfinite:
+        payload["nonfinite"] = nonfinite
+    return payload
+
+
+def _ticker_slices(frame: pd.DataFrame) -> dict:
+    """{ticker: slice without the ticker column}, dates already ISO strings.
+
+    `end` is datetime64[ns] and JSON has no date type. Every value in all five
+    frames is midnight -- these are period ends, not timestamps -- so YYYY-MM-DD
+    is lossless and a third the width of a full ISO timestamp. Formatted once
+    for the whole frame rather than per ticker, which is where the time goes.
+    """
+    prepared = frame.copy()
+    prepared["end"] = prepared["end"].dt.strftime("%Y-%m-%d")
+    return {ticker: group.drop(columns=["ticker"]).reset_index(drop=True)
+            for ticker, group in prepared.groupby("ticker", sort=False)}
+
+
+def export_per_ticker(frames: dict, tickers: list[str], out_dir: str) -> dict:
+    """Write {TICKER}.json and {TICKER}.facts.json for every ticker.
+
+    Deliberately carries no timestamp: a ticker whose data did not change
+    produces a byte-identical file, so the nightly commit stores nothing new for
+    it. meta.json holds the run's time, once.
+    """
+    target = os.path.join(out_dir, TICKER_EXPORT_SUBDIR)
+    os.makedirs(target, exist_ok=True)
+
+    sliced = {name: _ticker_slices(frame) for name, frame in frames.items()}
+    written, total_bytes = 0, 0
+    for ticker in tickers:
+        for suffix, names in ((".json", TICKER_CORE_FRAMES),
+                              (".facts.json", TICKER_FACTS_FRAMES)):
+            payload = {
+                "schema": TICKER_EXPORT_SCHEMA,
+                "ticker": ticker,
+                "frames": {name: _columnar(sliced[name][ticker])
+                           for name in names if ticker in sliced[name]},
+            }
+            total_bytes += _write_json_atomic(
+                payload, os.path.join(target, ticker + suffix), indent=None)
+            written += 1
+
+    return {
+        "schema": TICKER_EXPORT_SCHEMA,
+        "directory": TICKER_EXPORT_SUBDIR,
+        "tickers": len(tickers),
+        "files": written,
+        "bytes": total_bytes,
+        "core_frames": list(TICKER_CORE_FRAMES),
+        "facts_frames": list(TICKER_FACTS_FRAMES),
+    }
+
 def export_for_app(
     metrics_long: pd.DataFrame,
     valuation_history: pd.DataFrame,
@@ -1815,7 +2075,7 @@ def export_for_app(
     out_dir: str = APP_EXPORT_DIR,
 ) -> dict:
     """Write the frontend's inputs: the chart frames, the data-tab frames, the
-    universe, and meta.
+    universe, the config registry, the per-ticker JSON, and meta.
 
     Parquet rather than CSV because `end` must survive as a real datetime --
     build_valuation and build_ticker_comparison compare it against a
@@ -1861,6 +2121,14 @@ def export_for_app(
             universe, os.path.join(out_dir, "universe.parquet")),
     }
 
+    # Before meta.json, so meta.json's presence still means "everything is here".
+    registry = export_registry(produced, out_dir)
+    per_ticker = export_per_ticker(
+        {"metrics_long": metrics_long, "valuation_history": valuation_history,
+         "facts_growth": facts_growth, "current_snapshot": snapshot,
+         "facts_full": facts_out},
+        produced, out_dir)
+
     meta = {
         "schema": APP_EXPORT_SCHEMA,
         "run_start": run_start.isoformat(timespec="seconds"),
@@ -1870,6 +2138,8 @@ def export_for_app(
         "tickers_with_data": len(produced),
         "tickers_without_data": sorted(set(requested_tickers) - set(produced)),
         "rows": rows,
+        "registry": registry,
+        "per_ticker": per_ticker,
     }
     # written last, so its presence means every frame above is already in place
     meta_tmp = os.path.join(out_dir, "meta.json.tmp")
@@ -1878,7 +2148,11 @@ def export_for_app(
     os.replace(meta_tmp, os.path.join(out_dir, "meta.json"))
 
     print(f"[export] {len(produced)} tickers, "
-          f"{sum(rows.values())} rows across {len(rows)} frames -> {out_dir}")
+          f"{sum(rows.values())} rows across {len(rows)} frames, "
+          f"registry {registry['metrics']} metrics / {registry['profiles']} profiles / "
+          f"{registry['candidate_variants']} candidate variants, "
+          f"{per_ticker['files']} per-ticker files "
+          f"({per_ticker['bytes'] / 1e6:.0f} MB) -> {out_dir}")
     return meta
 
 

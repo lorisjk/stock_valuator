@@ -1,7 +1,7 @@
 {
-  "schema": 2,
-  "run_start": "2026-08-26T04:08:19",
-  "exported_at": "2026-08-26T04:22:39",
+  "schema": 4,
+  "run_start": "2026-08-27T14:22:25",
+  "exported_at": "2026-08-27T14:39:42",
   "period": "quarterly",
   "tickers_requested": 610,
   "tickers_with_data": 608,
@@ -10,11 +10,38 @@
     "EQR"
   ],
   "rows": {
-    "metrics_long.parquet": 571145,
-    "valuation_history.parquet": 352592,
-    "facts_growth.parquet": 242163,
-    "facts_full.parquet": 1152817,
-    "current_snapshot.parquet": 25229,
+    "metrics_long.parquet": 571345,
+    "valuation_history.parquet": 352712,
+    "facts_growth.parquet": 242246,
+    "facts_full.parquet": 1153213,
+    "current_snapshot.parquet": 25232,
     "universe.parquet": 608
+  },
+  "registry": {
+    "schema": 1,
+    "metrics": 52,
+    "profiles": 24,
+    "tickers": 608,
+    "candidate_variants": 39,
+    "bytes": {
+      "registry.json": 80615,
+      "concept_candidates.json": 233316
+    }
+  },
+  "per_ticker": {
+    "schema": 1,
+    "directory": "tickers",
+    "tickers": 608,
+    "files": 1216,
+    "bytes": 140546867,
+    "core_frames": [
+      "metrics_long",
+      "valuation_history",
+      "facts_growth",
+      "current_snapshot"
+    ],
+    "facts_frames": [
+      "facts_full"
+    ]
   }
 }

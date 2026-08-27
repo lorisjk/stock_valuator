@@ -11,7 +11,7 @@ debug_tags.py
 # and committing one person's run would put ~120 MB into history per commit.
 cache/
 figures/
-data/
+/data/
 
 # data/app/ is the one exception, and only in CI. The nightly workflow force-pushes
 # it to the `deploy` branch with `git add -f data/app`, which is why that directory
@@ -25,3 +25,7 @@ data/
 #                     data/quarterly_facts.csv data/valuation_history.csv
 # See deployment_and_automation_report.md, section 3.
 full_refresh_report.md
+
+frontend/node_modules/
+frontend/dist/
+frontend/public/tickers/

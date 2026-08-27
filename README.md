@@ -1,16 +1,18 @@
 # stock_valuator
 
-**Fundamental analysis for the S&P 500, computed from filings rather than from a data vendor.**
+README as of 2026-08-26
+
+**10k and 10q cleaner for more than 600 companies**
 
 Pulls XBRL facts from SEC EDGAR and prices from Yahoo Finance, derives 52 metrics across
-501 tickers, and serves them through a Streamlit app.
+more than 600 tickers, and serves them through a Streamlit app (for now).
 
 The question it answers is not *"what is this company worth"* but
 **"is this stock expensive relative to its own history, and is the business behind it
 healthy"**.
 
 ```
-501 tickers  ·  52 metrics  ·  24 business profiles  ·  ~1.0M facts  ·  23 min per full refresh
+> 600 tickers  ·  52 metrics  ·  24 business profiles  ·  ~1.0M facts  ·  12 min per full refresh
 ```
 
 ---
@@ -49,7 +51,7 @@ prices and the corporate-action feed, nothing else.
 pip install -r requirements.txt
 ```
 
-Set your contact details in `config.py` — the SEC rejects requests without a real name and
+Set your contact details in `config.py` , because the SEC rejects requests without a real name and
 email in the User-Agent:
 
 ```python
@@ -68,16 +70,16 @@ Then pick an entry point:
 > fast development loop. The real list is `get_active_tickers()`, which
 > `run_full_refresh()` uses.
 
-A full refresh takes about **23 minutes** for 501 tickers and writes ~1.0M facts. Charts
-are off by default there — they cost about a third of the wall clock and the app reads
+A full refresh takes about **12 minutes** for > 600 tickers and writes ~1.5M facts. Charts
+are off by default there since they cost about a third of the wall clock and the app reads
 parquet, never a chart file.
 
 ---
 
 ## The app
 
-`streamlit run app.py`. It is a **reader**: it loads six parquet files and computes
-nothing. If a figure looks wrong, the bug is upstream.
+`streamlit run app.py`. It is a **reader** only: it loads six parquet files and computes
+nothing. If a figure looks wrong, the bug is for sure upstream.
 
 **Analysis** — per ticker, six tabs:
 
@@ -148,10 +150,10 @@ and their siblings
 </table>
 
 **Eleven fundamentals also carry a quarterly counterpart**, drawn behind the TTM line so a
-smoothed series never hides the quarter that moved it.
+smoothed series dows not hide the quarter that moved it.
 
 **Seven valuation multiples get a five-year mean**, computed as a **harmonic** mean over a
-**calendar** window — averaging price-over-something ratios arithmetically overweights the
+**calendar** window; averaging price-over-something ratios arithmetically overweights the
 expensive periods, and twenty rows are five years only on a series with no holes.
 
 ---
@@ -170,15 +172,15 @@ airline · railroads · homebuilder · consumer_staples · captive_finance
 alt_asset_manager
 ```
 
-A profile does two things: it **hides** metrics that do not apply, and it **swaps in the
-concepts that do**. Banks get PPNR and net interest margin where operating income would be;
+A profile does two things: it **hides** metrics that do not apply, and it swaps in the
+concepts that do. Banks get PPNR and net interest margin where operating income would be;
 insurers get earned premiums, incurred losses and core operating earnings; REITs get FFO.
 
 `is_hidden(ticker, metric)` is the single authority, and the **Profile coverage** page in
 the app shows the whole matrix.
 
 > Earlier versions of this README said the tool was "not suitable for financial companies".
-> That has not been true for a long time — banks, insurers and REITs each have their own
+> That has not been true for a long time; banks, insurers and REITs each have their own
 > metric set.
 
 ---
@@ -308,7 +310,7 @@ with a ready-to-run command for finding the tag.
 
 ## Honesty signals
 
-Where a number rests on an assumption, the assumption is published rather than hidden.
+Tells you wheer a number rests on an assumption, the assumption is published rather than hidden.
 
 | Signal | Says |
 |---|---|

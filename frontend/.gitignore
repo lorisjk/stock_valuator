@@ -1,0 +1,32 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# The root .gitignore now anchors its pattern as `/data/`, so src/data/ -- where
+# the export loaders live -- is no longer swallowed. This re-inclusion is kept as
+# a guard: an unanchored `data/` there matches that name at ANY depth, and the
+# failure is silent, since the whole data layer still builds and runs while being
+# absent from the commit. Re-including the directory has to come before anything
+# inside it can be re-included.
+!/src/data/

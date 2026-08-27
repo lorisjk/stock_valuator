@@ -6,6 +6,129 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-08-22 — Per-ticker JSON: two files, not five, and the comparison axis is not needed
+
+The six parquet frames are 309 MB as JSON. The export now also writes
+**`data/app/tickers/{TICKER}.json`** (the four chart frames) and
+**`{TICKER}.facts.json`** — 1,218 files, **140.5 MB raw, 21.7 MB gzipped**, written by
+`export_for_app` before `meta.json`. Per-ticker schema **1**; export schema **3 → 4**. Full
+derivation in `per_ticker_export_report.md`.
+
+**Two files rather than the five the inventory proposed, on the measurement.** `facts_full` is
+**62%** of a ticker's payload and only two of the six tabs read it; the other four frames together
+are **14.0 kB gzipped**, so splitting them as well would have tripled the file count to save under
+10 kB on a first paint. The split that was kept pays for itself twice: a comparison never needs
+`.facts.json` either, so the core file *is* the comparison payload.
+
+**Column-major, and the alternative that looked better was worse.** Records
+(`[{concept: …, value: …}]`) are 580 kB for AAPL; `{columns, data}` is **324 kB**. Nesting by
+concept is smaller again raw (236 kB) but **larger gzipped** (54.3 kB against 52.3 kB) — and it
+cannot reproduce the parquet's row order, because `valuation_history` is stored date-major and its
+(ticker, concept) groups are interleaved, with 110 groups across the frames not even ascending in
+`end`. Column-major reconstructs the slice row for row without sorting anything.
+
+**JSON cannot carry ±inf, and the data has 44 of them.** `Infinity` is not valid JSON and
+`JSON.parse` rejects it, so the value array gets `null` — what a chart would draw anyway — and the
+true value is recorded in a `nonfinite` sidecar keyed by row index. They come from division by
+zero: `EPS_TTM_CALC` / `EPS_QUARTERLY_CALC` on 7 tickers, `operating_margin_quarterly` /
+`fcf_margin_quarterly` on 3. **The parquet keeps them, so Streamlit is unaffected.**
+
+**Dates are `YYYY-MM-DD`.** Every `end` value in all five frames is midnight — these are period
+ends, not timestamps — so the bare date is lossless and a third the width of a full ISO stamp.
+Verified across all 2,344,025 exported values including the earliest (2005-03-31) and latest
+(2026-08-21).
+
+**Per-ticker files carry no timestamp, deliberately.** A ticker whose data did not change produces
+a byte-identical file, so the nightly commit stores nothing for it. Measured over five simulated
+price-only nights: **613 files change, 609 of them core and zero of them facts.** The deploy branch
+grows **+6.9 MB/night** for the JSON against **+0.23 MB/night** for the parquet — git dedupes the
+four unchanged parquet files, so the workflow's standing "~18.8 MB a night" is itself pessimistic
+on a night without filings. About **210 MB/month**, flattened by the same monthly orphan reset.
+
+**The comparison axis was measured and rejected.** A concept-major file averages **186 kB gzipped**
+(`pe_ratio` the largest at 327 kB). `SUGGESTED_MAX_COMPARISON_TICKERS` is **3**, and three core
+files are **42 kB** — already cached if the user browsed those tickers. Break-even is **13
+tickers**, more than four times the suggested maximum, and the axis would add 13 files and 12.3 MB
+to every nightly commit. Not built.
+
+**Round-trip verified on all 3,045 (ticker, frame) slices, not a sample** — `assert_frame_equal`
+with `check_exact=True` and dtypes, including AAPL, JPM, O, V/STZ/ERIE/BKR and CRWV/FIG. Float
+`repr` is byte-identical after the round-trip across 463,069 sampled values.
+
+**A sampled validator check was written first and thrown away.** It passed eight of twelve
+deliberate corruptions because none of them landed on a sampled ticker. All 1,218 files are opened
+and checked against the parquet slice they were cut from instead: **1.9 s**, 3.6 s for the whole
+validator. 12/12 mutations now rejected.
+
+**Found and recorded, not fixed:** `current_snapshot.parquet` holds 4 rows for **EA**, which is not
+in the universe (it produced no metrics, valuation or growth), so the per-ticker export does not
+carry them. The validator asserts exactly this — every unexported row belongs to a ticker the
+universe does not list.
+
+**`config.py`, `figures.py` and `app.py` are untouched.** The six parquet frames come back
+content-identical and byte-identical across two runs, and so do all 1,218 JSON files.
+`export_for_app` now takes **45.8 s** end to end against a ~40 min pipeline run.
+
+---
+
+## 2026-08-22 — The config registry is exported as JSON, and profile beats ticker by 6.6x
+
+`streamlit_inventory.md` §1.5 called the missing registry export "the single biggest gap in the
+current export": `app.py` imports `config.py` and calls into it at runtime for every picker label,
+axis label, reference line, percent flag and the whole encyclopedia. A browser cannot. The export
+now writes **`registry.json`** (83.4 kB raw, **11.7 kB gzipped**) and **`concept_candidates.json`**
+(242.9 kB raw, **7.8 kB gzipped**) alongside the six parquet frames, from `export_for_app`, before
+`meta.json`. Registry schema **1**; export schema **2 → 3**, because `meta.json` gained a
+`registry` block and the directory gained two files. Full derivation in
+`registry_export_report.md`.
+
+**The size question the brief posed had a measurable answer, and it went the cheap way twice.**
+Exporting `get_plottable_metrics(chart, ticker)` for 609 tickers × 3 charts inlines to **274 kB**;
+exporting `profile_visibility()` plus each ticker's profile is **42 kB — 6.6× smaller**. The
+substitution is only legitimate if the two agree, so it was checked for **all 1,827 (chart,
+ticker) pairs**: same ids, same order, same labels, **1,827/1,827 identical**. That is not luck.
+`is_hidden` looks the ticker up in `TICKER_PROFILES` and then consults `PROFILE_HIDDEN` and
+`_DERIVED_CONCEPT_CONSUMERS`, both keyed by profile; there is no per-ticker branch in that path.
+The same argument applies to `get_concept_candidates`, where ticker overrides *do* exist — but
+they produce only **39 distinct resolved dicts across 609 tickers**, so storing the variants once
+and indexing into them is **2,837 kB → 243 kB, 11.7×**.
+
+**The id-namespace trap is now impossible to walk into from the export.** Every metric carries
+`id_namespace` and `value_column` explicitly, and the `charts` block carries them per chart. Ten
+registry ids are also `facts_full` concept names — `Revenue`, `NetIncomeLoss`,
+`SharesOutstanding`, `EPS_TTM_CALC`, `FCF_TTM`, `FFO_TTM`, `OperatingIncomeLoss_TTM`, `PPNR`,
+`CoreOperatingEarnings`, `StockholdersEquity` — and **all ten declare `value_column:
+"yoy_growth"`**, so no id in the export both sets `percent` and claims to describe the facts
+frame's `value` column. That is the `10941700000000.00%` bug closed off at the contract rather
+than re-argued in the frontend.
+
+**`METRICS` fields are exported via `dataclasses.asdict`, not a hand-written list**, plus the
+three computed properties. A field added to `Metric` therefore reaches the frontend
+automatically instead of being silently dropped — which is the failure this project keeps
+producing and the reason the registry task made `METRICS` the single source of truth in the first
+place. All 10 fields and 3 properties round-trip, values equal to the live objects, `ref_line`'s
+`int` 0 versus `float` 0.4 distinction intact.
+
+**The validator gained 10 structural checks, not a row floor.** These files describe `config.py`,
+not the filings: their sizes do not drift with new quarters, so a 90% floor would detect nothing.
+What matters is that they still answer the question the app asks — every universe ticker
+resolvable to a profile whose visibility row covers every metric, every candidate index resolving,
+every metric carrying the fields a frontend formats on. **11 deliberate mutations were rejected,
+each by the intended check.**
+
+**Found and recorded, not fixed:** `TICKER_CONCEPT_OVERRIDES["ARE"]` is an empty dict — a no-op
+that resolves to the `reit` baseline. 33 universe tickers have an override entry; only 32 change
+anything.
+
+**`config.py`, `figures.py` and `app.py` are untouched** (empty `git diff`). The six parquet
+frames come back content-identical and byte-identical across two runs of the new code. *Harness
+note: the published `data/app/*.parquet` differ byte-wise from a local rewrite because CI writes
+with `parquet-cpp-arrow 25.0.1` and this machine has pyarrow 24.0.0 — pre-existing, and why
+`DataFrame.equals` is the right comparison there and byte equality is the right one within one
+environment.*
+
+---
+
 ## 2026-08-19 — Empty valuation panels now say why, and the premise needed fixing first
 
 The brief was that V, STZ, ERIE and BKR "render no valuation metrics at all". **They do not.**
