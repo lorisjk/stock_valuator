@@ -20,6 +20,7 @@ import type { UniverseEntry } from "../data/DataContext.ts";
 import { VIEWS, VIEW_LABELS, isTickerView, type ViewId } from "./navigation.ts";
 import Freshness from "./Freshness.tsx";
 
+
 export default function Sidebar({
   meta,
   view,
@@ -45,7 +46,7 @@ export default function Sidebar({
     <aside className={`sidebar${open ? "" : " sidebar--closed"}`} aria-label="Navigation">
       <div className="sidebar__inner">
         <button type="button" className="sidebar__close" onClick={onClose} aria-label="Hide sidebar">
-          ×
+          x
         </button>
 
         <Freshness meta={meta} />

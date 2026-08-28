@@ -64,24 +64,18 @@
   padding: 1rem 1.1rem 2rem;
   position: sticky;
   top: 0;
+  position: relative;
 }
 
-/*
- * Explicit 28x28 hit area, comfortably above the ~24x24 minimum. Without this
- * the button's clickable box was whatever the browser's default `button`
- * padding plus the "x" glyph's own metrics happened to produce -- measured at
- * 26x25px, which is barely over that minimum and sized by accident rather
- * than by rule: a different UA stylesheet or a future reset would shrink it
- * with nothing here to stop that. `display: inline-flex` centers the glyph
- * inside the fixed box rather than the box growing to fit the glyph.
- */
 .sidebar__close {
-  float: right;
+  position: absolute;
+  top: 1rem;
+  right: 1.1rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 28px;
-  height: 28px;
+  height: 0px;
   padding: 0;
   background: none;
   border: 0;
@@ -90,6 +84,7 @@
   font-size: 1.3rem;
   line-height: 1;
   cursor: pointer;
+  align-self: flex-end;
 }
 
 .sidebar h2 {
