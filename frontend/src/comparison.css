@@ -1,0 +1,81 @@
+/*
+ * The comparison tab's controls. Palette variables come from `.app` in
+ * shell.css -- this file defines none of its own, so the two cannot drift.
+ */
+
+.comparison > p {
+  margin: 0.6rem 0;
+}
+
+.comparison__field {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.7rem 0;
+}
+
+.comparison__field > span {
+  color: var(--shell-strong);
+  font-weight: 600;
+  min-width: 8rem;
+}
+
+.comparison__field select,
+.comparison__field input[type="range"] {
+  background: var(--shell-bg);
+  color: var(--shell-strong);
+  border: 1px solid var(--shell-line);
+  border-radius: 4px;
+  padding: 0.35rem;
+  font: inherit;
+  max-width: 28rem;
+}
+
+.comparison__field input[type="range"] {
+  padding: 0;
+  max-width: 18rem;
+}
+
+.comparison__field output {
+  font-variant-numeric: tabular-nums;
+  min-width: 2ch;
+}
+
+/*
+ * The chosen set, laid out as removable chips. `list-style: none` with an
+ * explicit `padding: 0` because the shell sets neither and a browser default
+ * bullet would read as a legend entry.
+ */
+.comparison__picked {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0.4rem 0 1rem;
+  padding: 0;
+}
+
+.comparison__picked li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  border: 1px solid var(--shell-line);
+  border-radius: 999px;
+  padding: 0.15rem 0.7rem 0.15rem 0.4rem;
+  background: var(--shell-panel);
+}
+
+.comparison__picked button {
+  background: none;
+  border: 0;
+  color: var(--shell-strong);
+  font: inherit;
+  cursor: pointer;
+  padding: 0.15rem 0.2rem;
+}
+
+.comparison__profile {
+  color: var(--shell-text);
+  font-size: 0.78rem;
+}

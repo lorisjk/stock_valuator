@@ -21,6 +21,7 @@
  */
 import { axisNumber, axisSuffix, cellDomain, cellFor, makeGrid } from "./grid.ts";
 import type { MeanLine } from "./mean.ts";
+import { OUTLIER_MEDIAN_RATIO } from "./outliers.ts";
 
 /** figures.py:19-24 -- pinned, not left to plotly's cycle. */
 export const PRIMARY_COLOR = "#1f77b4";
@@ -29,18 +30,32 @@ export const SECONDARY_COLOR = "#ff7f0e";
 export const PERCENT_TICKFORMAT = ".1~%";
 const REFERENCE_COLOR = "red";
 
+export interface Marker {
+  color: string;
+  /** Scatter markers carry all three; a bar's `marker_color` carries none. */
+  size?: number;
+  symbol?: string;
+  /** The outline. figures.py:475 gives the snapshot marker a white one. */
+  line?: { color: string; width: number };
+}
+
 export interface Trace {
-  type: "scatter";
-  mode: string;
+  /** `go.Scatter` everywhere except item 16's raw-facts panels, which are `go.Bar`. */
+  type: "scatter" | "bar";
+  /** Absent on a bar: `go.Bar` has no `mode`. */
+  mode?: string;
   name: string;
   x: (Date | string)[];
   y: (number | null)[];
   line?: { color: string; width?: number };
+  /** Present instead of `line` on a marker-only trace. */
+  marker?: Marker;
   opacity?: number;
   connectgaps?: boolean;
   hovertemplate?: string;
   xaxis: string;
   yaxis: string;
+  legendgroup?: string;
   showlegend?: boolean;
 }
 
@@ -105,7 +120,14 @@ export interface FigureSpec {
 
     height: number;
 
-    hovermode: string;
+    /**
+     * Omitted entirely when the builder does not set one. `build_valuation`,
+     * `build_fundamentals`, `build_growth` and `build_ticker_comparison` all pass
+     * `hovermode="x unified"`; `build_raw_facts` (figures.py:1144) passes nothing
+     * at all, so plotly's own default applies there and this key must be absent
+     * rather than set to that default's name.
+     */
+    hovermode?: string;
 
     font?: {
       color?: string;
@@ -149,7 +171,9 @@ export interface FigureSpec {
 export function createGrid(
   titles: string[],
   perRowHeight: number,
-  title: string
+  title: string,
+  /** `null` omits the key -- see `FigureSpec["layout"]["hovermode"]`. */
+  hovermode: string | null = "x unified",
 ): FigureSpec {
   const n = titles.length;
   const { rows, cols } = makeGrid(n);
@@ -164,7 +188,7 @@ export function createGrid(
 
     height: perRowHeight * rows,
 
-    hovermode: "x unified",
+    ...(hovermode === null ? {} : { hovermode }),
 
     // App background
     paper_bgcolor: "#16171d",
@@ -276,6 +300,21 @@ export interface PanelTrace {
   width?: number;
   opacity?: number;
   connectgaps?: boolean;
+  /**
+   * A marker-only trace: item 13's snapshot point. Supplying this swaps `line`
+   * for `marker` in the emitted trace and swaps the default per-point hover for
+   * `hovertemplate` — figures.py's snapshot Scatter has no `line` kwarg and its
+   * own hover text, so the two are one choice rather than three flags.
+   *
+   * This is what item 5's generalisation of `PanelSpec` to a trace list was for:
+   * the marker is *one more entry*, drawn by the same loop, and it lands after
+   * the filed series in `fig.data` exactly as it does in `plot_metric`.
+   */
+  marker?: Marker;
+  hovertemplate?: string;
+  legendgroup?: string;
+  /** figures.py:474 — false on every panel but the first that draws a marker. */
+  showlegend?: boolean;
 }
 
 export interface PanelSpec {
@@ -295,6 +334,16 @@ export interface PanelSpec {
   mean: MeanLine | null;
   /** True when the panel's own empty rule fired: the "No Data" panel. */
   empty: boolean;
+  /**
+   * How many points masking removed from this panel's filed trace, for the note
+   * figures.py:400 draws bottom-right. 0 draws nothing, which is also what an
+   * unmasked panel passes.
+   *
+   * A count rather than the points themselves: the note says how many, and the
+   * expander — which needs the values — is built from `outlierReport`, not from
+   * the figure. The drawing layer stays a drawing layer.
+   */
+  hiddenCount?: number;
 }
 
 /**
@@ -409,17 +458,51 @@ export function drawPanel(fig: FigureSpec, idx: number, panel: PanelSpec): void 
       name: series.name,
       x: series.x,
       y: series.y,
-      line: series.width === undefined
-        ? { color: series.color }
-        : { color: series.color, width: series.width },
+      // A marker-only trace carries `marker` where a line trace carries `line`,
+      // and neither carries the other -- figures.py's snapshot Scatter passes no
+      // `line` kwarg, and an emitted `line: {color}` on a `mode: "markers"`
+      // trace would be a field the reference does not have.
+      ...(series.marker === undefined
+        ? {
+            line: series.width === undefined
+              ? { color: series.color }
+              : { color: series.color, width: series.width },
+          }
+        : { marker: series.marker }),
       ...(series.opacity === undefined ? {} : { opacity: series.opacity }),
       ...(series.connectgaps === undefined ? {} : { connectgaps: series.connectgaps }),
-      hovertemplate: "Date: %{x|%d.%m.%Y}<br>Value: %{y}<extra></extra>",
+      ...(series.legendgroup === undefined ? {} : { legendgroup: series.legendgroup }),
+      ...(series.showlegend === undefined ? {} : { showlegend: series.showlegend }),
+      hovertemplate:
+        series.hovertemplate ?? "Date: %{x|%d.%m.%Y}<br>Value: %{y}<extra></extra>",
       xaxis: refs.xaxis,
       yaxis: refs.yaxis,
     });
   }
   styleAxes(fig, idx, panel.ylabel, panel.percent);
+
+  // figures.py:398 -- between the axes and the mean line, and bottom-right
+  // because "the mean label occupies the top-left of the same panel". Its own
+  // comment says why it exists at all: the figure is self-describing when
+  // exported as a file, where the note beside the toggle would carry this
+  // instead. `&gt;` and `&middot;` are the reference's HTML entities, which
+  // plotly renders; kept verbatim rather than "improved" to `>` and `·`, so the
+  // two annotations compare byte for byte.
+  if (panel.hiddenCount) {
+    fig.layout.annotations.push({
+      text:
+        `${panel.hiddenCount} outlier${panel.hiddenCount > 1 ? "s" : ""} hidden ` +
+        `(&gt;${OUTLIER_MEDIAN_RATIO}x median) &middot; Ø unchanged`,
+      x: 0.98,
+      y: 0.02,
+      xref: `${refs.xaxis} domain`,
+      yref: `${refs.yaxis} domain`,
+      xanchor: "right",
+      yanchor: "bottom",
+      showarrow: false,
+      font: { color: "#888888", size: 9 },
+    });
+  }
 
   if (panel.mean) {
     hline(fig, idx, panel.mean.value);
@@ -437,4 +520,179 @@ export function drawPanel(fig: FigureSpec, idx: number, panel: PanelSpec): void 
   }
 
   if (panel.refLine !== null) hline(fig, idx, panel.refLine);
+}
+
+/* ---------------------------------------------------------------- raw facts */
+
+/**
+ * One raw-facts panel -- `build_raw_facts`'s inner loop (figures.py:1120).
+ *
+ * A third entry point rather than a `PanelSpec` flag, because this chart uses
+ * *less* of the drawing layer than any other and the differences are all
+ * absences:
+ *
+ *   - **`go.Bar`, not `go.Scatter`** (figures.py:1133). A filed fact is a
+ *     quantity for a period, not a point on a line, and the reference draws it
+ *     that way. So no `mode`, no `line`, no `connectgaps`.
+ *   - **no `_style_axes` call.** `build_raw_facts` is the only builder in
+ *     figures.py that never calls it, so these panels get no y-axis title, no
+ *     two-year `dtick`, no `%Y` tick format and no percent format. Reproduced by
+ *     omission -- calling `styleAxes` here would have been the easy mistake, and
+ *     an invisible one.
+ *   - **no mean line and no reference line.** There is no registry entry behind
+ *     a raw XBRL tag to carry a `ref_line`, and a mean of `Assets` across
+ *     periods is not a benchmark anything is judged against.
+ *
+ * What it does share is the grid, the axis references and the "No Data"
+ * placeholder -- including that placeholder's bare-axis-id rule, which is what
+ * makes an empty panel here render at all.
+ */
+export function drawBarPanel(
+  fig: FigureSpec,
+  idx: number,
+  panel: { concept: string; x: (Date | string)[]; y: (number | null)[]; empty: boolean },
+): void {
+  if (panel.empty) {
+    annotateNoData(fig, idx);
+    return;
+  }
+  const refs = panelRefs(idx, fig.cols);
+  fig.data.push({
+    type: "bar",
+    name: panel.concept,
+    x: panel.x,
+    y: panel.y,
+    marker: { color: PRIMARY_COLOR },
+    hovertemplate: "Date: %{x|%d.%m.%Y}<br>Value: %{y}<extra></extra>",
+    xaxis: refs.xaxis,
+    yaxis: refs.yaxis,
+  });
+}
+
+/* ------------------------------------------------------------- comparison */
+
+/**
+ * figures.py `_COMPARISON_COLORS` (figures.py:31).
+ *
+ * Indexed by a ticker's position in the **requested** list, never in the
+ * plotted one -- the comment above it says why: *"colors assigned by position in
+ * the requested list so a ticker keeps its color even when another one drops out
+ * of the chart."* Indexing wraps rather than erroring, which is what
+ * `SUGGESTED_MAX_COMPARISON_TICKERS` exists to keep rare.
+ */
+export const COMPARISON_COLORS = [
+  "#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e",
+  "#8c564b", "#e377c2", "#17becf", "#bcbd22", "#7f7f7f",
+];
+
+export interface ComparisonTrace {
+  /** The ticker: legend entry and hover name alike. */
+  name: string;
+  x: Date[];
+  y: (number | null)[];
+  color: string;
+}
+
+export interface ComparisonPanelSpec {
+  /** y-axis title: the metric's registry label. */
+  ylabel: string;
+  percent: boolean;
+  refLine: number | null;
+  /** One per plotted ticker, in requested order. */
+  traces: ComparisonTrace[];
+  /** `"Not shown: X (reason), ..."`, or null when nothing was dropped. */
+  excludedNote: string | null;
+  /**
+   * `[ticker, count]` per line that lost points to masking, in plotted order.
+   * Empty draws nothing. Separate from `excludedNote` because the two say
+   * different things and sit at opposite ends of the figure — a ticker that is
+   * *not shown* against one whose line is merely *shorter*.
+   */
+  hiddenByTicker?: readonly (readonly [string, number])[];
+}
+
+/**
+ * One panel, N ticker lines -- `build_ticker_comparison`'s drawing half.
+ *
+ * A separate entry point rather than a `PanelSpec` variant, and the reasons are
+ * differences in the reference rather than taste:
+ *
+ *   - **the hover.** `drawPanel` emits `plot_metric`'s per-point template
+ *     (`Date: ... Value: ...`); this chart emits `"%{fullData.name}: %{y}"`
+ *     under `hovermode: "x unified"`, so one hover box lists every ticker at
+ *     that date. That is the whole point of the view.
+ *   - **no mean line, ever.** `build_ticker_comparison` (figures.py:930): *"No
+ *     per-ticker mean lines (n of them would bury the data); the metric-level
+ *     reference line stays because it does not depend on the ticker."* So there
+ *     is no `mean` field to pass and none to forget.
+ *   - **an exclusion note**, which no per-ticker panel has.
+ *
+ * It reuses `panelRefs`, `styleAxes` and `hline` from above, so the axis
+ * furniture and the reference line cannot drift from the other three charts.
+ */
+export function drawComparisonPanel(fig: FigureSpec, spec: ComparisonPanelSpec): void {
+  const refs = panelRefs(0, fig.cols);
+
+  for (const trace of spec.traces) {
+    fig.data.push({
+      type: "scatter",
+      mode: "lines+markers",
+      name: trace.name,
+      x: trace.x,
+      y: trace.y,
+      line: { color: trace.color },
+      connectgaps: true,
+      hovertemplate: "%{fullData.name}: %{y}<extra></extra>",
+      xaxis: refs.xaxis,
+      yaxis: refs.yaxis,
+    });
+  }
+
+  styleAxes(fig, 0, spec.ylabel, spec.percent);
+  // figures.py:997 -- set after `_style_axes`, which does not touch it.
+  Object.assign(fig.layout[refs.xKey] as Axis, { hoverformat: "%d.%m.%Y" });
+
+  if (spec.refLine !== null) hline(fig, 0, spec.refLine);
+
+  if (spec.excludedNote !== null) {
+    // figures.py:1010 -- paper coordinates, below the plot, red and small.
+    fig.layout.annotations.push({
+      text: spec.excludedNote,
+      x: 0,
+      y: -0.16,
+      xref: "paper",
+      yref: "paper",
+      xanchor: "left",
+      yanchor: "top",
+      showarrow: false,
+      font: { color: "red", size: 10 },
+    });
+  }
+
+  // figures.py:1024 -- above the plot and right-aligned, where the valuation
+  // grid's note is inside the panel and bottom-right. The positions differ
+  // because the constraints do: there is no mean label competing for the corner
+  // here, and one note for the whole figure belongs outside it.
+  //
+  // **After** the exclusion note, not before. figures.py adds the exclusion
+  // annotation at :1010 and this one at :1024, and that order is observable --
+  // the harness reads `layout.annotations` positionally, and having these two
+  // the wrong way round is exactly what it caught.
+  const hidden = spec.hiddenByTicker ?? [];
+  if (hidden.length > 0) {
+    fig.layout.annotations.push({
+      text:
+        `Outliers hidden (&gt;${OUTLIER_MEDIAN_RATIO}x each line's own median): ` +
+        hidden.map(([ticker, count]) => `${ticker} (${count})`).join(", "),
+      x: 1,
+      y: 1.04,
+      xref: "paper",
+      yref: "paper",
+      xanchor: "right",
+      yanchor: "bottom",
+      showarrow: false,
+      font: { color: "#888888", size: 10 },
+    });
+  }
+
 }

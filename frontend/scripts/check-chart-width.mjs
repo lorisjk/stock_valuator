@@ -17,6 +17,11 @@
  *
  *     the plot's container width === the rendered <svg>'s width
  *
+ * Three sweeps assert it: every landing tab into every chart tab, and -- since
+ * the persistence cycle made those tabs survive a tab switch instead of
+ * remounting -- the comparison and raw-facts charts being *revealed* rather than
+ * mounted, with the sidebar toggled while they are out of sight.
+ *
  * Run it: start the dev server, then
  *
  *     node scripts/check-chart-width.mjs                 # http://localhost:5173
@@ -97,15 +102,46 @@ try {
   let checked = 0;
   let run = 0;
 
+  // A distinct query string forces a real reload; a hash-only change does not.
+  const load = async (tab) => {
+    run += 1;
+    await send("Page.navigate", { url: `${APP}/?cw=${run}#/analysis/${TICKER}/${tab}` });
+    await waitFor("!!document.querySelector('.tabs')", `the shell on ${tab}`);
+  };
+  const clickTab = (label) =>
+    evaluate(`[...document.querySelectorAll('.tabs .tab')].find(b => b.textContent.trim() === ${JSON.stringify(label)})?.click()`);
+  /**
+   * Container width against rendered width, for one plot on the page.
+   *
+   * `scope` picks *which* plot, and it has to: since the persistence cycle the
+   * comparison tab stays mounted after its first visit, so a page can hold two
+   * `.js-plotly-plot` nodes at once. `ChartView`'s renders first in the DOM, so
+   * an unscoped `querySelector` still happened to find it -- exactly the kind of
+   * accident a check should not be resting on.
+   */
+  const measure = (scope) =>
+    evaluate(`(() => {
+      const plot = ${scope};
+      if (!plot) return null;
+      const svg = plot.querySelector('.main-svg');
+      return JSON.stringify({
+        container: Math.round(plot.getBoundingClientRect().width),
+        svg: Number(svg.getAttribute('width')),
+      });
+    })()`);
+  // Scoped by the view each plot lives in, not by DOM order. Three tabs now hold
+  // a figure at once -- ChartView, the comparison chart and, since item 16, the
+  // raw-facts chart -- and all three can be mounted-and-hidden simultaneously.
+  const CHART_PLOT =
+    "[...document.querySelectorAll('.js-plotly-plot')].find(p => !p.closest('.comparison, .raw-facts'))";
+  const COMPARISON_PLOT = "document.querySelector('.comparison .js-plotly-plot')";
+  const RAW_PLOT = "document.querySelector('.raw-facts .js-plotly-plot')";
+
   for (const entry of ENTRY_TABS) {
     for (const chart of CHART_TABS) {
-      run += 1;
-      // A distinct query string forces a real reload; a hash-only change does not.
-      await send("Page.navigate", { url: `${APP}/?cw=${run}#/analysis/${TICKER}/${entry}` });
-      await waitFor("!!document.querySelector('.tabs')", `the shell on ${entry}`);
+      await load(entry);
       await sleep(1800);
-      await evaluate(
-        `[...document.querySelectorAll('.tabs .tab')].find(b => b.textContent.trim() === ${JSON.stringify(chart)})?.click()`);
+      await clickTab(chart);
       await waitFor("!!document.querySelector('.js-plotly-plot .main-svg')", `${chart} after ${entry}`);
       await sleep(1600);
 
@@ -114,14 +150,73 @@ try {
           await evaluate("document.querySelector('.sidebar__close')?.click()");
           await sleep(1200);
         }
-        const seen = JSON.parse(await evaluate(`JSON.stringify({
-          container: Math.round(document.querySelector('.js-plotly-plot').getBoundingClientRect().width),
-          svg: Number(document.querySelector('.js-plotly-plot .main-svg').getAttribute('width')),
-        })`));
+        const seen = JSON.parse(await measure(CHART_PLOT));
         checked += 1;
         if (seen.container !== seen.svg) {
           failures.push(`${entry} -> ${chart}, sidebar ${sidebar}: container ${seen.container}px, svg ${seen.svg}px`);
         }
+      }
+    }
+  }
+
+  /**
+   * The raw-facts chart, revealed rather than mounted -- item 16's version of
+   * the case below, and it arrived by the route the state-persistence report
+   * predicted: a fourth figure-bearing tab, added to `tabDrawsFigure` rather
+   * than to `isChartTab`.
+   */
+  for (const chart of CHART_TABS) {
+    for (const sidebar of ["expanded", "collapsed"]) {
+      await load("raw");
+      await waitFor(`!!${RAW_PLOT}?.querySelector('.main-svg')`, "the raw-facts chart");
+      await sleep(1800);
+      await clickTab(chart);
+      await sleep(1400);
+      if (sidebar === "collapsed") {
+        await evaluate("document.querySelector('.sidebar__close')?.click()");
+        await sleep(1200);
+      }
+      await clickTab("Raw Facts");
+      await sleep(1600);
+
+      const seen = JSON.parse(await measure(RAW_PLOT));
+      checked += 1;
+      if (seen.container !== seen.svg) {
+        failures.push(`raw -> ${chart} -> raw, sidebar ${sidebar}: container ${seen.container}px, svg ${seen.svg}px`);
+      }
+    }
+  }
+
+  /**
+   * The comparison chart, revealed rather than mounted.
+   *
+   * Its own figure was never at risk while the tab was conditionally rendered:
+   * it mounted at the moment it became visible, so it measured a real container
+   * every time. Keeping it mounted between visits -- which is what makes its
+   * ticker set survive a tab switch -- put it in exactly the position
+   * `ChartView` has always been in, and the sidebar variant is the one that
+   * bites: the toggle happens while the figure is hidden, so nothing but the
+   * shell's synthetic resize can tell it the page got wider. That event is gated
+   * on `tabDrawsFigure`, and this is the gate's test.
+   */
+  for (const chart of CHART_TABS) {
+    for (const sidebar of ["expanded", "collapsed"]) {
+      await load("comparison");
+      await waitFor(`!!${COMPARISON_PLOT}?.querySelector('.main-svg')`, "the comparison chart");
+      await sleep(1800);
+      await clickTab(chart);
+      await sleep(1400);
+      if (sidebar === "collapsed") {
+        await evaluate("document.querySelector('.sidebar__close')?.click()");
+        await sleep(1200);
+      }
+      await clickTab("Comparison");
+      await sleep(1600);
+
+      const seen = JSON.parse(await measure(COMPARISON_PLOT));
+      checked += 1;
+      if (seen.container !== seen.svg) {
+        failures.push(`comparison -> ${chart} -> comparison, sidebar ${sidebar}: container ${seen.container}px, svg ${seen.svg}px`);
       }
     }
   }

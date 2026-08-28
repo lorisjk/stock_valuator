@@ -126,6 +126,46 @@
   padding: 0.35rem;
 }
 
+/*
+ * The as-of control (item 15). It reuses `.ticker`'s look for its date input
+ * rather than defining a second one, so the two sidebar fields cannot drift.
+ */
+.as-of__toggle {
+  display: block;
+  margin-top: 0.9rem;
+  color: var(--shell-strong);
+  cursor: pointer;
+}
+
+.as-of__date {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.as-of__date > span {
+  color: var(--shell-strong);
+  font-weight: 600;
+}
+
+.as-of__date input {
+  flex: 1;
+  min-width: 0;
+  background: var(--shell-bg);
+  color: var(--shell-strong);
+  border: 1px solid var(--shell-line);
+  border-radius: 4px;
+  padding: 0.35rem;
+  font: inherit;
+}
+
+/* The native picker indicator is black-on-dark without this. */
+.as-of__date input::-webkit-calendar-picker-indicator {
+  filter: invert(0.7);
+  cursor: pointer;
+}
+
 .caption {
   font-size: 0.82rem;
   opacity: 0.85;

@@ -62,6 +62,26 @@ export type ChartTabId = (typeof CHART_TABS)[number];
 export const isChartTab = (tab: TabId): tab is ChartTabId =>
   (CHART_TABS as readonly string[]).includes(tab);
 
+/**
+ * Does this tab render a plotly figure?
+ *
+ * Deliberately **not** `isChartTab`. That predicate answers "is this tab a
+ * `ChartView` with a different `chart` prop", which decides which component
+ * renders; this one answers "does revealing this tab uncover a `<Plot>` that
+ * measured its container while hidden", which is what the shell's synthetic
+ * resize is gated on. The two agreed until the comparison tab stopped being
+ * unmounted between visits -- from that point it, too, holds a figure that can
+ * be revealed at the wrong width, and widening `isChartTab` to cover it would
+ * have handed `ChartView` a fourth chart id it has no builder for.
+ *
+ * Item 16's raw-facts tab joined for the same reason and by the same route: it
+ * is a real chart now, drawn by its own builder rather than by `ChartView`, and
+ * it is mounted-and-hidden like every other tab. The state-persistence report
+ * predicted this line would need editing before `isChartTab` did; it did.
+ */
+export const tabDrawsFigure = (tab: TabId) =>
+  isChartTab(tab) || tab === "comparison" || tab === "raw";
+
 /** Ticker-independent views: they describe the pipeline, not a company. */
 export const isTickerView = (view: ViewId) => view === "analysis";
 
@@ -73,7 +93,22 @@ export interface Location {
   ticker: string | null;
 }
 
-export const DEFAULT_LOCATION: Location = { view: "analysis", tab: "valuation", ticker: null };
+/**
+ * Where a load with nothing to go on lands.
+ *
+ * **`data`, matching `TABS`' own first entry** and the reason recorded with it:
+ * the app opens on what was extracted, and the charts follow. This said
+ * `valuation` from the shell cycle until the state-persistence cycle, which is
+ * neither a considered choice nor quite an accident -- the valuation chart was
+ * the only tab that existed when the shell was built, so it was the only tab a
+ * default could name, and adding the other five never revisited it. The tab
+ * *order* was written against `app.py` from the start and has always said Data.
+ *
+ * This is the fallback and nothing more: `parseHash` reaches it only when the
+ * hash names no tab or names one that does not exist, so an explicit
+ * `#/analysis/AAPL/valuation` is unaffected.
+ */
+export const DEFAULT_LOCATION: Location = { view: "analysis", tab: "data", ticker: null };
 
 const isView = (v: string): v is ViewId => (VIEWS as readonly string[]).includes(v);
 const isTab = (v: string): v is TabId => (TABS as readonly string[]).includes(v);

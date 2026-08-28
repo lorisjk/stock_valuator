@@ -1,0 +1,69 @@
+/*
+ * The raw-facts tab's controls. Palette variables come from `.app` in shell.css
+ * -- this file defines none of its own, so the two cannot drift.
+ */
+
+.raw-facts > p {
+  margin: 0.6rem 0;
+}
+
+.raw-facts__derived {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--shell-strong);
+  cursor: pointer;
+}
+
+.raw-facts__picker {
+  border: 1px solid var(--shell-line);
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem;
+  margin: 0.8rem 0;
+}
+
+.raw-facts__picker legend {
+  color: var(--shell-strong);
+}
+
+/*
+ * A ticker can file 43 concepts with "include derived" on, so the options wrap
+ * into columns rather than one long row. `nowrap` per label keeps a tag from
+ * breaking across lines mid-name.
+ */
+.raw-facts__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 1rem;
+}
+
+.raw-facts__options label {
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.raw-facts__options code {
+  font-size: 0.9em;
+}
+
+.raw-facts__field {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.7rem 0;
+}
+
+.raw-facts__field > span {
+  color: var(--shell-strong);
+  font-weight: 600;
+  min-width: 8rem;
+}
+
+.raw-facts__field input[type="range"] {
+  max-width: 18rem;
+}
+
+.raw-facts__field output {
+  font-variant-numeric: tabular-nums;
+  min-width: 2ch;
+}

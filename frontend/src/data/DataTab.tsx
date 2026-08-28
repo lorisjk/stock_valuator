@@ -27,7 +27,8 @@ import { useMemo, useState } from "react";
 import type { Metric } from "../contracts.ts";
 import { useConceptCandidates, useData, useTickerFacts, useTickerFrames } from "./DataContext.ts";
 import DataTable, { PairTable } from "./DataTable.tsx";
-import { downloadCsv, pairsToCsv, pivotToCsv } from "./csv.ts";
+import SectionActions from "./SectionActions.tsx";
+import { DEFAULT_COPY_PERIODS, pairsToCsv, pivotToCsv } from "./csv.ts";
 import { columnFormat, metricsById, valueFormat, type CellFormat } from "./format.ts";
 import {
   DEFAULT_TABLE_PERIODS,
@@ -72,6 +73,11 @@ function Section({
 }) {
   const shown = useMemo(() => headPeriods(pivot, periods), [pivot, periods]);
   const empty = useMemo(() => allNullColumns(shown), [shown]);
+  // app.py:431 takes the copy block from `wide`, not from `shown` -- so it is
+  // eight periods whether or not "Show all periods" is on. That is the
+  // reference's decision and it is reproduced: the download is the unbounded
+  // path, the copy block is the one sized for pasting.
+  const copied = useMemo(() => headPeriods(pivot, DEFAULT_COPY_PERIODS), [pivot]);
   // Decided from the rows on screen, not the whole pivot -- app.py:373 formats
   // `wide.head(periods)`, so "Show all periods" can genuinely move a column
   // between treatments. Recomputed with `shown` for that reason.
@@ -106,13 +112,11 @@ function Section({
             caption={`${title} for the selected ticker`}
           />
           {file && (
-            <button
-              type="button"
-              className="download"
-              onClick={() => downloadCsv(file, pivotToCsv(shown))}
-            >
-              Download CSV
-            </button>
+            <SectionActions
+              file={file}
+              csv={pivotToCsv(shown)}
+              copy={{ text: pivotToCsv(copied), periods: copied.ends.length }}
+            />
           )}
         </>
       )}
@@ -280,15 +284,16 @@ export default function DataTab({ ticker }: { ticker: string }) {
               formats={flagFormats}
               caption="Quality flags per period"
             />
-            <button
-              type="button"
-              className="download"
-              onClick={() =>
-                downloadCsv(`${ticker}_flags.csv`, pivotToCsv(headPeriods(flagsPivot, periods)))
-              }
-            >
-              Download CSV
-            </button>
+            {/* Download only. `render_flag_section` (app.py:459) offers a CSV
+                inside its expander and no copy block, and this section is item
+                18's anyway -- adding one here would be inventing a feature the
+                reference does not have, in the one section already flagged as
+                someone else's. */}
+            <SectionActions
+              file={`${ticker}_flags.csv`}
+              csv={pivotToCsv(headPeriods(flagsPivot, periods))}
+              copy={null}
+            />
           </>
         )}
       </section>
@@ -313,13 +318,14 @@ export default function DataTab({ ticker }: { ticker: string }) {
               profile that does not apply is simply absent
             </p>
             <PairTable rows={snapshot.rows} caption={`Current snapshot for ${ticker}`} />
-            <button
-              type="button"
-              className="download"
-              onClick={() => downloadCsv(`${ticker}_snapshot.csv`, pairsToCsv(snapshot.rows))}
-            >
-              Download CSV
-            </button>
+            {/* app.py:499 copies the whole snapshot: it is one row per concept
+                with no second period, so there is no window to narrow and the
+                period count in the label would be meaningless. */}
+            <SectionActions
+              file={`${ticker}_snapshot.csv`}
+              csv={pairsToCsv(snapshot.rows)}
+              copy={{ text: pairsToCsv(snapshot.rows), periods: null }}
+            />
           </>
         )}
       </section>

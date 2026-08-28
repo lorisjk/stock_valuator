@@ -29,19 +29,30 @@ import { useMemo, useState } from "react";
 import Plot from "react-plotly.js";
 import MetricPicker from "./MetricPicker.tsx";
 import WindowSlider from "./WindowSlider.tsx";
+import OutlierControls, {
+  VALUATION_MASK_HELP,
+  VALUATION_MASKED_NOTE,
+} from "./OutlierControls.tsx";
+import EmptyPanelNotice from "./EmptyPanelNotice.tsx";
+import { shareHistoryAbsent } from "./data/shareHistory.ts";
 import type { ChartId, Frames, Registry } from "./contracts.ts";
-import { useTickerFrames } from "./data/DataContext.ts";
+import { useTickerFacts, useTickerFrames } from "./data/DataContext.ts";
 import { DEFAULT_YEARS, defaultSelection, migrateSelection } from "./charts/defaults.ts";
 import { buildFundamentals } from "./charts/fundamentals.ts";
 import { buildGrowth } from "./charts/growth.ts";
 import { buildValuation } from "./charts/valuation.ts";
 import { offerableMetricIds } from "./charts/select.ts";
 import type { FigureSpec } from "./charts/panel.ts";
+import type { HiddenSeries } from "./charts/outliers.ts";
 
 interface ChartResult {
   figure: FigureSpec | null;
   panels: string[];
   offerable: string[];
+  /** Only the valuation builder fills this; the other two return nothing to hide. */
+  outliers?: HiddenSeries[];
+  /** Likewise: only the valuation grid has an empty-panel notice -- see that component. */
+  empty?: string[];
 }
 
 /**
@@ -53,7 +64,15 @@ type ChartBuilder = (
   registry: Registry,
   frames: Frames,
   ticker: string,
-  options?: { requested?: readonly string[] | null; years?: number; anchor?: Date },
+  options?: {
+    requested?: readonly string[] | null;
+    years?: number;
+    anchor?: Date;
+    /** Only `buildValuation` reads it, exactly as only `build_valuation` takes it. */
+    snapshot?: boolean;
+    /** Likewise: `build_fundamentals` and `build_growth` have no `mask_outliers`. */
+    mask?: boolean;
+  },
 ) => ChartResult;
 
 /**
@@ -78,10 +97,19 @@ export default function ChartView({
   registry,
   ticker,
   chart,
+  asOf,
 }: {
   registry: Registry;
   ticker: string;
   chart: ChartId;
+  /**
+   * The sidebar's as-of date, or null. **Reaches the valuation builder only.**
+   * `build_fundamentals` and `build_growth` call `_window_frame` with a
+   * hard-coded `as_of=None` (figures.py:589, :646) and take no such parameter,
+   * so forwarding it to them would invent an upper bound the reference does not
+   * have -- on the two charts whose windows are the widest.
+   */
+  asOf: Date | null;
 }) {
   const { frames, error } = useTickerFrames(ticker);
   // `undefined` for a chart = "the user has not touched this picker yet", which
@@ -97,6 +125,11 @@ export default function ChartView({
   // value the user sets is simply carried.
   const [windowYears, setWindowYears] = useState<Partial<Record<ChartId, number>>>({});
   const years = windowYears[chart] ?? DEFAULT_YEARS[chart];
+  // Not per chart, unlike the two above: only the valuation grid has the control
+  // at all (`build_fundamentals` and `build_growth` take no `mask_outliers`), so
+  // one boolean is the whole of it. app.py keeps it in `st.session_state` under
+  // `val_mask_outliers`, which is one key for the same reason.
+  const [masked, setMasked] = useState(false);
 
   // The option list, from `selectMetricIds(registry, chart, ticker, null)` --
   // the same call every builder makes for its own narrowing, not a second
@@ -123,10 +156,31 @@ export default function ChartView({
   const result = useMemo(
     () =>
       frames && build
-        ? build(registry, frames, ticker, { requested: selected, years })
+        ? // `snapshot` is on because app.py:954 always hands `build_valuation`
+          // the snapshot frame -- the marker is the app's normal state, not a
+          // mode. It is an *option* rather than the default so that the option
+          // being absent still reproduces the pre-item-13 figure byte for byte,
+          // which is what the item-8 baseline measures.
+          build(registry, frames, ticker, {
+            requested: selected,
+            years,
+            snapshot: true,
+            mask: masked,
+            // Valuation only -- see the prop's docstring. `undefined`, not
+            // `null`: the builders test `anchor !== undefined`, which is the
+            // port's spelling of `as_of is not None`.
+            anchor: chart === "valuation" && asOf !== null ? asOf : undefined,
+          })
         : null,
-    [build, registry, frames, ticker, selected, years],
+    [build, registry, frames, ticker, selected, years, masked, chart, asOf],
   );
+
+  // `facts_full` is fetched only once the notice is actually going to render --
+  // see `useTickerFacts`' `enabled`. Ordered after the build and before the
+  // early returns so the hook count is stable whatever branch runs.
+  const emptyPanels = result?.empty ?? [];
+  const notice = chart === "valuation" && emptyPanels.length > 0;
+  const { facts } = useTickerFacts(ticker, notice);
 
   if (!build) return <p role="status">The {LABELS[chart]} chart is not rebuilt yet.</p>;
   if (error) {
@@ -156,6 +210,19 @@ export default function ChartView({
         onChange={(next) => setWindowYears({ ...windowYears, [chart]: next })}
       />
 
+      {/* app.py:942 puts the toggle above the chart and the caption below it.
+          Both live in one component, so it sits here and the reading order is
+          toggle, chart, what-was-hidden -- see its docstring. */}
+      <OutlierControls
+        report={result?.outliers ?? []}
+        masked={masked}
+        onMasked={setMasked}
+        label={(id) => byId.get(id)?.label ?? id}
+        help={VALUATION_MASK_HELP}
+        maskedNote={VALUATION_MASKED_NOTE}
+        medianLabel="median"
+      />
+
       {!result ? (
         <p>Loading {ticker}…</p>
       ) : result.figure === null ? (
@@ -180,6 +247,31 @@ export default function ChartView({
           style={{ width: "100%", height: result.figure.layout.height }}
           useResizeHandler
         />
+      )}
+
+      {/* app.py:963. Between the chart and the outlier caption, which is where
+          the reference puts it, and valuation-only -- the component's docstring
+          has the evidence that this is the reference's design rather than its
+          oversight. */}
+      {notice && (
+        <EmptyPanelNotice
+          names={emptyPanels.map((id) => byId.get(id)?.label ?? id)}
+          shareHistoryMissing={shareHistoryAbsent(facts)}
+        />
+      )}
+
+      {/* app.py:1015, a fixed caption on the valuation tab. Item 13 shipped the
+          marker without it -- found while reading app.py's outlier block, which
+          sits immediately above this line in the reference. It belongs here
+          rather than in a later cycle because it is the sentence that tells a
+          reader the green point is *excluded from the mean*, which is the same
+          promise the masking caption above makes about the hidden points. */}
+      {chart === "valuation" && result?.figure !== null && (
+        <p className="caption">
+          The green circle is the current multiple — today&apos;s price against the latest
+          available fundamentals — not a filed period. It is excluded from the mean line, and
+          hidden when the as-of date predates it.
+        </p>
       )}
     </section>
   );

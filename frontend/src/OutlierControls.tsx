@@ -1,0 +1,144 @@
+/**
+ * The toggle, the caption and the expander that go with outlier masking — one
+ * component for the valuation grid and the comparison chart.
+ *
+ * One component because app.py:1044 says why in the reference itself: *"Same
+ * shape as the valuation tab, and the same rule underneath — so a reader moving
+ * between the two tabs does not have to learn a second meaning of 'outlier'."*
+ * Three strings differ between the two and are props; nothing else does.
+ *
+ * **The toggle is absent, not disabled, when nothing would be hidden**
+ * (app.py:942 / app.py:1054, both gated on the report being non-empty). The
+ * comment there is the rule: *"a toggle that appears on a clean chart teaches
+ * the reader to ignore it."* The caller passes an empty report and gets nothing.
+ *
+ * **The expander is the auditability half and it is not optional**
+ * (app.py:1000): *"a silent filter would be the wrong thing in a tool whose
+ * argument is auditability, so every hidden number is one click away, with the
+ * ratio that got it hidden."* It is present whether or not masking is on — you
+ * can read what *would* go before deciding to hide it.
+ */
+import type { HiddenSeries } from "./charts/outliers.ts";
+import { OUTLIER_MEDIAN_RATIO, hiddenTotal } from "./charts/outliers.ts";
+import { csvNumber } from "./data/csv.ts";
+import "./outliers.css";
+
+/** app.py:1009 `{median:,.2f}` — the heading only; the table never rounds. */
+const groupedTwo = (value: number) =>
+  value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/** `{d.m.Y}`, as every other date in this app renders. */
+const day = (date: Date) =>
+  `${String(date.getUTCDate()).padStart(2, "0")}.${String(date.getUTCMonth() + 1).padStart(2, "0")}.${date.getUTCFullYear()}`;
+
+export default function OutlierControls({
+  report,
+  masked,
+  onMasked,
+  label,
+  help,
+  maskedNote,
+  medianLabel,
+}: {
+  /** `outlierReport`'s result. Empty renders nothing at all. */
+  report: readonly HiddenSeries[];
+  masked: boolean;
+  onMasked: (next: boolean) => void;
+  /** Turns a report key into what the reader calls it: a metric label, or a ticker. */
+  label: (key: string) => string;
+  /** The toggle's help text — the two tabs word the rule differently. */
+  help: string;
+  /**
+   * The sentence after `**Hidden:** …`. The valuation grid promises the mean did
+   * not move; the comparison chart has no mean to promise about and says what it
+   * does have instead (app.py:1085).
+   */
+  maskedNote: string;
+  /** `"median"` in the grid, `"own median"` in the comparison chart. */
+  medianLabel: string;
+}) {
+  if (report.length === 0) return null;
+
+  const total = hiddenTotal(report);
+  const summary = report
+    .map((s) => `${label(s.key)} (${s.points.length} point${s.points.length > 1 ? "s" : ""})`)
+    .join(", ");
+
+  return (
+    <div className="outliers">
+      <label className="outliers__toggle" title={help}>
+        <input type="checkbox" checked={masked} onChange={(e) => onMasked(e.target.checked)} />{" "}
+        Hide extreme values
+      </label>
+
+      {/* app.py:991 states the invariance at the point of the change, not only in
+          the toggle's help: "a reader watching points disappear will otherwise
+          assume the average moved with them, which is the one thing that did not
+          happen." */}
+      <p className="caption">
+        {masked ? (
+          <>
+            <strong>Hidden:</strong> {summary}. {maskedNote}
+          </>
+        ) : (
+          <>Extreme values present in: {summary}.</>
+        )}
+      </p>
+
+      <details className="outliers__list">
+        <summary>
+          Show the {total} extreme value{total > 1 ? "s" : ""}
+        </summary>
+        {report.map((series) => (
+          <div key={series.key}>
+            <p className="outliers__head">
+              <strong>{label(series.key)}</strong> — {medianLabel} {groupedTwo(series.median)}
+            </p>
+            <table className="outliers__table">
+              <thead>
+                <tr>
+                  <th scope="col">Period</th>
+                  <th scope="col">Value</th>
+                  <th scope="col">x {medianLabel}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {series.points.map((point) => (
+                  <tr key={point.end.getTime()}>
+                    <td>{day(point.end)}</td>
+                    {/* Full precision, deliberately: this is the audit trail for a
+                        filter, and item 10's display rounding would defeat it. Same
+                        `repr` the CSV downloads use, so a value copied from here
+                        matches one copied from there character for character. */}
+                    <td>{csvNumber(point.value)}</td>
+                    <td>{point.ratio.toFixed(1)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ))}
+      </details>
+    </div>
+  );
+}
+
+/** app.py:945 and app.py:1057 — the two help texts, kept next to the component that shows them. */
+export const VALUATION_MASK_HELP =
+  `Hides points more than ${OUTLIER_MEDIAN_RATIO}x the panel's own median. Applies per panel, ` +
+  "only where such points exist, and only to what is drawn — the values stay in the data tab " +
+  "and the exports.";
+
+export const COMPARISON_MASK_HELP =
+  `Hides points more than ${OUTLIER_MEDIAN_RATIO}x that line's own median. Each ticker is ` +
+  "judged against itself, so a company simply trading at a higher multiple than its peers " +
+  "loses nothing.";
+
+/** app.py:993 and app.py:1086 — the sentence that follows `Hidden: …`. */
+export const VALUATION_MASKED_NOTE =
+  "The mean lines are unchanged — they are still computed over the full series, including the " +
+  "hidden points.";
+
+export const COMPARISON_MASKED_NOTE =
+  "Each line was judged against its own median, so the remaining points are unchanged and still " +
+  "on their original scale.";

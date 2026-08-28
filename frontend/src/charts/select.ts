@@ -46,14 +46,21 @@ export const offerableMetricIds = (registry: Registry, chart: ChartId, ticker: s
   selectMetricIds(registry, chart, ticker, null);
 
 /**
- * figures.py `_window_frame` with `as_of = None`: keep rows whose `end` is at or
+ * figures.py `_window_frame`'s **lower** bound: keep rows whose `end` is at or
  * after `anchor` minus `years` years.
+ *
+ * Unconditional, and that is the whole of the asymmetry between the two bounds.
+ * `_window_frame` (figures.py:155) resolves its anchor to today when `as_of` is
+ * None and *still* applies this line; the upper bound at figures.py:157 runs
+ * only `if as_of is not None`. So there is no "cap at today" default on either
+ * side, and this function stays a single-bound function -- see `seriesFor`'s
+ * `until` for the other half.
  *
  * The anchor carries the time of day, exactly as `pd.Timestamp.today()` does, so
  * a row dated exactly `years` ago at midnight falls outside the window in both
  * implementations. `anchor` is a parameter rather than a call to `new Date()`
- * inside, so a test can pin it -- and so item 15 has somewhere to put `as_of`
- * without rewriting this.
+ * inside, so a test can pin it -- and, since item 15, so the as-of control has
+ * somewhere to attach.
  */
 export function windowCutoff(years: number, anchor: Date = new Date()): Date {
   const cutoff = new Date(anchor.getTime());
@@ -80,12 +87,30 @@ export interface Series {
  * not stored date-major within a (ticker, concept) group -- 110 groups across
  * the export are not even ascending -- so the sort is load-bearing rather than
  * cosmetic. It is stable, so equal dates keep their file order.
+ *
+ * `until` is `_window_frame`'s **upper** bound (figures.py:157):
+ *
+ * ```python
+ * if as_of is not None:
+ *     windowed = windowed[windowed["end"] <= anchor]
+ * ```
+ *
+ * **Optional, and absent is not "today".** It applies exactly when the caller
+ * has an `as_of`, which is why it is a separate argument rather than something
+ * derived from `cutoff`: the valuation grid and the comparison chart pass it,
+ * and `build_fundamentals` / `build_growth` -- which call `_window_frame` with a
+ * hard-coded `as_of=None` (figures.py:589, :646) -- cannot, because they never
+ * receive one. `<=` rather than `<`, so a row dated exactly on the as-of date is
+ * kept, as the reference keeps it.
  */
-export function seriesFor(frame: Frame, concept: string, cutoff: Date): Series {
+export function seriesFor(frame: Frame, concept: string, cutoff: Date, until?: Date): Series {
   const rows: number[] = [];
   const cutoffMs = cutoff.getTime();
+  const untilMs = until === undefined ? Infinity : until.getTime();
   for (let i = 0; i < frame.rowCount; i += 1) {
-    if (frame.concept[i] === concept && frame.end[i].getTime() >= cutoffMs) rows.push(i);
+    if (frame.concept[i] !== concept) continue;
+    const end = frame.end[i].getTime();
+    if (end >= cutoffMs && end <= untilMs) rows.push(i);
   }
   rows.sort((a, b) => frame.end[a].getTime() - frame.end[b].getTime() || a - b);
   return {

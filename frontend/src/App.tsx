@@ -9,26 +9,26 @@
  * Fundamentals and Valuation does not unmount it, and the per-chart metric
  * selections and window values survive for free.
  *
- * They also survive a switch to a *non-chart* tab, and that costs one line: the
- * `ChartView` stays mounted and is hidden with `hidden` rather than being
- * unmounted. Unmounting would throw away a nine-metric selection because the
- * reader glanced at the Data tab, where Streamlit's session state would have
- * kept it. The alternative — lifting the selection and window state up here —
- * would have changed `ChartView`'s props, which this item is meant not to do.
- * If item 9's data tab turns out heavy enough that keeping a figure in the DOM
- * matters, lifting is the escape hatch.
+ * **Every other tab keeps its state by staying mounted too**, which is
+ * `TabPanel`'s whole job — see its docstring for why that is a mounting rule
+ * rather than a store. Streamlit's session state kept a control across a tab
+ * switch for free; here it costs one component, applied to every tab so that no
+ * tab added later has to remember to ask for it.
  *
- * A **view** switch does unmount it. That is the boundary, and it is where the
- * reference's own boundary is: leaving Analysis in `app.py` drops the ticker
- * controls entirely.
+ * A **view** switch does unmount all of it. That is the boundary, and it is
+ * where the reference's own boundary is: leaving Analysis in `app.py` drops the
+ * ticker controls entirely.
  */
 import { useEffect, useState } from "react";
 import ChartView from "./ChartView.tsx";
 import DataTab from "./data/DataTab.tsx";
+import ComparisonView from "./ComparisonView.tsx";
 import { useData } from "./data/DataContext.ts";
 import { DataProvider } from "./data/DataProvider.tsx";
 import Sidebar from "./shell/Sidebar.tsx";
 import Placeholder from "./shell/Placeholder.tsx";
+import RawFactsView from "./RawFactsView.tsx";
+import TabPanel from "./shell/TabPanel.tsx";
 import UpdateNotice from "./shell/UpdateNotice.tsx";
 import GuardScreen from "./shell/GuardScreen.tsx";
 import {
@@ -39,6 +39,7 @@ import {
   formatHash,
   isChartTab,
   parseHash,
+  tabDrawsFigure,
   withTab,
   withTicker,
   withView,
@@ -80,14 +81,18 @@ function Workspace() {
   const { registry, meta, notice, universe, error, loading } = useData();
   const [location, go] = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  // Latches on the first visit to the Data tab and never clears -- see the
-  // comment at its render site. Adjusted during render rather than in an
-  // effect: React's own pattern for state derived from a prop-like value, and
-  // the only one that mounts the tab in the render that first needs it instead
-  // of one render later. The guard makes it run once; a ref would have been
-  // read during render, which is the thing refs are not for.
-  const [dataSeen, setDataSeen] = useState(location.tab === "data");
-  if (!dataSeen && location.tab === "data") setDataSeen(true);
+  // app.py:867's `as_of`, and it lives here for the reason it lives in the
+  // sidebar there: one date reaches two tabs. Unchecking sets it back to null
+  // and forgets the date, which is what Streamlit's unkeyed `st.date_input`
+  // does -- a widget that is not rendered in a run loses its state, so ticking
+  // the box again offers today rather than the previous pick.
+  //
+  // Deliberately **not** in the URL hash. The hash carries view, ticker and tab
+  // (navigation.ts's docstring says why the per-chart selections stay out of
+  // it), and an as-of date has the same property: it is a reading mode, not a
+  // place. Adding it later is a change to `parseHash`/`formatHash` and to this
+  // line, nothing else.
+  const [asOf, setAsOf] = useState<Date | null>(null);
 
   // `.content`'s width changes for two reasons that are not window resizes, and
   // react-plotly.js's `useResizeHandler` listens for exactly one thing: a native
@@ -98,25 +103,34 @@ function Workspace() {
   //   1. **The sidebar collapsing**, which reflows the CSS grid. Measured: the
   //      chart's SVG otherwise keeps the pixel width it had before the click.
   //
-  //   2. **A chart tab being revealed**, which is the same failure one step
-  //      earlier and was live in the shell from the moment tab switching was
-  //      built. `ChartView` is mounted for every tab and merely hidden, so
-  //      landing on a *non*-chart tab mounts `<Plot>` inside a `display: none`
-  //      box: its container measures 0, plotly falls back to `layout.width =
-  //      700`, and revealing the tab grows the container to 1204px while the
-  //      SVG stays at 700. Measured on both this tree and a pre-item-9 one --
-  //      identical, so this is a latent shell defect rather than anything the
-  //      data tab introduced. Landing straight on a chart tab always looked
-  //      right, which is why it survived three cycles.
+  //   2. **A tab holding a figure being revealed**, which is the same failure
+  //      one step earlier and was live in the shell from the moment tab
+  //      switching was built. `ChartView` is mounted for every tab and merely
+  //      hidden, so landing on a *non*-chart tab mounts `<Plot>` inside a
+  //      `display: none` box: its container measures 0, plotly falls back to
+  //      `layout.width = 700`, and revealing the tab grows the container to
+  //      1204px while the SVG stays at 700. Measured on both this tree and a
+  //      pre-item-9 one -- identical, so this is a latent shell defect rather
+  //      than anything the data tab introduced. Landing straight on a chart tab
+  //      always looked right, which is why it survived three cycles.
   //
-  // Gated on the destination being a chart tab: firing while the chart is still
-  // hidden would resize it against a 0-width container, which is the failure
-  // rather than the fix. One synthetic event reaches the same handler a real
-  // resize would, so this stays entirely outside ChartView, `<Plot>` and the
-  // figure spec.
+  //      **The comparison tab joined this case when it stopped being
+  //      unmounted.** While it was conditionally rendered its `<Plot>` mounted
+  //      at the moment it became visible, so it measured correctly every time;
+  //      now that it persists, a sidebar toggle taken while it is hidden
+  //      reaches it exactly as it reaches `ChartView`. Hence `tabDrawsFigure`
+  //      rather than `isChartTab` -- the one part of the persistence fix that
+  //      is not mechanical, and the reason the width harness gained a
+  //      comparison round trip.
+  //
+  // Gated on the destination drawing a figure: firing while it is still hidden
+  // would resize it against a 0-width container, which is the failure rather
+  // than the fix. One synthetic event reaches the same handler a real resize
+  // would, so this stays entirely outside ChartView, ComparisonView, `<Plot>`
+  // and the figure spec.
   const activeTab = location.tab;
   useEffect(() => {
-    if (!isChartTab(activeTab)) return;
+    if (!tabDrawsFigure(activeTab)) return;
     const id = requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
     return () => cancelAnimationFrame(id);
   }, [sidebarOpen, activeTab]);
@@ -150,6 +164,8 @@ function Workspace() {
         profile={profile}
         universe={universe}
         onTicker={(next) => go(withTicker(location, next))}
+        asOf={asOf}
+        onAsOf={setAsOf}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
       />
@@ -193,33 +209,31 @@ function Workspace() {
                 registry={registry}
                 ticker={ticker}
                 chart={isChartTab(tab) ? tab : "valuation"}
+                asOf={asOf}
               />
             </div>
 
-            {/* Mounted on first open and kept mounted afterwards, for the same
-                reason ChartView is: the two period controls are state a reader
-                set, and Streamlit's session state would have kept them across a
-                tab switch. Unlike ChartView it is not mounted up front, because
-                doing so would fetch `facts_full` -- the largest file in the
-                export at 21 kB gzipped -- for someone who only opened the
-                charts. `dataSeen` is the whole cost of having it both ways. */}
-            {dataSeen && (
-              <div hidden={tab !== "data"}>
-                <DataTab ticker={ticker} />
-              </div>
-            )}
-            {tab === "raw" && (
-              <Placeholder title="Raw Facts" item={16}>
-                One bar panel per XBRL concept that has a value for this ticker, with the
-                include-derived toggle.
-              </Placeholder>
-            )}
-            {tab === "comparison" && (
-              <Placeholder title="Comparison" item={12}>
-                One metric across several tickers, each keeping its colour by request position, with
-                the exclusion notice naming what could not be drawn and why.
-              </Placeholder>
-            )}
+            {/* Each mounted on its first open and kept mounted afterwards, so
+                what a reader set on one tab is still there after a look at
+                another. `raw` holds no state of its own yet and goes through the
+                same slot anyway, so item 16 inherits the rule rather than
+                rediscovering it. */}
+            <TabPanel id="data" active={tab}>
+              <DataTab ticker={ticker} />
+            </TabPanel>
+
+            <TabPanel id="raw" active={tab}>
+              <RawFactsView ticker={ticker} />
+            </TabPanel>
+
+            <TabPanel id="comparison" active={tab}>
+              <ComparisonView
+                registry={registry}
+                universe={universe}
+                seed={ticker}
+                asOf={asOf}
+              />
+            </TabPanel>
           </>
         ) : view === "encyclopedia" ? (
           <Placeholder title={VIEW_LABELS.encyclopedia} item={20}>

@@ -195,3 +195,65 @@
   font: inherit;
   cursor: pointer;
 }
+
+/*
+ * The two buttons, the disclosure and the copy result on one row. `flex-wrap`
+ * rather than a fixed row because the "clipboard unavailable" message is a
+ * sentence, not a word, and it must not push the disclosure off the line.
+ */
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.actions__status {
+  color: var(--shell-warn);
+  font-size: 0.85rem;
+}
+
+.copy-block > summary {
+  cursor: pointer;
+  color: var(--shell-text);
+  font-size: 0.85rem;
+}
+
+/*
+ * The pasteable text. Capped and scrolling for the same reason `.table-scroll`
+ * is: eight periods of the widest facts table is ~3.9 kB, which is a lot of
+ * page to push the next section down by when it is open. `white-space: pre`
+ * rather than `pre-wrap` -- a wrapped CSV row is no longer a CSV row, and this
+ * block exists to be copied verbatim.
+ */
+.copy-block > pre {
+  max-height: 22rem;
+  overflow: auto;
+  margin: 0.5rem 0 0;
+  padding: 0.6rem 0.8rem;
+  background: var(--shell-panel);
+  border: 1px solid var(--shell-line);
+  border-radius: 4px;
+  font-size: 0.78rem;
+  white-space: pre;
+  tab-size: 4;
+}
+
+/*
+ * The disclosure is a flex item, so its open panel would otherwise be as narrow
+ * as its summary text. Full width on its own line once open.
+ *
+ * `min-width: 0` is the load-bearing half. A flex item defaults to
+ * `min-width: auto`, which refuses to shrink below its content's min-content
+ * width -- and the `<pre>` inside carries `white-space: pre`, whose min-content
+ * width is its **longest line**. Measured before this was added: opening the
+ * copy blocks took the document's scroll width from 345px to 4,269px and gave
+ * the whole page a horizontal scrollbar, exactly the failure the shell's
+ * `.content { min-width: 0 }` exists to prevent one level up. The `<pre>` keeps
+ * its own `overflow: auto`, so the long lines still scroll -- inside the block,
+ * where they belong.
+ */
+.copy-block {
+  flex-basis: 100%;
+  min-width: 0;
+}
