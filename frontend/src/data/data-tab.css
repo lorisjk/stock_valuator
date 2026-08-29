@@ -257,3 +257,64 @@
   flex-basis: 100%;
   min-width: 0;
 }
+
+/*
+ * The per-period flag grid's disclosure -- `st.expander("Per-period flag
+ * values")` (app.py:457).
+ *
+ * Not `.copy-block`: that one is a flex item inside `.actions` and carries the
+ * `flex-basis`/`min-width` pair for exactly that reason. This one is a block in
+ * the section's normal flow with a table inside, and the table brings its own
+ * `.table-scroll`, so it needs nothing but the pointer and the spacing.
+ */
+.flag-periods {
+  margin-top: 0.9rem;
+}
+
+.flag-periods > summary {
+  cursor: pointer;
+  color: var(--shell-text);
+  font-size: 0.85rem;
+}
+
+.flag-periods > .table-scroll {
+  margin-top: 0.6rem;
+}
+
+/*
+ * The summary's three data columns are two counts and a date, all short, so
+ * left to itself the table sits at its content width and the numbers crowd the
+ * flag names. A minimum pulls them apart without stretching to a wide viewport,
+ * where three narrow columns spread across 1,500px read worse than they do at
+ * 34rem. `.table-scroll` still catches the overflow below that.
+ */
+.data-table--flags {
+  min-width: min(100%, 34rem);
+}
+
+/*
+ * The cadence legend -- `st.caption(marker_legend)` (app.py:424), which
+ * Streamlit renders as small markdown under the table.
+ *
+ * `react-markdown` wraps each hard-break-separated run in its own `<p>`, so the
+ * margins are collapsed here rather than fought with: the reference is one
+ * caption block, not three stacked paragraphs. `<code>` gets the same treatment
+ * the rest of the shell gives inline code, at caption size.
+ */
+.cadence-legend {
+  margin-top: 0.5rem;
+  max-width: 78ch;
+}
+
+.cadence-legend p {
+  margin: 0;
+}
+
+.cadence-legend p + p {
+  margin-top: 0.3rem;
+}
+
+.cadence-legend code {
+  font-size: 0.95em;
+  color: var(--shell-text);
+}

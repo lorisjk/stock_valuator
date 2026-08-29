@@ -1,6 +1,11 @@
 /**
  * The application shell: sidebar, four views, six Analysis tabs.
  *
+ * As of item 22 every view and every tab is built, so this file holds no
+ * `Placeholder` any more -- that component's only job was to make an unbuilt
+ * surface read as deliberately pending, and there is none left. It was deleted
+ * with its last call site rather than left orphaned.
+ *
  * This is `app.py`'s `main()` and `render_analysis()` (app.py:815-900) as one
  * component. It wraps and routes; it does not compute anything a view needs.
  *
@@ -20,13 +25,15 @@
  * ticker controls entirely.
  */
 import { useEffect, useState } from "react";
+import About from "./About.tsx";
 import ChartView from "./ChartView.tsx";
 import DataTab from "./data/DataTab.tsx";
 import ComparisonView from "./ComparisonView.tsx";
+import Coverage from "./Coverage.tsx";
+import Encyclopedia from "./Encyclopedia.tsx";
 import { useData } from "./data/DataContext.ts";
 import { DataProvider } from "./data/DataProvider.tsx";
 import Sidebar from "./shell/Sidebar.tsx";
-import Placeholder from "./shell/Placeholder.tsx";
 import RawFactsView from "./RawFactsView.tsx";
 import TabPanel from "./shell/TabPanel.tsx";
 import UpdateNotice from "./shell/UpdateNotice.tsx";
@@ -35,7 +42,6 @@ import {
   DEFAULT_LOCATION,
   TABS,
   TAB_LABELS,
-  VIEW_LABELS,
   formatHash,
   isChartTab,
   parseHash,
@@ -236,20 +242,11 @@ function Workspace() {
             </TabPanel>
           </>
         ) : view === "encyclopedia" ? (
-          <Placeholder title={VIEW_LABELS.encyclopedia} item={20}>
-            Every metric the pipeline computes with the formula it actually uses, filterable, plus
-            the warning listing any metric that has no documentation.
-          </Placeholder>
+          <Encyclopedia registry={registry} />
         ) : view === "coverage" ? (
-          <Placeholder title={VIEW_LABELS.coverage} item={21}>
-            The full metric-by-profile matrix — which of the 52 metrics each of the 24 profiles
-            shows and hides.
-          </Placeholder>
+          <Coverage registry={registry} />
         ) : (
-          <Placeholder title={VIEW_LABELS.about} item={22}>
-            The About page, rendered from <code>content/about.md</code>, including its disclaimer
-            callout.
-          </Placeholder>
+          <About />
         )}
       </main>
     </div>

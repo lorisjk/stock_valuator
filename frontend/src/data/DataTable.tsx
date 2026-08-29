@@ -16,6 +16,7 @@
  * has no way to write a formatted string back anywhere, which is what keeps the
  * CSV path on the numbers. See the note on `formats` below.
  */
+import type { FlagSummaryRow } from "./flags.ts";
 import type { CellFormat } from "./format.ts";
 import { formatCell } from "./format.ts";
 import type { Pivot } from "./pivot.ts";
@@ -24,6 +25,7 @@ export default function DataTable({
   pivot,
   formats,
   caption,
+  markers,
 }: {
   pivot: Pivot;
   /**
@@ -36,6 +38,16 @@ export default function DataTable({
    */
   formats: readonly CellFormat[];
   caption: string;
+  /**
+   * concept -> cadence marker, appended to the header with a space exactly as
+   * `render_data_section` does (app.py:421 `f"{concept} {marker}"`).
+   *
+   * On the **header** and nowhere else, which is what keeps the export clean:
+   * the marker never enters the `Pivot`, so `pivotToCsv` cannot see it and the
+   * download keeps the filed concept name. The reference relies on the same
+   * separation -- it renames the *display* frame, not `shown`.
+   */
+  markers?: ReadonlyMap<string, string>;
 }) {
   return (
     <div className="table-scroll">
@@ -46,11 +58,14 @@ export default function DataTable({
             <th scope="col" className="data-table__corner">
               end
             </th>
-            {pivot.concepts.map((concept) => (
-              <th scope="col" key={concept}>
-                {concept}
-              </th>
-            ))}
+            {pivot.concepts.map((concept) => {
+              const marker = markers?.get(concept);
+              return (
+                <th scope="col" key={concept}>
+                  {marker === undefined ? concept : `${concept} ${marker}`}
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
@@ -128,6 +143,63 @@ export function PairTable({
               ) : (
                 <td className="cell">{formatCell(value, format)}</td>
               )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
+ * The quality-flag summary: one row per flag, `raised` / `periods evaluated` /
+ * `most recent` (app.py:445-453).
+ *
+ * A third table shape rather than a `Pivot` with three columns, because it is
+ * not one -- its cells are two counts and a date, none of which is a measured
+ * quantity and none of which goes anywhere near `format.ts`. Handing it to
+ * `DataTable` would mean inventing a `CellFormat` that prints a date, which is
+ * how a formatting layer starts growing cases that have nothing to do with the
+ * rule it exists to apply.
+ *
+ * The column headings are the reference's own dictionary keys, verbatim,
+ * including the lowercase and the two-word `periods evaluated`: `st.dataframe`
+ * renders them as-is and they are what the reader is comparing against.
+ */
+export function FlagSummaryTable({
+  rows,
+  caption,
+}: {
+  rows: readonly FlagSummaryRow[];
+  caption: string;
+}) {
+  return (
+    <div className="table-scroll">
+      <table className="data-table data-table--flags">
+        <caption className="sr-only">{caption}</caption>
+        <thead>
+          <tr>
+            <th scope="col" className="data-table__corner">
+              flag
+            </th>
+            <th scope="col">raised</th>
+            <th scope="col">periods evaluated</th>
+            <th scope="col">most recent</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ flag, raised, evaluated, mostRecent }) => (
+            <tr key={flag}>
+              <th scope="row" className="data-table__corner">
+                {flag}
+              </th>
+              <td className="cell">{raised}</td>
+              <td className="cell">{evaluated}</td>
+              {/* app.py:452 -- an em dash for "never". The tables use the same
+                  character for a missing cell, but it means something else
+                  here (evaluated every period and raised in none of them,
+                  which is good news), so it is not a `cell--null`. */}
+              <td className="cell">{mostRecent ?? "—"}</td>
             </tr>
           ))}
         </tbody>

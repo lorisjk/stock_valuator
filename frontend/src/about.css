@@ -1,0 +1,57 @@
+/*
+ * The About page. Prose end to end, so it takes the reading measure
+ * `encyclopedia.css` uses and `coverage.css` deliberately does not — there is no
+ * table here to starve.
+ */
+
+.about {
+  max-width: 78ch;
+}
+
+.about h3 {
+  margin: 1.4rem 0 0.4rem;
+  font-size: 1.05rem;
+}
+
+.about__section:first-of-type h3 {
+  margin-top: 0.6rem;
+}
+
+.about__body p,
+.about__disclaimer p {
+  margin: 0.5rem 0;
+}
+
+.about__body ul,
+.about__disclaimer ul {
+  padding-left: 1.2rem;
+}
+
+.about__body li {
+  margin: 0.25rem 0;
+}
+
+/*
+ * `.notice-inline` is `display: inline-block` and sized for one sentence; the
+ * disclaimer is five paragraphs. Block and full-measure, keeping the class's
+ * border, background and warn-coloured left edge — the callout's identity — and
+ * overriding only the sizing that was never meant for prose.
+ */
+.about__disclaimer {
+  display: block;
+  width: 100%;
+  padding: 0.7rem 1rem;
+}
+
+.about__disclaimer > :first-child > :first-child {
+  margin-top: 0;
+}
+
+.about__disclaimer > :last-child > :last-child {
+  margin-bottom: 0;
+}
+
+/* Long URLs in Source code / Contact must not push the column wider. */
+.about__body a {
+  word-break: break-word;
+}

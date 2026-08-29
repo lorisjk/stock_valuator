@@ -1,105 +1,109 @@
-# Task: The Empty-Panel Notice — Item 17
+# Task: The About Page — Item 22
 
-**Read first:** `frontend_raw_facts_chart_report.md` §5.2 (the open question this task must resolve
-first: is the reference's notice valuation-only by design or by omission, given the raw facts chart
-produces "No Data" panels just as routinely), `frontend_as_of_control_report.md` §4.6 (the empty-
-result case at an extreme `as_of` — 295 "No Data" panels in one sweep, the closest existing measurement
-of how bad this gets), `frontend_data_tab_report.md` (the data tab's own null-column caption — a
-related but distinct feature; confirm the boundary before assuming this task extends it),
-`streamlit_inventory.md` §2.2 and §3.3, and `app.py`'s empty-panel notice code (likely near
-`empty_valuation_panels` or similar, per the raw-facts report's naming) as the reference.
+**Read first:** `frontend_profile_coverage_report.md` §4 "For item 22" (states directly:
+`split_sections` at app.py:720 is the page's structure, exists specifically so the `disclaimer`
+section renders as a callout while every other section passes through as ordinary markdown in file
+order; `react-markdown` is proven four times over; `fetchNotice` at `load.ts:194` is the working
+fetch-a-markdown-file pattern including its lenient failure mode; `content/about.md`'s three factual
+claims about coverage gaps, provenance and quality flags are now all true of the build), the current
+`content/about.md`, `app.py`'s About rendering (`split_sections` and its call site) as the reference,
+and `Placeholder.tsx` (this task empties its only remaining call site — read its docstring, quoted in
+the last report, before deciding whether to delete it).
 
 ## Context
 
-Every chart in this frontend already has a per-panel "No Data" placeholder (the bare-axis-id
-mechanism from the placeholder-fix cycle, structurally sound and unchanged since). What's missing is
-a **chart-level** summary: when several panels in a grid are empty — a narrow years window, a ticker
-with sparse data, an aggressive `as_of` — the reference apparently tells the reader that at the chart
-level, not just leaves them to notice several red "No Data" boxes on their own.
+This is the last item on the rebuild list. Twenty-one items in, the patterns are established: read
+the reference exactly, reuse rather than restate, verify against the function/data the page renders
+rather than against a plausible-looking copy, and report what's still open rather than closing gaps
+silently.
 
-**This task starts with a scope question the last cycle raised and did not answer**: is this
-valuation-only in the reference, or does it belong wherever multi-panel grids exist? Answer this from
-the code before designing anything — the raw facts chart's 202 empty panels in one verification sweep
-is a real signal that the reference might already handle this generally, or might have a real gap
-this task should document rather than silently extend past what `app.py` does.
+`about.md` already exists and was written for the Streamlit build; it needs no new content, only a
+faithful rendering path — `split_sections`'s whole reason to exist, per the hand-off, is that it lets
+**one named section** (`disclaimer`) render differently from the rest while everything else is
+ordinary markdown, in the file's own order.
 
-**Explicitly NOT in this task:** no changes to the per-panel "No Data" placeholder mechanism itself
-(structurally correct, verified across six chart types now). No changes to the data tab's null-column
-caption (a different feature — confirm and respect the boundary). No changes to outlier masking,
-the snapshot marker, or the as-of control's own logic. No changes to `panel.ts`'s core drawing
-functions beyond what's needed to read/report emptiness, which likely already exists (`PanelSpec.empty`
-per item 4's original design).
+**Explicitly NOT in this task:** no changes to `about.md`'s text — if something in it is now false or
+needs updating given what's shipped, say so in the report rather than editing content that belongs to
+the operator. No changes to any chart, table, encyclopedia, or coverage code. No changes to the
+sidebar, the update notice, or the missing-data guard (items 23/24, already shipped with the shell).
 
 ---
 
-## Step 1 — Resolve the scope question first
+## Step 1 — Read the reference exactly
 
-1. **Does `app.py` have this notice at all, and if so, where** — search for it near the valuation
-   tab, and confirm whether the fundamentals, growth, comparison, or raw facts tabs have anything
-   equivalent. State the exact scope as the reference actually ships it, not as the inventory
-   summarized it.
-2. **If it is valuation-only by explicit design**, find the reasoning (a comment, a docstring) —
-   the raw-facts report speculated this might be deliberate; confirm or refute.
-3. **If it is valuation-only with no stated reason**, that is the "omission" case the last cycle
-   flagged. State plainly whether you think it should extend to other charts and why, but **do not
-   extend it beyond the reference without saying so explicitly and treating it as a deviation** —
-   this project's standing discipline is to port the reference faithfully and flag disagreements,
-   not to silently improve on it.
-4. **The exact trigger and content**, wherever it appears: a count threshold (any empty panel, or
-   only when more than N are empty), the message text, and whether it differentiates *why* panels
-   are empty (narrow window vs. no data at all vs. `as_of` set) or reports a flat count.
+1. **`split_sections`'s exact contract**: the split rule (`## ` headings, confirmed per the hand-off
+   — verify the exact marker rather than assuming two-hash specifically), what comes back for
+   content before the first heading, and the exact return shape (a list of `(heading, body)` pairs,
+   a dict, something else).
+2. **Which heading triggers the disclaimer treatment**, and what that treatment actually is — a
+   `st.warning`/`st.error`-equivalent callout, a bordered box, something else. Confirm the exact
+   visual/semantic difference, not just "it's special."
+3. **Every other section's treatment** — confirmed per the hand-off to be "ordinary markdown," but
+   verify there is no second special case (e.g. does a section titled differently also get unusual
+   treatment, or is `disclaimer` genuinely the only one).
+4. **Page order**: file order, confirmed — verify this holds for the actual current `about.md`
+   rather than assuming the file hasn't changed shape since the hand-off was written.
+5. **Where `about.md` is fetched from** in the reference (a repo path, a packaged resource) and
+   confirm the frontend's existing sibling copy (per the hand-off, already at a path next to
+   `update_notice.md`) is content-identical to what `app.py` actually reads, not just similarly named.
+
+State each with its source line.
 
 ## Step 2 — Design
 
-1. **Where this task's changes go**, based on Step 1's scope finding — likely only the valuation
-   chart's view component, possibly the comparison chart if Step 1 finds it in scope there too.
-2. **The data source for the notice**: `PanelSpec.empty` (or equivalent) already exists per-panel
-   in the shared layer per item 4's design; this notice is very likely just a `filter` + `count`
-   over the already-built panel specs, not a new computation. Confirm this is sufficient before
-   building anything that re-derives emptiness independently — a second emptiness computation that
-   could disagree with the panels actually drawn would repeat exactly the failure mode
-   `outlier_report`'s co-derivation was built to prevent (item 14, figures.py's own comment: "the
-   control could name points the chart does not draw, or miss ones it does").
-3. **Interaction with the years window and as-of**: since both can independently make panels empty
-   (item 8, item 15), confirm the notice recomputes correctly as either control moves, using the
-   same "state holds raw intent, effective value is derived" pattern established since the pickers
-   cycle.
+1. **The fetch**, reusing `fetchNotice`'s pattern from `load.ts:194` exactly, including its lenient
+   failure mode — state what "lenient" means precisely (a missing file produces what, on screen).
+2. **The split**, as a pure, testable function mirroring `split_sections`'s exact contract from Step
+   1.1 — matching the project's established pattern (`mean.ts`, `notice.ts`, the picker-narrowing
+   rules) of keeping a reference rule in an isolated, Node-testable module.
+3. **The disclaimer's rendering**, matching Step 1.2 exactly — reuse an existing callout style from
+   the shell if one already matches (`.notice-inline` has been the vocabulary for warning-shaped
+   content since item 12; confirm whether it fits or whether the reference's disclaimer treatment is
+   visually distinct enough to need its own class).
+4. **`Placeholder.tsx`'s fate**: with this item built, its only remaining call site is gone. State
+   whether it is deleted, and confirm via a repo-wide search that nothing else references it before
+   removing it — an unused-but-undeleted placeholder component is a small paper cut, but leaving it
+   half-orphaned is worse than either keeping or removing it deliberately.
 
 ## Step 3 — Implement
 
-Add the notice, matching Step 1's exact scope, trigger, and message.
+Build the About page, replacing the shell's last placeholder.
 
 ## Step 4 — Verify
 
-1. **Against the reference, exactly**: for a sample of tickers/windows/as-of settings producing a
-   range of empty-panel counts (zero, a few, many — reuse the as-of report's extreme
-   `as_of = 1990-01-01` case for the "many" end), confirm the notice's presence/absence and its exact
-   text matches `app.py`'s output.
-2. **The notice tracks the actual drawn panels**, not a separately-computed count: pick a scenario,
-   verify the reported count equals the number of "No Data" panels actually rendered in that figure,
-   for several tickers.
-3. **It updates correctly** as the years slider and the as-of control move independently, without a
-   page reload or stale count.
-4. **Scope discipline**: if Step 1 found this valuation-only in the reference, confirm the notice
-   does **not** appear on fundamentals, growth, comparison, or raw facts — even in scenarios (like
-   the raw facts chart's 202-empty-panel sweep from the last cycle) where it would seem useful. If
-   you deviated from the reference's scope, this check instead confirms the deviation was applied
-   consistently and is documented, not silently inconsistent.
-5. **Nothing else regressed**: `check-chart-width`, `check-tab-state`, `check-table-format` at their
-   current baselines (36/36, 13/13, 6,107/6,107 per the last cycle), and A/B sweeps against the
-   established item 8/11/12/13/14/15/16 baselines (reverted-tree method).
-6. `npx tsc -b`, `npx eslint .`, `npx vite build` clean. Nothing outside `frontend/` changed.
+1. **Against the reference, exactly**: every section's heading and body text, rendered and compared
+   against `split_sections(about.md)`'s output for each `(heading, body)` pair, in file order.
+2. **The disclaimer section specifically**: confirm it renders with the distinct treatment from Step
+   1.2, and confirm every *other* section does not — the same "is this genuinely the only special
+   case" check Step 1.3 raised, now verified in the browser rather than only read from the code.
+3. **Content fidelity**: the fetched file's content matches what's checked into `content/about.md`
+   exactly (byte-for-byte), and the three factual claims the hand-off named (coverage gaps §Data tab,
+   provenance §cadence markers, quality flags §item 18) render as written — this is a content check,
+   not a claim this task should re-litigate the truth of.
+4. **The missing-file case**: temporarily rename/hide the fetched file and confirm the lenient
+   failure mode from Step 2.1 behaves as designed, then restore it and confirm the page is unchanged
+   (hash the file before/after, matching the fixture-plus-hash-restore method from item 20).
+5. **`Placeholder.tsx`'s removal** (if Step 2.4 decided to remove it): confirm the build has zero
+   references to it and the app still builds and runs every other view correctly.
+6. **Nothing else regressed**: `check-chart-width`, `check-tab-state`, `check-table-format` at
+   current baselines (36/36, 13/13, 6,107/6,107), chart-builder A/B unchanged, and the item 20/21
+   encyclopedia/coverage A/B checks unchanged — this task should touch nothing either of them reads.
+7. `npx tsc -b`, `npx eslint .`, `npx vite build` clean. Nothing outside `frontend/` (and, only if
+   Step 1.5 found a genuine content drift, `content/about.md` itself, flagged clearly rather than
+   silently edited) changed.
 
 ## Output
 
-One file, `frontend_empty_panel_notice_report.md`:
+One file, `frontend_about_page_report.md`:
 
-1. The Step 1 scope resolution — exactly where the reference has this, with source lines, and the
-   explicit decision on whether this port matches that scope or deviates (with reasoning, if so).
-2. The Step 2 design decisions, especially confirming the notice derives from existing panel specs
-   rather than a second computation.
+1. The Step 1 reference reading, each point with its source line — especially the exact split
+   contract and confirmation the disclaimer is the only special case.
+2. The Step 2 design decisions, including `Placeholder.tsx`'s fate.
 3. What was implemented, by file.
-4. The Step 4 verification results, especially the count-matches-drawn-panels check.
-5. Anything item 18 (quality-flag summary) or item 19 (cadence markers) should know.
+4. The Step 4 verification results, especially the content-fidelity and missing-file checks.
+5. **A summary statement**: this is the last item on the rebuild list — confirm the full check suite
+   (chart width, tab state, table format, and every prior item's A/B baseline) all pass together in
+   one final run, as a closing confirmation that the rebuild is complete and self-consistent end to
+   end.
 
 No scratch files left behind.

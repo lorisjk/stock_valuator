@@ -238,7 +238,7 @@
   border-bottom-color: var(--shell-strong);
 }
 
-/* ------------------------------------------------- notice, guard, placeholder */
+/* ------------------------------------------------------- notice and guard */
 
 /*
  * A callout, not prose -- it does not inherit `.intro`'s cap and never did.
@@ -278,8 +278,7 @@
   flex: 1;
 }
 
-.notice button,
-.placeholder__badge {
+.notice button {
   background: var(--shell-bg);
   color: var(--shell-strong);
   border: 1px solid var(--shell-line);
@@ -292,23 +291,6 @@
 .notice button {
   cursor: pointer;
   margin-left: auto;
-}
-
-.placeholder {
-  border: 1px dashed var(--shell-line);
-  border-radius: 6px;
-  padding: 1.2rem 1.4rem;
-  max-width: 68ch;
-}
-
-.placeholder h2 {
-  color: var(--shell-strong);
-  margin-top: 0;
-}
-
-.placeholder__badge {
-  display: inline-block;
-  font-size: 0.8rem;
 }
 
 .guard,

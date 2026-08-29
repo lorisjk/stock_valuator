@@ -1,0 +1,97 @@
+/*
+ * The Metric encyclopedia's own styling. Everything shared -- `.tabs`/`.tab`,
+ * `.caption`, `.notice-inline` -- is reused rather than restated; what is here
+ * is the page's prose shape and nothing else.
+ */
+
+/*
+ * A reading measure, not the full grid cell. This page is 52 paragraphs of
+ * prose with no table and no figure in it, and at a 1600px viewport an
+ * unconstrained column runs to ~140 characters -- roughly twice what anyone
+ * tracks a line at. The charts and tables want the whole width; this does not.
+ */
+.encyclopedia {
+  max-width: 78ch;
+}
+
+.encyclopedia__lede {
+  margin: 0.4rem 0 1rem;
+}
+
+/*
+ * `st.text_input("Filter", ...)`: a label above its box, not beside it, which is
+ * how every other control in this build reads.
+ */
+.encyclopedia__filter {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-width: 26rem;
+  font-size: 0.9rem;
+}
+
+.encyclopedia__filter input {
+  background: var(--shell-bg);
+  color: var(--shell-text);
+  border: 1px solid var(--shell-line);
+  border-radius: 4px;
+  padding: 0.4rem 0.6rem;
+  font: inherit;
+}
+
+/*
+ * The two mechanism notes. They are long-form markdown with bullet lists, and
+ * `react-markdown` gives each list its browser default indent -- kept, because
+ * the reference is `st.markdown` and gets the same.
+ */
+.mechanism {
+  font-size: 0.9rem;
+}
+
+.mechanism ul {
+  padding-left: 1.2rem;
+}
+
+.mechanism li {
+  margin: 0.35rem 0;
+}
+
+.encyclopedia h4 {
+  margin: 1.2rem 0 0.2rem;
+  font-size: 1.05rem;
+}
+
+/*
+ * The id under the label. `.caption` already dims it; the code face is what
+ * says "this is the string you type into a URL or a filter", which is exactly
+ * what it is for.
+ */
+.encyclopedia .caption code,
+.encyclopedia__lede code {
+  font-size: 0.95em;
+}
+
+/*
+ * `react-markdown` wraps each block in a `<p>`; two of them per entry would
+ * otherwise stack a full paragraph gap between a description and its formula
+ * line, which the reference does not have.
+ */
+.entry__prose p {
+  margin: 0.35rem 0;
+}
+
+/*
+ * `st.divider()` after every entry (app.py:674). A hairline, not a rule: it
+ * separates 29 entries in a row and a heavy line would turn the page into a
+ * ladder.
+ */
+.encyclopedia hr,
+.mechanism hr {
+  border: 0;
+  border-top: 1px solid var(--shell-line);
+  margin: 1rem 0 0;
+}
+
+.encyclopedia code {
+  color: var(--shell-strong);
+}

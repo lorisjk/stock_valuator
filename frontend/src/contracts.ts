@@ -184,6 +184,16 @@ export interface Frame {
    * `null` at these positions -- see reconstructFrame for the reasoning.
    */
   nonfiniteRows: Map<number, "Infinity" | "-Infinity">;
+  /**
+   * The non-numeric columns carried through, by column name. Empty for every
+   * frame but `facts_full`, which carries `ttm_source` -- see `TEXT_COLUMNS` in
+   * `load.ts` for why this is a map rather than a named field.
+   *
+   * `null` where the export had no label, and that is a real state: a row with
+   * no value carries no provenance, and reading absence as a label would claim
+   * the pipeline established something it did not.
+   */
+  text: ReadonlyMap<string, readonly (string | null)[]>;
 }
 
 export type Frames = Partial<Record<FrameName, Frame>>;

@@ -1,0 +1,102 @@
+/*
+ * Profile coverage. Two halves with opposite width needs, which is the whole of
+ * this file.
+ *
+ * **No 78ch measure here.** `encyclopedia.css` caps its page because it is 52
+ * paragraphs of prose; this page's lower half is a 27-column table that wants
+ * every pixel of the grid cell. The per-profile lists above it are prose-ish but
+ * are comma runs of short labels rather than sentences, so they wrap fine at full
+ * width and capping the page would starve the matrix.
+ */
+
+.coverage__lede {
+  margin: 0.4rem 0 1rem;
+  max-width: 78ch;
+}
+
+.coverage__picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-width: 22rem;
+  font-size: 0.9rem;
+}
+
+.coverage__picker select {
+  background: var(--shell-bg);
+  color: var(--shell-text);
+  border: 1px solid var(--shell-line);
+  border-radius: 4px;
+  padding: 0.4rem 0.6rem;
+  font: inherit;
+}
+
+.coverage__section {
+  margin-top: 1.1rem;
+}
+
+.coverage__section h3 {
+  margin: 0 0 0.3rem;
+  font-size: 1rem;
+}
+
+/*
+ * A comma run of ~25 backticked labels. `max-width` on the paragraph rather than
+ * the page, so the matrix below is unaffected; the labels themselves must not
+ * break mid-name, which is what `white-space: nowrap` on the code face buys.
+ */
+.coverage__list {
+  margin: 0.25rem 0;
+  max-width: 96ch;
+  line-height: 1.7;
+}
+
+.coverage__list code {
+  white-space: nowrap;
+  color: var(--shell-strong);
+}
+
+.coverage .caption code {
+  color: var(--shell-strong);
+}
+
+.coverage hr {
+  border: 0;
+  border-top: 1px solid var(--shell-line);
+  margin: 1.6rem 0 1rem;
+}
+
+/*
+ * The matrix. `.data-table` right-aligns every cell, which is right for numbers
+ * and wrong for a column of ticks under a profile name -- centred, they read as
+ * a column instead of as ragged marks against the next header.
+ */
+.coverage__matrix td.cell {
+  text-align: center;
+}
+
+.coverage__matrix td.coverage__chart {
+  text-align: left;
+  opacity: 0.75;
+}
+
+/*
+ * Shown versus hidden has to survive a glance across 24 columns, so the two
+ * marks differ in weight as well as in shape: a `·` at half strength recedes and
+ * a `✓` does not. Colour alone would not do it -- the distinction has to hold
+ * for a reader who cannot separate the hues, which is why the glyphs differ in
+ * the first place (the reference's own choice, app.py:714).
+ */
+.coverage__matrix .coverage__on {
+  color: var(--shell-strong);
+}
+
+.coverage__matrix .coverage__off {
+  color: var(--shell-text);
+  opacity: 0.4;
+}
+
+/* The profile headers are the widest thing in the row; keep them on one line. */
+.coverage__matrix thead th {
+  white-space: nowrap;
+}

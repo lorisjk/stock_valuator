@@ -27,10 +27,37 @@ const VALUE_COLUMN: Record<FrameName, string> = {
   current_snapshot: "value",
   // facts_full carries `yoy_growth` too, and the data tab does not read it:
   // app.py's pivot_ticker takes `value` and the growth chart reads the separate
-  // facts_growth frame. `ttm_source` and `ffo_gains_source` are likewise not
-  // reconstructed -- ttm_source is item 19's cadence markers, and app.py has
-  // never read ffo_gains_source at all (inventory §2.6).
+  // facts_growth frame.
   facts_full: "value",
+};
+
+/**
+ * The non-numeric columns each frame carries through, beyond `end`/`concept`.
+ *
+ * A map keyed by column name rather than a named field on `Frame`, and the
+ * reason is the second entry that is *not* here. `facts_full` exports two
+ * provenance columns built by the same instrument -- `ttm_source` (config.py:213
+ * "How a <concept>_TTM value was derived") and `ffo_gains_source` (config.py:216
+ * "Same instrument as ttm_source and for the same reason"). Only the first is
+ * read: `cadence_markers` (app.py:257) is the sole consumer of either, and
+ * **app.py never reads `ffo_gains_source` at all** -- inventory §2.6 records it
+ * as exported-and-unused and §6's decision list keeps "surface it or stop
+ * exporting it" open. Surfacing it here would be deciding that on the
+ * reference's behalf.
+ *
+ * So the shape is the convention and the list is the scope: adding
+ * `"ffo_gains_source"` to this array is the whole change, whenever that decision
+ * is made, and until then there is one convention rather than a named field for
+ * one column and an argument about the next.
+ *
+ * A column named here that the export does not carry is skipped rather than
+ * thrown on -- the frames' schema version gates real contract drift, and an
+ * older bundle missing a provenance column should degrade to "no markers", which
+ * is exactly what `cadence_markers` does with a frame that has no `ttm_source`
+ * (app.py:272).
+ */
+const TEXT_COLUMNS: Partial<Record<FrameName, readonly string[]>> = {
+  facts_full: ["ttm_source"],
 };
 
 /**
@@ -82,6 +109,12 @@ export function reconstructFrame(name: FrameName, block: ColumnarFrame): Frame {
     for (const [row, sign] of Object.entries(sidecar)) nonfiniteRows.set(Number(row), sign);
   }
 
+  const text = new Map<string, readonly (string | null)[]>();
+  for (const column of TEXT_COLUMNS[name] ?? []) {
+    const at = block.columns.indexOf(column);
+    if (at >= 0) text.set(column, block.data[at] as (string | null)[]);
+  }
+
   return {
     columns: block.columns,
     rowCount: endColumn.length,
@@ -95,6 +128,10 @@ export function reconstructFrame(name: FrameName, block: ColumnarFrame): Frame {
     // task reads it yet, and that is the deliberate part.
     value: valueColumn,
     nonfiniteRows,
+    // Row `i` of every array is the same export row, this one included, which is
+    // what lets a caller pair a provenance label with the value it describes
+    // without a join.
+    text,
   };
 }
 
@@ -194,6 +231,33 @@ export const fetchMeta = async (base = ""): Promise<Meta> =>
 export async function fetchNotice(base = ""): Promise<string | null> {
   try {
     const response = await fetch(`${base}/update_notice.md`);
+    if (!response.ok) return null;
+    const type = response.headers.get("content-type") ?? "";
+    if (type.includes("html")) return null;
+    return await response.text();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `about.md`'s raw markdown, or null when it is not there.
+ *
+ * `fetchNotice`'s twin, deliberately down to the two guards -- a non-ok status
+ * and an `html` content type, because a dev or preview server answers an unknown
+ * path with `index.html` at status 200 and the body would otherwise be rendered
+ * as the About page.
+ *
+ * **Where the two part company is what the caller does with `null`.** For the
+ * notice, absent means "nothing to announce" and the box is simply not drawn
+ * (app.py:114's docstring says so). For About, `render_about` (app.py:748-756)
+ * calls the same absence *"a deployment mistake rather than a valid state, so
+ * unlike the notice it says so -- but it still must not raise."* Same lenient
+ * fetch, opposite reading; the difference lives in `About.tsx`, not here.
+ */
+export async function fetchAbout(base = ""): Promise<string | null> {
+  try {
+    const response = await fetch(`${base}/about.md`);
     if (!response.ok) return null;
     const type = response.headers.get("content-type") ?? "";
     if (type.includes("html")) return null;

@@ -19,16 +19,21 @@
  *
  * What is deliberately *not* here, so the boundary is legible from the code as
  * well as from the report: no copy blocks (item 11), no cadence markers
- * (item 19 -- `ttm_source` is not even reconstructed), and no quality-flag
- * summary table (item 18 -- the flags are shown as the per-period values they
- * are, which is the raw material that summary is computed from).
+ * (item 19 -- `ttm_source` is not even reconstructed). The quality-flag
+ * summary arrived with item 18 and is the one section whose shape changed
+ * afterwards: item 9 showed the per-period 0/1 grid at the top level and hid
+ * nothing, which is the reference's prominence inverted, and item 18 put the
+ * summary above it and the grid into a disclosure.
  */
 import { useMemo, useState } from "react";
+import ReactMarkdown from "react-markdown";
 import type { Metric } from "../contracts.ts";
 import { useConceptCandidates, useData, useTickerFacts, useTickerFrames } from "./DataContext.ts";
-import DataTable, { PairTable } from "./DataTable.tsx";
+import DataTable, { FlagSummaryTable, PairTable } from "./DataTable.tsx";
 import SectionActions from "./SectionActions.tsx";
+import { cadenceMarkers } from "./cadence.ts";
 import { DEFAULT_COPY_PERIODS, pairsToCsv, pivotToCsv } from "./csv.ts";
+import { flagSummary } from "./flags.ts";
 import { columnFormat, metricsById, valueFormat, type CellFormat } from "./format.ts";
 import {
   DEFAULT_TABLE_PERIODS,
@@ -61,6 +66,7 @@ function Section({
   periods,
   byId,
   file,
+  cadence,
 }: {
   title: string;
   caption: string;
@@ -70,6 +76,14 @@ function Section({
   byId: ReadonlyMap<string, Metric>;
   /** Download file name, or null for a section that offers no download. */
   file: string | null;
+  /**
+   * Cadence markers and their legend, for the one section that has them.
+   *
+   * `render_data_section` takes both as optional arguments and four of the five
+   * calls pass neither (app.py:587 is the only one that does), so they are
+   * optional here for the same reason rather than as a generalisation.
+   */
+  cadence?: { markers: ReadonlyMap<string, string>; legend: string };
 }) {
   const shown = useMemo(() => headPeriods(pivot, periods), [pivot, periods]);
   const empty = useMemo(() => allNullColumns(shown), [shown]);
@@ -88,6 +102,14 @@ function Section({
       ),
     [shown, byId],
   );
+  // `shown.concepts` rather than the whole pivot's: the reference gates on
+  // `shown.columns` (app.py:423), and those are the filtered columns. The row
+  // count never enters it -- `head(periods)` drops rows, not columns -- so
+  // "Show all periods" cannot make the legend appear or vanish.
+  const legend = useMemo(() => {
+    if (!cadence || cadence.legend === "") return null;
+    return shown.concepts.some((c) => cadence.markers.has(c)) ? cadence.legend : null;
+  }, [cadence, shown]);
 
   return (
     <section className="section">
@@ -110,7 +132,18 @@ function Section({
             pivot={shown}
             formats={formats}
             caption={`${title} for the selected ticker`}
+            markers={cadence?.markers}
           />
+          {/* app.py:423 -- the legend renders only when at least one *marked*
+              concept is among the columns on screen, so switching the facts
+              filter to "Raw only" takes it away with the columns it describes.
+              It still names every marked concept, including ones the current
+              filter hides: it is the ticker's provenance, not the view's. */}
+          {legend !== null && (
+            <div className="caption cadence-legend">
+              <ReactMarkdown>{legend}</ReactMarkdown>
+            </div>
+          )}
           {file && (
             <SectionActions
               file={file}
@@ -158,6 +191,12 @@ export default function DataTab({ ticker }: { ticker: string }) {
     [factsPivot, candidates, factFilter],
   );
 
+  // app.py:587 -- computed from the whole `facts_full` frame, **before** the
+  // raw/derived filter narrows anything, because provenance is a property of the
+  // series and not of the current view. The filter then decides which of these
+  // markers is on screen, in `Section`.
+  const cadence = useMemo(() => cadenceMarkers(facts), [facts]);
+
   // app.py:596 -- the flags come out of metrics_long and are shown apart from
   // it, so a 0/1 column never sits between two ratios.
   const flagsPivot = useMemo(
@@ -170,6 +209,11 @@ export default function DataTab({ ticker }: { ticker: string }) {
     () => flagsPivot.concepts.map(() => "raw"),
     [flagsPivot],
   );
+  // app.py:445 -- the summary, from the same pivot the table below renders and
+  // over **every** period rather than the ones on screen: `render_flag_section`
+  // builds its rows from `wide` and applies `.head(periods)` only inside the
+  // expander, so "Show all periods" moves the table and leaves this alone.
+  const flagRows = useMemo(() => flagSummary(flagsPivot), [flagsPivot]);
   const metricsShown = useMemo(
     () => selectColumns(metricsPivot, metricsPivot.concepts.filter((c) => !isQualityFlag(c))),
     [metricsPivot],
@@ -255,6 +299,7 @@ export default function DataTab({ ticker }: { ticker: string }) {
           periods={periods}
           byId={byId}
           file={`${ticker}_facts.csv`}
+          cadence={cadence}
         />
       )}
 
@@ -274,26 +319,32 @@ export default function DataTab({ ticker }: { ticker: string }) {
           <p className="notice-inline">No quality flags recorded for this ticker.</p>
         ) : (
           <>
-            <p className="caption">
-              {Math.min(periods, flagsPivot.ends.length)} of {flagsPivot.ends.length} periods ·{" "}
-              {flagsPivot.concepts.length} flags · raised is 1, evaluated-and-clear is 0, and a gap
-              is neither
-            </p>
-            <DataTable
-              pivot={headPeriods(flagsPivot, periods)}
-              formats={flagFormats}
-              caption="Quality flags per period"
-            />
-            {/* Download only. `render_flag_section` (app.py:459) offers a CSV
-                inside its expander and no copy block, and this section is item
-                18's anyway -- adding one here would be inventing a feature the
-                reference does not have, in the one section already flagged as
-                someone else's. */}
-            <SectionActions
-              file={`${ticker}_flags.csv`}
-              csv={pivotToCsv(headPeriods(flagsPivot, periods))}
-              copy={null}
-            />
+            <FlagSummaryTable rows={flagRows} caption="Quality flags, how often and how recently" />
+            {/* app.py:457's expander, and the prominence it gives the two
+                tables is the point rather than an inherited detail: the
+                summary is the answer and the 0/1 grid is the working. Item 9
+                had the grid at the top level with a sentence of its own
+                explaining how to read it; that sentence is gone, because the
+                row above now says `raised` and `periods evaluated` in words.
+
+                The download sits inside, where the reference puts it
+                (app.py:462), and still carries the grid rather than the
+                summary -- the numeric periods are the exportable thing. */}
+            <details className="flag-periods">
+              <summary>Per-period flag values</summary>
+              <DataTable
+                pivot={headPeriods(flagsPivot, periods)}
+                formats={flagFormats}
+                caption="Quality flags per period"
+              />
+              {/* Download only. `render_flag_section` offers a CSV inside its
+                  expander and no copy block. */}
+              <SectionActions
+                file={`${ticker}_flags.csv`}
+                csv={pivotToCsv(headPeriods(flagsPivot, periods))}
+                copy={null}
+              />
+            </details>
           </>
         )}
       </section>
