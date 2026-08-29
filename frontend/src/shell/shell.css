@@ -53,7 +53,6 @@
   grid-column: 1;
   border-right: 1px solid var(--shell-line);
   background: var(--shell-panel);
-  overflow: hidden;
 }
 
 .sidebar--closed {
@@ -63,13 +62,15 @@
 .sidebar__inner {
   padding: 1rem 1.1rem 2rem;
   position: sticky;
-  top: 0;
-  position: relative;
+  top: 50px;
+  display: flex; 
+  flex-direction: column;
+  gap: 11px;
 }
 
 .sidebar__close {
   position: absolute;
-  top: 1rem;
+  top: -1rem;
   right: 1.1rem;
   display: inline-flex;
   align-items: center;
@@ -91,6 +92,7 @@
   color: var(--shell-strong);
   font-size: 1rem;
   margin: 0.6rem 0 0.35rem;
+  font-size: 25px;
 }
 
 .sidebar hr {
@@ -109,12 +111,14 @@
   color: var(--shell-strong);
   font-weight: 600;
   padding: 0;
+  font-size: 25px;
 }
 
 .radio label {
   display: block;
   padding: 0.15rem 0;
   cursor: pointer;
+  font-size: 18px;
 }
 
 .ticker {
@@ -124,6 +128,7 @@
   border: 1px solid var(--shell-line);
   border-radius: 4px;
   padding: 0.35rem;
+  font-size: 15px;
 }
 
 /*
@@ -135,6 +140,7 @@
   margin-top: 0.9rem;
   color: var(--shell-strong);
   cursor: pointer;
+  font-size: 17px;
 }
 
 .as-of__date {
@@ -167,7 +173,7 @@
 }
 
 .caption {
-  font-size: 0.82rem;
+  font-size: 16px;
   opacity: 0.85;
   margin: 0.4rem 0;
 }
@@ -179,6 +185,7 @@
 
 .freshness p:first-child {
   color: var(--shell-strong);
+  font-size: 17px;
 }
 
 /* ------------------------------------------------------------------ content */

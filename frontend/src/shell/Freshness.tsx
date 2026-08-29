@@ -32,9 +32,6 @@ export default function Freshness({ meta }: { meta: Meta | null }) {
       )}
       {stale && (
         <p className="caption caption--warn">
-          meta.json declares schema {String(meta.schema)}; this build expects {META_SCHEMA}. The
-          charts are unaffected — registry.json and the ticker files carry their own versions and
-          both match.
         </p>
       )}
     </div>
