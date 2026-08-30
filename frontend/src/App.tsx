@@ -177,24 +177,20 @@ function Workspace() {
       />
 
       <main className="content">
-        <header className="content__head">
-          {!sidebarOpen && (
-            <button type="button" onClick={() => setSidebarOpen(true)} aria-label="Show sidebar">
-              ☰
-            </button>
-          )}
-          <h1>{APP_TITLE}</h1>
-        </header>
+        <div className="content__sticky">
+          <header className="content__head">
+            {!sidebarOpen && (
+              <button type="button" onClick={() => setSidebarOpen(true)} aria-label="Show sidebar">
+                ☰
+              </button>
+            )}
+            <h1>{APP_TITLE}</h1>
+          </header>
 
-        {/* After the title and before the intro, exactly as app.py:844 places
-            it — and after the guard, because an announcement over an error page
-            helps nobody (app.py:838). */}
-        <UpdateNotice raw={notice} />
+          <UpdateNotice raw={notice} />
+          <p className="intro">{INTRO}</p>
 
-        <p className="intro">{INTRO}</p>
-
-        {view === "analysis" ? (
-          <>
+          {view === "analysis" && (
             <nav className="tabs" aria-label="Analysis sections">
               {TABS.map((id) => (
                 <button
@@ -208,46 +204,29 @@ function Workspace() {
                 </button>
               ))}
             </nav>
+          )}
+        </div>
 
-            {/* Kept mounted across tab switches — see the module docstring. */}
-            <div hidden={!isChartTab(tab)}>
-              <ChartView
-                registry={registry}
-                ticker={ticker}
-                chart={isChartTab(tab) ? tab : "valuation"}
-                asOf={asOf}
-              />
-            </div>
-
-            {/* Each mounted on its first open and kept mounted afterwards, so
-                what a reader set on one tab is still there after a look at
-                another. `raw` holds no state of its own yet and goes through the
-                same slot anyway, so item 16 inherits the rule rather than
-                rediscovering it. */}
-            <TabPanel id="data" active={tab}>
-              <DataTab ticker={ticker} />
-            </TabPanel>
-
-            <TabPanel id="raw" active={tab}>
-              <RawFactsView ticker={ticker} />
-            </TabPanel>
-
-            <TabPanel id="comparison" active={tab}>
-              <ComparisonView
-                registry={registry}
-                universe={universe}
-                seed={ticker}
-                asOf={asOf}
-              />
-            </TabPanel>
-          </>
-        ) : view === "encyclopedia" ? (
-          <Encyclopedia registry={registry} />
-        ) : view === "coverage" ? (
-          <Coverage registry={registry} />
-        ) : (
-          <About />
-        )}
+        <div className="content__body">
+          {view === "analysis" ? (
+            <>
+              <div hidden={!isChartTab(tab)}>
+                <ChartView registry={registry} ticker={ticker} chart={isChartTab(tab) ? tab : "valuation"} asOf={asOf} />
+              </div>
+              <TabPanel id="data" active={tab}><DataTab ticker={ticker} /></TabPanel>
+              <TabPanel id="raw" active={tab}><RawFactsView ticker={ticker} /></TabPanel>
+              <TabPanel id="comparison" active={tab}>
+                <ComparisonView registry={registry} universe={universe} seed={ticker} asOf={asOf} />
+              </TabPanel>
+            </>
+          ) : view === "encyclopedia" ? (
+            <Encyclopedia registry={registry} />
+          ) : view === "coverage" ? (
+            <Coverage registry={registry} />
+          ) : (
+            <About />
+          )}
+        </div>
       </main>
     </div>
   );

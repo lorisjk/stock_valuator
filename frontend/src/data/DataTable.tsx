@@ -106,45 +106,44 @@ export default function DataTable({
   );
 }
 
-/** The snapshot's concept/value list, which is a pivot only in spirit. */
 export function PairTable({
   rows,
   caption,
 }: {
-  /**
-   * The snapshot decides its treatment **per value** (app.py:487), because one
-   * value per concept leaves no column to measure -- so the row carries its own.
-   */
   rows: { concept: string; value: number | null; format: CellFormat }[];
   caption: string;
 }) {
   return (
     <div className="table-scroll">
-      <table className="data-table data-table--pairs">
+      <table className="data-table data-table--pairs-transposed">
         <caption className="sr-only">{caption}</caption>
-        <thead>
+        <tbody>
           <tr>
-            <th scope="col" className="data-table__corner">
+            <th scope="row" className="data-table__corner">
               concept
             </th>
-            <th scope="col">value</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(({ concept, value, format }) => (
-            <tr key={concept}>
-              <th scope="row" className="data-table__corner">
+            {rows.map(({ concept }) => (
+              <th scope="col" key={concept}>
                 {concept}
               </th>
-              {value === null ? (
-                <td className="cell cell--null" title="no value">
+            ))}
+          </tr>
+          <tr>
+            <th scope="row" className="data-table__corner">
+              value
+            </th>
+            {rows.map(({ concept, value, format }) =>
+              value === null ? (
+                <td key={concept} className="cell cell--null" title="no value">
                   —
                 </td>
               ) : (
-                <td className="cell">{formatCell(value, format)}</td>
-              )}
-            </tr>
-          ))}
+                <td key={concept} className="cell">
+                  {formatCell(value, format)}
+                </td>
+              )
+            )}
+          </tr>
         </tbody>
       </table>
     </div>

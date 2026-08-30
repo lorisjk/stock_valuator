@@ -114,7 +114,7 @@ function Section({
   return (
     <section className="section">
       <h2>{title}</h2>
-      <p className="caption">{caption}</p>
+      <p className="caption" style= {{fontSize: "14px"}}>{caption}</p>
       {pivot.ends.length === 0 ? (
         <p className="notice-inline">No rows for this ticker in this frame.</p>
       ) : (
@@ -243,7 +243,7 @@ export default function DataTab({ ticker }: { ticker: string }) {
   return (
     <div className="data-tab">
       <p>
-        Everything the charts are drawn from, for <strong>{ticker}</strong>, in pipeline order: what
+        Everything the charts are drawn from, for <strong style={{color : "#e01e37"}}>{ticker}</strong>, in pipeline order: what
         EDGAR returned, what was derived from it, what was computed, and the latest state. Every
         table downloads at full precision.
       </p>
