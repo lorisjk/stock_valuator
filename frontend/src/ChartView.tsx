@@ -25,7 +25,7 @@
  *     selection migrated in place would have been overwritten at the first
  *     switch, with no way for the user to get it back.
  */
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect} from "react";
 import Plot from "react-plotly.js";
 import MetricPicker from "./MetricPicker.tsx";
 import WindowSlider from "./WindowSlider.tsx";
@@ -194,8 +194,30 @@ export default function ChartView({
   // The picker renders before the frames arrive: its options come from the
   // registry, which is already loaded, so a ticker switch does not blank the
   // control while the per-ticker file is in flight.
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(document.fullscreenElement !== null);
+
+      // Plotly muss seine Größe nach dem Wechsel neu berechnen
+      setTimeout(() => {
+        window.dispatchEvent(new Event("resize"));
+      }, 100);
+    };
+
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+
+    return () => {
+      document.removeEventListener(
+        "fullscreenchange",
+        handleFullscreenChange,
+      );
+    };
+  }, []);
   return (
     <section>
+      
       <MetricPicker
         chart={chart}
         offerable={offerable}
@@ -241,12 +263,60 @@ export default function ChartView({
               : `No ${LABELS[chart]} data for ${ticker}.`}
         </p>
       ) : (
-        <Plot
-          data={result.figure.data as never}
-          layout={result.figure.layout as never}
-          style={{ width: "100%", height: result.figure.layout.height }}
-          useResizeHandler
-        />
+<div
+  style={{
+    width: isFullscreen ? "100vw" : "100%",
+    height: isFullscreen
+      ? "100vh"
+      : `${result.figure.layout.height ?? 600}px`,
+    background: "var(--app-bg, #0e1117)",
+    position: "relative",
+  }}
+>
+  <Plot
+    data={result.figure.data as never}
+    layout={{
+      ...result.figure.layout,
+      autosize: true,
+    } as never}
+    style={{
+      width: "100%",
+      height: "100%",
+    }}
+    useResizeHandler
+    config={{
+      displayModeBar: true,
+      displaylogo: false,
+      modeBarButtonsToAdd: [
+        {
+          name: "Fullscreen",
+          title: isFullscreen ? "Exit fullscreen" : "Fullscreen",
+          icon: {
+            width: 24,
+            height: 24,
+            path: `
+              M3 3h7v2H5v5H3V3z
+              M21 3v7h-2V5h-5V3h7z
+              M3 21v-7h2v5h5v2H3z
+              M21 21h-7v-2h5v-5h2v7z
+            `,
+          },
+          click: (gd: HTMLElement) => {
+            const chartContainer = gd.parentElement;
+
+            if (!chartContainer) return;
+
+            if (document.fullscreenElement) {
+              void document.exitFullscreen();
+            } else {
+              void chartContainer.requestFullscreen();
+            }
+          },
+        },
+      ],
+    }}
+  />
+</div>
       )}
 
       {/* app.py:963. Between the chart and the outlier caption, which is where

@@ -84,6 +84,7 @@ function matches(metric: Metric, query: string): boolean {
  */
 function Entry({ metric }: { metric: Metric }) {
   return (
+   
     <article className="entry">
       <h4>{metric.label}</h4>
       <p className="caption">
@@ -129,6 +130,7 @@ export default function Encyclopedia({ registry }: { registry: Registry }) {
 
   return (
     <section className="encyclopedia">
+      <hr />
       <h2>Metric encyclopedia</h2>
       {/* app.py:634-638, verbatim. */}
       <p className="encyclopedia__lede">

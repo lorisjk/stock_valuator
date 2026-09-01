@@ -16,7 +16,7 @@
 .app {
   --shell-bg: rgb(14, 17, 23);
   --shell-panel: #1d1f27;
-  --shell-text: #9ca3af;
+  --shell-text: white;
   --shell-strong: #f3f4f6;
   --shell-line: #2e303a;
   --shell-warn: #e5a94a;
@@ -186,6 +186,38 @@
 .freshness p:first-child {
   color: var(--shell-strong);
   font-size: 17px;
+}
+
+.ticker-combobox {
+  position: relative;
+  width: 100%;
+}
+
+.ticker-results {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  max-height: 300px;
+  overflow-y: auto;
+  background: var(--shell-panel);
+  border: 1px solid var(--shell-line);
+  border-radius: 4px;
+  z-index: 1000;
+}
+
+.ticker-option {
+  padding: 8px 12px;
+  cursor: pointer;
+  color: white;
+}
+
+.ticker-option:hover {
+  background: var(--shell-bg);
+}
+
+.ticker-option--active {
+  background: var(--shell-bg);
 }
 
 /* ------------------------------------------------------------------ content */

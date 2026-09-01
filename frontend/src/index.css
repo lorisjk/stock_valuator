@@ -50,19 +50,21 @@
   }
 }
 
+html, body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
 #root {
   width: 100%;
   max-width: 100%;
   margin: 0;
   border-inline: none;
-  min-height: 100svh;
+  height: 100%;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
-}
-
-body {
-  margin: 0;
 }
 
 h1,
@@ -106,8 +108,8 @@ code {
   font-size: 15px;
   line-height: 135%;
   padding: 4px 8px;
-  background: rgb(39, 31, 39);
-  color: #c4350c;
+  background: rgb(26, 28, 36);
+  color: rgb(92, 228, 136);
 }
 input[type="radio"] {
   appearance: none;

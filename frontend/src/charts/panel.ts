@@ -53,6 +53,11 @@ export interface Trace {
   opacity?: number;
   connectgaps?: boolean;
   hovertemplate?: string;
+  hoverlabel?: {
+    bgcolor?: string;
+    bordercolor?: string;
+    font?: { color?: string };
+  };
   xaxis: string;
   yaxis: string;
   legendgroup?: string;
@@ -191,8 +196,8 @@ export function createGrid(
     ...(hovermode === null ? {} : { hovermode }),
 
     // App background
-    paper_bgcolor: "#16171d",
-    plot_bgcolor: "#16171d",
+    paper_bgcolor: "#rgb(14, 17, 23)",
+    plot_bgcolor: "#rgb(14, 17, 23)",
 
     // Default text color
     font: {
@@ -564,6 +569,11 @@ export function drawBarPanel(
     y: panel.y,
     marker: { color: PRIMARY_COLOR },
     hovertemplate: "Date: %{x|%d.%m.%Y}<br>Value: %{y}<extra></extra>",
+    hoverlabel: {
+      bgcolor: "#16171d",
+      bordercolor: "#2e303a",
+      font: { color: "#f3f4f6" },
+    },
     xaxis: refs.xaxis,
     yaxis: refs.yaxis,
   });

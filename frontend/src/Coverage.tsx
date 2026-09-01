@@ -100,6 +100,7 @@ export default function Coverage({ registry }: { registry: Registry }) {
 
   return (
     <section className="coverage">
+      <hr />
       <h2>Profile coverage</h2>
       {/* app.py:678-683, verbatim -- including the trailing space the reference
           leaves inside the string, which renders as nothing. */}
@@ -143,8 +144,7 @@ export default function Coverage({ registry }: { registry: Registry }) {
       ))}
 
       <hr />
-
-      <h3>Full matrix</h3>
+      <h3 style={{ fontSize: "2rem" }}>Full matrix</h3>
       {/* app.py:706-710, verbatim. "Scrolls horizontally" is a promise about the
           widget, and `.table-scroll` is what keeps it true here. */}
       <p className="caption">

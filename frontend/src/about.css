@@ -5,12 +5,16 @@
  */
 
 .about {
-  max-width: 78ch;
+  max-width: fit-content;
 }
 
 .about h3 {
   margin: 1.4rem 0 0.4rem;
-  font-size: 1.05rem;
+  font-size: 1.5rem;
+}
+
+.about h2 {
+  font-size: 1.7rem;
 }
 
 .about__section:first-of-type h3 {
@@ -54,4 +58,10 @@
 /* Long URLs in Source code / Contact must not push the column wider. */
 .about__body a {
   word-break: break-word;
+}
+
+.about hr {
+  border: 0;
+  border-top: 1px solid var(--shell-line);
+  margin: 1.6rem 0 1rem;
 }

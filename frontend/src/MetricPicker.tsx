@@ -1,29 +1,21 @@
 /**
  * The metric picker: one checkbox per id the ticker's profile offers.
  *
- * **The options are the narrowed catalogue and nothing else.** `offerable`
- * comes from `selectMetricIds(registry, chart, ticker, null)` -- the same
- * function every builder calls -- so a metric `profile_visibility` hides is
- * never rendered as an option. The builders narrow again on their own, which
- * makes a stale selection silently correct rather than an error; this control
- * exists so the user never sees a checkbox that would quietly do nothing.
+ * The options are the narrowed catalogue and nothing else.
+ * `offerable` comes from `selectMetricIds(...)`, so a metric hidden by
+ * `profile_visibility` is never rendered as an option.
  *
- * **Label first, id second.** Streamlit passes `format_func=lambda i: labels[i]`,
- * so the reference shows labels, and the labels are the readable half:
- * "Shares Outstanding (Stock Dilution/Repurchase)" against `SharesOutstanding`,
- * "P/E (TTM)" against `pe_ratio`. But the *panel titles* are ids (item 4's
- * finding) while the y-axes carry labels, so a picker showing only labels
- * leaves nothing connecting a checkbox to the panel it produces. Showing both
- * makes this the one place the two names are visible together.
+ * The picker uses a searchable multi-select combobox. Both the readable
+ * metric label and the underlying metric id can be searched.
  *
- * **Catalogue order**, matching the order the panels render in. The selection's
- * own order is not preserved anywhere: `_select_concepts` orders by catalogue
- * and `selectMetricIds` does the same, so a reversed request comes back in
- * catalogue order (verified in the growth report). Presenting the options in
- * any other order would imply a control the builders do not offer.
+ * Catalogue order is preserved: selections are always rebuilt by filtering
+ * `offerable`, never by appending to the current selection.
  */
+
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChartId, Metric } from "./contracts.ts";
 import { defaultSelection } from "./charts/defaults.ts";
+import "./metric-picker.css";
 
 export default function MetricPicker({
   chart,
@@ -33,56 +25,281 @@ export default function MetricPicker({
   onChange,
 }: {
   chart: ChartId;
+
   /** The narrowed catalogue, in catalogue order. */
   offerable: readonly string[];
+
   selected: readonly string[];
+
   byId: Map<string, Metric>;
+
   onChange: (next: string[]) => void;
 }) {
-  const chosen = new Set(selected);
-  // Always rebuilt by filtering `offerable`, never by pushing onto `selected`:
-  // that keeps catalogue order regardless of the order boxes are ticked.
-  const setTo = (ids: Set<string>) => onChange(offerable.filter((id) => ids.has(id)));
+  /*
+   * --------------------------------------------------------------------------
+   * SELECTION
+   * --------------------------------------------------------------------------
+   */
+
+  const chosen = useMemo(
+    () => new Set(selected),
+    [selected],
+  );
+
+  /*
+   * Always rebuild the selection by filtering `offerable`.
+   *
+   * This keeps catalogue order regardless of the order in which the user
+   * clicks the checkboxes.
+   */
+  const setTo = (ids: Set<string>) => {
+    onChange(
+      offerable.filter((id) => ids.has(id)),
+    );
+  };
+
   const toggle = (id: string) => {
     const next = new Set(chosen);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
+
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+
     setTo(next);
   };
 
+  /*
+   * --------------------------------------------------------------------------
+   * COMBOBOX STATE
+   * --------------------------------------------------------------------------
+   */
+
+  const [comboOpen, setComboOpen] = useState(false);
+
+  const [metricSearch, setMetricSearch] = useState("");
+
+  const comboRef = useRef<HTMLDivElement>(null);
+
+  /*
+   * --------------------------------------------------------------------------
+   * SEARCH RESULTS
+   * --------------------------------------------------------------------------
+   *
+   * Search both:
+   *
+   *   - metric label
+   *   - metric id
+   *
+   * Example:
+   *
+   *   "shares" -> Shares Outstanding
+   *   "pe"     -> P/E (TTM)
+   *   "pe_ratio" -> pe_ratio
+   */
+
+  const filteredOfferable = useMemo(() => {
+    const query = metricSearch.trim().toLowerCase();
+
+    if (!query) {
+      return offerable;
+    }
+
+    return offerable.filter((id) => {
+      const metric = byId.get(id);
+
+      const label = metric?.label ?? "";
+
+      return (
+        id.toLowerCase().includes(query) ||
+        label.toLowerCase().includes(query)
+      );
+    });
+  }, [offerable, byId, metricSearch]);
+
+  /*
+   * --------------------------------------------------------------------------
+   * DEFAULT STATE
+   * --------------------------------------------------------------------------
+   */
+
   const isDefault =
-    selected.length === 1 && selected[0] === defaultSelection(chart, offerable)[0];
+    selected.length === 1 &&
+    selected[0] === defaultSelection(chart, offerable)[0];
+
+  /*
+   * --------------------------------------------------------------------------
+   * CLOSE ON OUTSIDE CLICK
+   * --------------------------------------------------------------------------
+   */
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        comboRef.current &&
+        event.target instanceof Node &&
+        !comboRef.current.contains(event.target)
+      ) {
+        setComboOpen(false);
+      }
+    }
+
+    document.addEventListener(
+      "mousedown",
+      handleClickOutside,
+    );
+
+    return () => {
+      document.removeEventListener(
+        "mousedown",
+        handleClickOutside,
+      );
+    };
+  }, []);
+
+  /*
+   * --------------------------------------------------------------------------
+   * RENDER
+   * --------------------------------------------------------------------------
+   */
 
   return (
-    <fieldset style={{ border: "1px solid #ccc", borderRadius: 4, padding: "0.5rem 0.75rem" }}>
+    <fieldset className="metric-picker">
+
       <legend>
         Metrics — {selected.length} of {offerable.length} offered for this profile{" "}
-        <button type="button" onClick={() => setTo(new Set(offerable))}
-                disabled={selected.length === offerable.length}>
+
+        <button
+          type="button"
+          onClick={() => setTo(new Set(offerable))}
+          disabled={selected.length === offerable.length}
+        >
           All
         </button>{" "}
-        {/* Clearing is a real state, not a mistake: the empty selection is what
-            `concepts=[]` means to every builder, and migrateSelection honours
-            it across a ticker switch rather than filling it back in. */}
-        <button type="button" onClick={() => onChange([])} disabled={selected.length === 0}>
+
+        <button
+          type="button"
+          onClick={() => onChange([])}
+          disabled={selected.length === 0}
+        >
           None
         </button>{" "}
-        <button type="button" onClick={() => onChange(defaultSelection(chart, offerable))}
-                disabled={isDefault}>
+
+        <button
+          type="button"
+          onClick={() =>
+            onChange(
+              defaultSelection(chart, offerable),
+            )
+          }
+          disabled={isDefault}
+        >
           Default
         </button>
       </legend>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.15rem 1rem" }}>
-        {offerable.map((id) => {
-          const metric = byId.get(id);
-          return (
-            <label key={id} style={{ whiteSpace: "nowrap" }}>
-              <input type="checkbox" checked={chosen.has(id)} onChange={() => toggle(id)} />{" "}
-              {metric ? metric.label : id}{" "}
-              <code style={{ opacity: 0.55, fontSize: "0.85em" }}>{id}</code>
-            </label>
-          );
-        })}
+
+      {/* ------------------------------------------------------------------ */}
+      {/* COMBOBOX                                                          */}
+      {/* ------------------------------------------------------------------ */}
+
+      <div
+        ref={comboRef}
+        className="metric-picker__combobox"
+      >
+
+        {/* -------------------------------------------------------------- */}
+        {/* TRIGGER                                                        */}
+        {/* -------------------------------------------------------------- */}
+
+        <button
+          type="button"
+          className="metric-picker__combobox-trigger"
+          onClick={() => {
+            setComboOpen((open) => !open);
+
+            /*
+             * Start with an empty search whenever the menu is opened.
+             */
+            if (!comboOpen) {
+              setMetricSearch("");
+            }
+          }}
+          aria-expanded={comboOpen}
+          aria-haspopup="listbox"
+        >
+          <span>
+            {selected.length === 0
+              ? "Select metrics..."
+              : `${selected.length} metric${
+                  selected.length === 1 ? "" : "s"
+                } selected`}
+          </span>
+
+          <span className="metric-picker__combobox-arrow">
+            {comboOpen ? "▲" : "▼"}
+          </span>
+        </button>
+
+        {/* -------------------------------------------------------------- */}
+        {/* DROPDOWN                                                       */}
+        {/* -------------------------------------------------------------- */}
+
+        {comboOpen && (
+          <div className="metric-picker__combobox-menu">
+
+            {/* Search field */}
+            <div className="metric-picker__search">
+              <input
+                type="text"
+                value={metricSearch}
+                onChange={(e) =>
+                  setMetricSearch(e.target.value)
+                }
+                placeholder="Search metrics..."
+                autoFocus
+              />
+            </div>
+
+            {/* Results */}
+            <div className="metric-picker__options">
+
+              {filteredOfferable.length === 0 ? (
+                <div className="metric-picker__empty">
+                  No metrics found.
+                </div>
+              ) : (
+                filteredOfferable.map((id) => {
+                  const metric = byId.get(id);
+
+                  return (
+                    <label
+                      key={id}
+                      className="metric-picker__option"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={chosen.has(id)}
+                        onChange={() => toggle(id)}
+                      />
+
+                      <span className="metric-picker__option-content">
+                        <span className="metric-picker__option-label">
+                          {metric ? metric.label : id}
+                        </span>
+
+                        <code className="metric-picker__option-id">
+                          {id}
+                        </code>
+                      </span>
+                    </label>
+                  );
+                })
+              )}
+
+            </div>
+          </div>
+        )}
       </div>
     </fieldset>
   );

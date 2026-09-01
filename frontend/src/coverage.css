@@ -11,7 +11,7 @@
 
 .coverage__lede {
   margin: 0.4rem 0 1rem;
-  max-width: 78ch;
+  max-width: fit-content;
 }
 
 .coverage__picker {
@@ -53,11 +53,13 @@
 
 .coverage__list code {
   white-space: nowrap;
-  color: var(--shell-strong);
+  background: rgb(26, 28, 36);
+  color: rgb(92, 228, 136);
 }
 
 .coverage .caption code {
-  color: var(--shell-strong);
+  background: rgb(26, 28, 36);
+  color: rgb(92, 228, 136);
 }
 
 .coverage hr {
@@ -100,3 +102,4 @@
 .coverage__matrix thead th {
   white-space: nowrap;
 }
+

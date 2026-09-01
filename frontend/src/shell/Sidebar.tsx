@@ -23,6 +23,7 @@ import type { Meta } from "../contracts.ts";
 import type { UniverseEntry } from "../data/DataContext.ts";
 import { VIEWS, VIEW_LABELS, isTickerView, type ViewId } from "./navigation.ts";
 import Freshness from "./Freshness.tsx";
+import {useState, useEffect, useRef} from "react";
 
 /**
  * `pd.Timestamp.today().date()` -- app.py:869's default when the box is first
@@ -39,6 +40,7 @@ const isoDay = (date: Date) =>
   `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
 
 const parseDay = (value: string) => new Date(`${value}T00:00:00.000Z`);
+
 
 
 export default function Sidebar({
@@ -61,12 +63,67 @@ export default function Sidebar({
   profile: string;
   universe: UniverseEntry[];
   onTicker: (ticker: string) => void;
-  /** The as-of date, or null for "no as-of" -- app.py's `as_of = None`. */
   asOf: Date | null;
   onAsOf: (next: Date | null) => void;
   open: boolean;
   onClose: () => void;
 }) {
+
+  const [search, setSearch] = useState("");
+  const [comboOpen, setComboOpen] = useState(false);
+  const [highlighted, setHighlighted] = useState(0);
+  const [typed, setTyped] = useState<string | null>(null); // null = noch nichts getippt seit dem Öffnen
+  const comboRef = useRef<HTMLDivElement>(null);
+  
+  // Klick außerhalb erkennen
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (comboRef.current && !comboRef.current.contains(event.target as Node)) {
+        setComboOpen(false); // ComboBox schließen
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
+
+
+  useEffect(() => {
+    const current = universe.find((u) => u.ticker === ticker);
+    if (current) setSearch(`${current.ticker} — ${current.profile}`);
+  }, [ticker, universe]);
+
+  const filteredUniverse = universe.filter((entry) =>
+    `${entry.ticker} ${entry.profile}`
+      .toLowerCase()
+      .includes((typed ?? "").toLowerCase())
+  );
+
+
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  if (!comboOpen) return;
+
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    setHighlighted((i) => Math.min(i + 1, filteredUniverse.length - 1));
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    setHighlighted((i) => Math.max(i - 1, 0));
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    const entry = filteredUniverse[highlighted];
+    if (entry) {
+      onTicker(entry.ticker);
+      setSearch(`${entry.ticker} — ${entry.profile}`);
+      setComboOpen(false);
+    }
+  } else if (e.key === "Escape") {
+    setComboOpen(false);
+  }
+};
+
   return (
     <aside className={`sidebar${open ? "" : " sidebar--closed"}`} aria-label="Navigation">
       <div className="sidebar__inner">
@@ -74,7 +131,91 @@ export default function Sidebar({
           x
         </button>
 
-        <Freshness meta={meta} />
+        {isTickerView(view) ? (
+          <>
+            <h2>Ticker</h2>
+            <label className="sr-only" htmlFor="ticker-select">
+              Ticker
+            </label>
+              <div ref={comboRef} className="ticker-combobox">
+                <label className="sr-only" htmlFor="ticker-select">
+                  Ticker
+                </label>
+                <input
+                  id="ticker-select"
+                  type="text"
+                  value={search}
+                  placeholder="Search ticker..."
+                  onChange={(e) => {
+                    setSearch(e.target.value);
+                    setComboOpen(true);
+                    setTyped(e.target.value);
+                    setHighlighted(0);
+                  }}
+                  onFocus={(e) => {
+                    setComboOpen(true);
+                    setTyped(null);       // beim Fokussieren: noch nichts getippt, volle Liste
+                    e.target.select();    // optional: markiert den Text, sofortiges Überschreiben möglich
+                  }}
+                  onKeyDown={handleKeyDown}
+                  className="ticker"
+                />
+                {comboOpen && (
+                  <div className="ticker-results">
+                    {filteredUniverse.map((entry) => (
+                      <div
+                        key={entry.ticker}
+                        className="ticker-option"
+                        onMouseDown={() => {
+                          onTicker(entry.ticker);
+                          setSearch(`${entry.ticker} — ${entry.profile}`);
+                          setComboOpen(false);
+                          setTyped(null);
+                        }}
+                  >
+                        {entry.ticker} — {entry.profile}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            <p className="caption">
+              Profile: <code>{profile}</code> — see <strong>{VIEW_LABELS.coverage}</strong> for what
+              this profile shows and hides.
+            </p>
+
+            <label className="as-of__toggle">
+              <input
+                type="checkbox"
+                checked={asOf !== null}
+                onChange={(e) => onAsOf(e.target.checked ? todayUtc() : null)}
+              />{" "}
+              Use an as-of date for valuation
+            </label>
+
+            {asOf !== null && (
+              <>
+                <label className="as-of__date">
+                  <span>As of</span>
+                  <input
+                    type="date"
+                    value={isoDay(asOf)}
+                    onChange={(e) => onAsOf(e.target.value ? parseDay(e.target.value) : null)}
+                  />
+                </label>
+                <p className="caption">
+                  The valuation window runs backwards from this date and stops there.
+                </p>
+              </>
+            )}
+          </>
+        ) : (
+          <p className="caption">
+            Reference pages describe the pipeline itself and do not depend on the selected ticker.
+          </p>
+        )}
+
+
 
         <hr />
 
@@ -96,72 +237,8 @@ export default function Sidebar({
 
         <hr />
 
-        {isTickerView(view) ? (
-          <>
-            <h2>Ticker</h2>
-            <label className="sr-only" htmlFor="ticker-select">
-              Ticker
-            </label>
-            {/* 609 options in one native select. That is what the reference
-                does, and whether it is usable at that length is a DOM question
-                this build cannot answer -- see the report. */}
-            <select
-              id="ticker-select"
-              value={ticker}
-              onChange={(e) => onTicker(e.target.value)}
-              className="ticker"
-            >
-              {universe.map((entry) => (
-                <option key={entry.ticker} value={entry.ticker}>
-                  {entry.ticker} — {entry.profile}
-                </option>
-              ))}
-            </select>
-            <p className="caption">
-              Profile: <code>{profile}</code> — see <strong>{VIEW_LABELS.coverage}</strong> for what
-              this profile shows and hides.
-            </p>
+        <Freshness meta={meta} />
 
-            {/* app.py:867-870. The label says "for valuation" and the reference
-                nevertheless threads the date into the comparison chart too --
-                carried verbatim rather than corrected, because the label is what
-                a reader of the two apps compares. See the report. */}
-            <label className="as-of__toggle">
-              <input
-                type="checkbox"
-                checked={asOf !== null}
-                onChange={(e) => onAsOf(e.target.checked ? todayUtc() : null)}
-              />{" "}
-              Use an as-of date for valuation
-            </label>
-
-            {asOf !== null && (
-              <>
-                <label className="as-of__date">
-                  <span>As of</span>
-                  {/* No `min`/`max`: `st.date_input` at app.py:869 has none
-                      either, and a date outside the data is not an error -- it
-                      lands on the panels' own "No Data" path, which already
-                      says what happened. A picker that refuses the date would
-                      have to explain itself; the chart already does. */}
-                  <input
-                    type="date"
-                    value={isoDay(asOf)}
-                    onChange={(e) => onAsOf(e.target.value ? parseDay(e.target.value) : null)}
-                  />
-                </label>
-                {/* app.py:870, verbatim. */}
-                <p className="caption">
-                  The valuation window runs backwards from this date and stops there.
-                </p>
-              </>
-            )}
-          </>
-        ) : (
-          <p className="caption">
-            Reference pages describe the pipeline itself and do not depend on the selected ticker.
-          </p>
-        )}
       </div>
     </aside>
   );

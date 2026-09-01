@@ -77,6 +77,7 @@ export default function About() {
 
   return (
     <section className="about">
+      <hr />
       <h2>About</h2>
       {splitSections(text).map(({ heading, body }, index) => (
         // The heading is unique in this file and is the natural key, but nothing
