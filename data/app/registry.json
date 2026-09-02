@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "generated_at": "2026-09-01T08:59:43",
+ "generated_at": "2026-09-02T08:13:01",
  "language_primary": "en",
  "default_profile": "standard",
  "charts": {
@@ -2210,7 +2210,6 @@
   "ARW": "standard",
   "ATO": "utilities",
   "AUR": "standard",
-  "AVB": "reit",
   "AVGO": "standard",
   "AVT": "standard",
   "AVY": "materials_integrated",
