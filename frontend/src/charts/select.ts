@@ -120,5 +120,28 @@ export function seriesFor(frame: Frame, concept: string, cutoff: Date, until?: D
   };
 }
 
+/**
+ * The same series read from a *different* numeric column of the same frame.
+ *
+ * `seriesFor` resolves the rows -- which is the whole of the windowing, sorting
+ * and concept filtering -- and this re-reads them. That is the growth chart's
+ * two modes: one frame, one row set, two columns (`yoy_growth`, `qoq_growth`),
+ * so switching mode re-reads an array rather than re-selecting rows.
+ *
+ * Falls back to `frame.value` for a column the frame does not carry. That is not
+ * leniency about contract drift -- `reconstructFrame` has already thrown if the
+ * *primary* column is missing, and `EXTRA_NUMERIC_COLUMNS` is skipped rather
+ * than required -- it is what keeps a caller passing the primary column's own
+ * name on the identity path.
+ */
+export function valuesFrom(frame: Frame, series: Series, column: string): (number | null)[] {
+  const source = frame.numeric.get(column) ?? frame.value;
+  return series.rows.map((i) => source[i]);
+}
+
 /** figures.py's emptiness test: the panel is "No Data" when no row has a value. */
 export const hasAnyValue = (series: Series) => series.y.some((v) => v !== null && !Number.isNaN(v));
+
+/** The same test against a bare column, for a mode that is not the frame's primary. */
+export const anyValue = (values: readonly (number | null)[]) =>
+  values.some((v) => v !== null && !Number.isNaN(v));

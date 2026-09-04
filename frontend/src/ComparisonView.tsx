@@ -14,7 +14,7 @@
  * on and discarding the reader's set, metric and window. The state here is
  * unchanged; what changed is that `TabPanel` now keeps the component mounted.
  */
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import Plot from "react-plotly.js";
 import type { ChartId, Registry } from "./contracts.ts";
 import { useTickersFrames } from "./data/DataContext.ts";
@@ -35,7 +35,7 @@ import "./comparison.css";
 /** app.py:37 `CHART_LABELS`, for the picker's option prefixes. */
 const CHART_LABELS: Record<ChartId, string> = {
   fundamentals: "Fundamentals",
-  growth: "Growth (YoY)",
+  growth: "Growth",
   valuation: "Valuation",
 };
 
@@ -99,6 +99,26 @@ export default function ComparisonView({
   // tab's, so the two toggles do not move together. They are different charts
   // over different data and a reader sets them for different reasons.
   const [masked, setMasked] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+    useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(document.fullscreenElement !== null);
+  
+      // Plotly nach dem Wechsel auf die neue Größe bringen
+      setTimeout(() => {
+        window.dispatchEvent(new Event("resize"));
+      }, 100);
+    };
+  
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+  
+    return () => {
+      document.removeEventListener(
+        "fullscreenchange",
+        handleFullscreenChange,
+      );
+    };
+  }, []);
 
   const { framesByTicker, pending, errors } = useTickersFrames(picked);
 
@@ -228,13 +248,61 @@ export default function ComparisonView({
             : "Pick at least two tickers that can show this metric."}
         </p>
       ) : (
-        <Plot
-          data={result.figure.data as never}
-          layout={result.figure.layout as never}
-          style={{ width: "100%", height: result.figure.layout.height }}
-          useResizeHandler
-        />
-      )}
+  <div
+    style={{
+      width: isFullscreen ? "100vw" : "100%",
+      height: isFullscreen
+        ? "100vh"
+        : `${result.figure.layout.height ?? 600}px`,
+      background: "var(--app-bg, #0e1117)",
+      position: "relative",
+    }}
+  >
+    <Plot
+      data={result.figure.data as never}
+      layout={{
+        ...result.figure.layout,
+        autosize: true,
+      } as never}
+      style={{
+        width: "100%",
+        height: "100%",
+      }}
+      useResizeHandler
+      config={{
+        displayModeBar: true,
+        displaylogo: false,
+        modeBarButtonsToAdd: [
+          {
+            name: "Fullscreen",
+            title: isFullscreen ? "Exit fullscreen" : "Fullscreen",
+            icon: {
+              width: 24,
+              height: 24,
+              path: `
+                M3 3h7v2H5v5H3V3z
+                M21 3v7h-2V5h-5V3h7z
+                M3 21v-7h2v5h5v2H3z
+                M21 21h-7v-2h5v-5h2v7z
+              `,
+            },
+            click: (gd: HTMLElement) => {
+              const chartContainer = gd.parentElement;
+
+              if (!chartContainer) return;
+
+              if (document.fullscreenElement) {
+                void document.exitFullscreen();
+              } else {
+                void chartContainer.requestFullscreen();
+              }
+            },
+          },
+        ],
+      }}
+    />
+  </div>
+)}
     </section>
   );
 }

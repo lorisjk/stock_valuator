@@ -30,16 +30,19 @@ import Plot from "react-plotly.js";
 import MetricPicker from "./MetricPicker.tsx";
 import WindowSlider from "./WindowSlider.tsx";
 import OutlierControls, {
+  GROWTH_MASK_HELP,
+  GROWTH_MASKED_NOTE,
   VALUATION_MASK_HELP,
   VALUATION_MASKED_NOTE,
 } from "./OutlierControls.tsx";
 import EmptyPanelNotice from "./EmptyPanelNotice.tsx";
+import GrowthModeControl from "./GrowthModeControl.tsx";
 import { shareHistoryAbsent } from "./data/shareHistory.ts";
 import type { ChartId, Frames, Registry } from "./contracts.ts";
 import { useTickerFacts, useTickerFrames } from "./data/DataContext.ts";
 import { DEFAULT_YEARS, defaultSelection, migrateSelection } from "./charts/defaults.ts";
 import { buildFundamentals } from "./charts/fundamentals.ts";
-import { buildGrowth } from "./charts/growth.ts";
+import { buildGrowth, growthModes } from "./charts/growth.ts";
 import { buildValuation } from "./charts/valuation.ts";
 import { offerableMetricIds } from "./charts/select.ts";
 import type { FigureSpec } from "./charts/panel.ts";
@@ -72,6 +75,12 @@ type ChartBuilder = (
     snapshot?: boolean;
     /** Likewise: `build_fundamentals` and `build_growth` have no `mask_outliers`. */
     mask?: boolean;
+    /**
+     * Growth only: which of `facts_growth`'s two columns to draw. The other two
+     * builders ignore it, exactly as `build_fundamentals` and `build_valuation`
+     * take no `growth_column`.
+     */
+    mode?: string;
   },
 ) => ChartResult;
 
@@ -91,6 +100,20 @@ const LABELS: Record<ChartId, string> = {
   valuation: "valuation",
   fundamentals: "fundamentals",
   growth: "growth",
+};
+
+/**
+ * The masking control's two strings, per chart.
+ *
+ * Growth needs its own pair rather than the valuation ones because the valuation
+ * masked-note promises the mean lines did not move, and this chart has no mean
+ * lines to promise about -- see `GROWTH_MASKED_NOTE`. Fundamentals has no entry
+ * at all: `build_fundamentals` takes no `mask_outliers`, so its builder returns
+ * an empty report and `OutlierControls` renders nothing for it.
+ */
+const MASK_STRINGS: Partial<Record<ChartId, { help: string; note: string }>> = {
+  valuation: { help: VALUATION_MASK_HELP, note: VALUATION_MASKED_NOTE },
+  growth: { help: GROWTH_MASK_HELP, note: GROWTH_MASKED_NOTE },
 };
 
 export default function ChartView({
@@ -125,11 +148,26 @@ export default function ChartView({
   // value the user sets is simply carried.
   const [windowYears, setWindowYears] = useState<Partial<Record<ChartId, number>>>({});
   const years = windowYears[chart] ?? DEFAULT_YEARS[chart];
-  // Not per chart, unlike the two above: only the valuation grid has the control
-  // at all (`build_fundamentals` and `build_growth` take no `mask_outliers`), so
-  // one boolean is the whole of it. app.py keeps it in `st.session_state` under
-  // `val_mask_outliers`, which is one key for the same reason.
-  const [masked, setMasked] = useState(false);
+  // Per chart, like the two above. It was one boolean while the valuation grid
+  // was the only holder of the control; growth has one now, and the reference's
+  // own shape is one session-state key per tab (`val_mask_outliers`, and a
+  // separate one on the comparison tab, which is why `ComparisonView` keeps its
+  // own). Sharing it would have made "hide extreme values" on the growth tab
+  // silently arm the valuation grid as well -- two charts whose thresholds mean
+  // very different things. No observable change for valuation: it is still the
+  // only writer of its own key.
+  const [masked, setMasked] = useState<Partial<Record<ChartId, boolean>>>({});
+  const isMasked = masked[chart] ?? false;
+  // Growth only, so one value rather than a per-chart record -- the same reason
+  // `masked` is one boolean. Not migrated on a ticker change either: the mode is
+  // a property of the measurement, not of the ticker's catalogue, so it is
+  // simply carried, as `windowYears` is.
+  //
+  // `undefined` = "the user has not chosen", which resolves to the registry's
+  // first mode inside the builder. Storing the resolved key here instead would
+  // pin YoY in this component and give the registry's declaration order a
+  // second, silent owner.
+  const [growthMode, setGrowthMode] = useState<string | undefined>(undefined);
 
   // The option list, from `selectMetricIds(registry, chart, ticker, null)` --
   // the same call every builder makes for its own narrowing, not a second
@@ -151,6 +189,7 @@ export default function ChartView({
   }, [picked, chart, offerable]);
 
   const byId = useMemo(() => new Map(registry.metrics.map((m) => [m.id, m])), [registry]);
+  const modes = useMemo(() => growthModes(registry), [registry]);
 
   const build = BUILDERS[chart];
   const result = useMemo(
@@ -165,14 +204,18 @@ export default function ChartView({
             requested: selected,
             years,
             snapshot: true,
-            mask: masked,
+            mask: isMasked,
+            // Growth only, and passed unconditionally because the other two
+            // builders do not read it -- the same way `mask` reaches all three
+            // and only one acts on it.
+            mode: growthMode,
             // Valuation only -- see the prop's docstring. `undefined`, not
             // `null`: the builders test `anchor !== undefined`, which is the
             // port's spelling of `as_of is not None`.
             anchor: chart === "valuation" && asOf !== null ? asOf : undefined,
           })
         : null,
-    [build, registry, frames, ticker, selected, years, masked, chart, asOf],
+    [build, registry, frames, ticker, selected, years, isMasked, chart, asOf, growthMode],
   );
 
   // `facts_full` is fetched only once the notice is actually going to render --
@@ -232,16 +275,42 @@ export default function ChartView({
         onChange={(next) => setWindowYears({ ...windowYears, [chart]: next })}
       />
 
+      {/* Above the chart, like the masking toggle below it and for the same
+          reason app.py:942 puts that one there: a control that changes what is
+          drawn belongs where the reader meets it before the drawing, and its
+          caption belongs with the control rather than under the figure. It sits
+          *outside* the `result` branches deliberately -- the mode is still a
+          meaningful choice on a chart that is currently empty, and a control
+          that vanishes when the picker is cleared would look like a bug.
+
+          Independent of the window slider and of the masking toggle: `years`
+          windows on `end` and knows nothing about which column is read, and
+          `build_growth` takes no `mask_outliers` at all -- it draws no mean
+          line either (see growth.ts). So there is one implementation path for
+          both modes rather than two, which is what Step 3.3 asked to confirm. */}
+      {chart === "growth" && (
+        // Resolved from state, not from `result.mode`: the frames are in flight
+        // on a ticker switch and `result` is null through it, so reading the
+        // selection back out of the build would snap the control to the default
+        // for a frame. `resolveMode` applies the identical `?? modes[0]` rule
+        // inside the builder, so the two cannot disagree about what is drawn.
+        <GrowthModeControl
+          modes={modes}
+          mode={growthMode ?? modes[0].key}
+          onMode={setGrowthMode}
+        />
+      )}
+
       {/* app.py:942 puts the toggle above the chart and the caption below it.
           Both live in one component, so it sits here and the reading order is
           toggle, chart, what-was-hidden -- see its docstring. */}
       <OutlierControls
         report={result?.outliers ?? []}
-        masked={masked}
-        onMasked={setMasked}
+        masked={isMasked}
+        onMasked={(next) => setMasked({ ...masked, [chart]: next })}
         label={(id) => byId.get(id)?.label ?? id}
-        help={VALUATION_MASK_HELP}
-        maskedNote={VALUATION_MASKED_NOTE}
+        help={MASK_STRINGS[chart]?.help ?? VALUATION_MASK_HELP}
+        maskedNote={MASK_STRINGS[chart]?.note ?? VALUATION_MASKED_NOTE}
         medianLabel="median"
       />
 

@@ -142,3 +142,32 @@ export const VALUATION_MASKED_NOTE =
 export const COMPARISON_MASKED_NOTE =
   "Each line was judged against its own median, so the remaining points are unchanged and still " +
   "on their original scale.";
+
+/**
+ * The growth chart's pair. It needs its own because **the valuation note makes a
+ * promise this chart cannot make and does not need to**: "the mean lines are
+ * unchanged" is true and load-bearing where there are mean lines, and
+ * `build_growth` draws none (charts/growth.ts, figures.py:660-690 -- it never
+ * calls `plot_metric`, so it has no `show_mean` to pass). Reusing that sentence
+ * here would assert the existence of a line the reader cannot see.
+ *
+ * What replaces it is the invariance that *does* apply: masking changes what is
+ * drawn and nothing else. No value shown anywhere else moves -- there is no mean,
+ * no caption quoting a number, and the comparison chart reads `facts_growth`
+ * through its own builder, which does not mask growth concepts at all.
+ *
+ * The help text also states the one thing a reader has to know before trusting
+ * the control on *this* chart, which §1.6 of the report measures: a growth
+ * series centres near zero, so five times its median is a much smaller number
+ * than five times a P/E's.
+ */
+export const GROWTH_MASK_HELP =
+  `Hides points more than ${OUTLIER_MEDIAN_RATIO}x the panel's own median. Growth rates centre ` +
+  "near zero, so on a series growing a few percent a quarter that threshold is reached by an " +
+  "ordinary good quarter, not only by an extreme one — read the list before trusting it. Applies " +
+  "per panel, per mode, and only to what is drawn: the values stay in the data tab and the exports.";
+
+export const GROWTH_MASKED_NOTE =
+  "Nothing else moved: this chart draws no mean line, and no figure shown elsewhere is computed " +
+  "from these points. The hidden values are listed below and are still in the data tab and the " +
+  "exports.";

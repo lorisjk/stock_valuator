@@ -1,109 +1,141 @@
-# Task: The About Page — Item 22
+# Task (Urgent): Snapshot Values Must Not Silently Forward-Fill Stale Derived Metrics
 
-**Read first:** `frontend_profile_coverage_report.md` §4 "For item 22" (states directly:
-`split_sections` at app.py:720 is the page's structure, exists specifically so the `disclaimer`
-section renders as a callout while every other section passes through as ordinary markdown in file
-order; `react-markdown` is proven four times over; `fetchNotice` at `load.ts:194` is the working
-fetch-a-markdown-file pattern including its lenient failure mode; `content/about.md`'s three factual
-claims about coverage gaps, provenance and quality flags are now all true of the build), the current
-`content/about.md`, `app.py`'s About rendering (`split_sections` and its call site) as the reference,
-and `Placeholder.tsx` (this task empties its only remaining call site — read its docstring, quoted in
-the last report, before deciding whether to delete it).
+**Read first:** the AppLovin (`APP`) finding quoted in full below — this is the reproduction case and
+the acceptance test — `ttm_window_report.md` and `annual_path_gate_report.md` (the two prior TTM
+investigations; this bug is adjacent to both but is neither: it is not a window-arithmetic error and
+not a missing derivation path, it is `get_latest_value` reporting a value that is real but ten
+quarters old as if it were current), and the current `get_latest_value`, `build_snapshot`, and
+whatever field already tracks staleness (`days_since_last_filing`, `fundamentals_stale`,
+`filing_likely_overdue` — confirm these exist and what they currently check before assuming this
+task starts from nothing).
 
-## Context
+## The bug, exactly as found
 
-This is the last item on the rebuild list. Twenty-one items in, the patterns are established: read
-the reference exactly, reuse rather than restate, verify against the function/data the page renders
-rather than against a plausible-looking copy, and report what's still open rather than closing gaps
-silently.
+> `fcf_ttm = 1.057B` is the value from 2023-12-31. In the exported facts, `Capex` is empty for every
+> quarter from 2024-03-31 onward, and so are `FCF_QUARTERLY` and `FCF_TTM`. The snapshot has
+> forward-filled the last valid value from ten quarters ago.
+>
+> The consequence is severe because `market_cap` is current and the denominator is 2.5 years old:
+>
+> | | snapshot | correct |
+> |---|---:|---:|
+> | FCF TTM | $1.06B | ~$4.51B |
+> | P/FCF | 101.3 | 23.8 |
+> | EV/FCF | 101.7 | 23.9 |
+> | `pfcf_ex_sbc` | 138.2 | 25.3 |
+> | FCF yield | 1.0% | 4.2% |
+>
+> `OperatingCashFlow_TTM` ($4.53B) is correct — only the `Capex` tag is missing. AppLovin is now a
+> pure software platform after divesting its apps business, with near-zero capex — the last reported
+> quarterly figures were around $244K. The company's own reported Q2 2026 free cash flow (~$863M)
+> is consistent with operating cash flow minus negligible capex, confirming the correct-column figure.
+>
+> **The bug is the forward-fill, not the missing tag.** A derived metric that has been `NaN` for ten
+> consecutive quarters must not reappear in the current snapshot. A `max_staleness_quarters` guard
+> (e.g. 1) would close this entire class of error, for every ticker, not only `APP`.
 
-`about.md` already exists and was written for the Streamlit build; it needs no new content, only a
-faithful rendering path — `split_sections`'s whole reason to exist, per the hand-off, is that it lets
-**one named section** (`disclaimer`) render differently from the rest while everything else is
-ordinary markdown, in the file's own order.
+This is not a new problem class for this project — `Capex` going structurally missing while
+`OperatingCashFlow` stays populated is exactly the shape of defect the split, scale, and duplicate-
+period investigations have each found in a different guise: one input silently stops, a downstream
+computation keeps using the last value it had, and nothing announces the substitution.
 
-**Explicitly NOT in this task:** no changes to `about.md`'s text — if something in it is now false or
-needs updating given what's shipped, say so in the report rather than editing content that belongs to
-the operator. No changes to any chart, table, encyclopedia, or coverage code. No changes to the
-sidebar, the update notice, or the missing-data guard (items 23/24, already shipped with the shell).
+**Explicitly NOT in this task:** no changes to `calculate_ttm`'s window logic (correct, per two prior
+investigations — this is not a window problem, the window correctly produces NaN; the snapshot layer
+is what discards that NaN). No changes to why `Capex` stopped being tagged (a real finding — AppLovin
+plausibly stopped reporting it because it is now near-zero and possibly immaterial — but that is a
+tag-investigation question for a separate task, not this one). No changes to `calculate_growth` or
+the growth catalogue.
 
 ---
 
-## Step 1 — Read the reference exactly
+## Step 0 — Confirm the mechanism before fixing it
 
-1. **`split_sections`'s exact contract**: the split rule (`## ` headings, confirmed per the hand-off
-   — verify the exact marker rather than assuming two-hash specifically), what comes back for
-   content before the first heading, and the exact return shape (a list of `(heading, body)` pairs,
-   a dict, something else).
-2. **Which heading triggers the disclaimer treatment**, and what that treatment actually is — a
-   `st.warning`/`st.error`-equivalent callout, a bordered box, something else. Confirm the exact
-   visual/semantic difference, not just "it's special."
-3. **Every other section's treatment** — confirmed per the hand-off to be "ordinary markdown," but
-   verify there is no second special case (e.g. does a section titled differently also get unusual
-   treatment, or is `disclaimer` genuinely the only one).
-4. **Page order**: file order, confirmed — verify this holds for the actual current `about.md`
-   rather than assuming the file hasn't changed shape since the hand-off was written.
-5. **Where `about.md` is fetched from** in the reference (a repo path, a packaged resource) and
-   confirm the frontend's existing sibling copy (per the hand-off, already at a path next to
-   `update_notice.md`) is content-identical to what `app.py` actually reads, not just similarly named.
+1. **Read `get_latest_value` exactly.** Confirm it selects the most recent **non-null** row
+   regardless of how far that row is from the most recent **period** — that is the stated bug; verify
+   it from the code rather than from the report's inference.
+2. **Check whether a staleness guard already exists anywhere in the snapshot path** and, if so, why
+   it did not catch this case. `days_since_last_filing`/`fundamentals_stale`/`filing_likely_overdue`
+   sound related — confirm what they actually measure (filing recency, not per-metric data recency)
+   and confirm they are answering a different question than the one this bug needs answered. If a
+   `max_staleness_quarters`-shaped guard was already attempted and abandoned, find out why before
+   reimplementing it.
+3. **Measure the exposure across the whole cached universe**, not just `APP`: for every metric
+   `build_snapshot` reads via `get_latest_value`, how many (ticker, metric) pairs have a "latest"
+   value more than N quarters older than that ticker's most recent *available* period for any other
+   metric. Report the distribution of staleness gaps, the same way the TTM and decumulation cycles
+   reported their span distributions before choosing a threshold — the bound should come from this
+   distribution, not be assumed as "1" because the report suggested it.
 
-State each with its source line.
+## Step 1 — Decide the bound and the failure mode
 
-## Step 2 — Design
+1. **Set `max_staleness_quarters`** from Step 0's measured distribution — state the number and the
+   evidence, following the project's established method (an empty run in the distribution, if one
+   exists, is the strongest justification; if there is no clean gap, say so and argue the number on
+   the actual cost/benefit rather than picking one that looks clean).
+2. **Decide what a metric does when it fails the staleness check**: `None`/blank in the snapshot (the
+   honest-gap default this project uses everywhere else), or blank plus a flag recording why. Given
+   this project's standing preference and the precedent of `ttm_source`/`ffo_gains_source` recording
+   *how* a value was derived, a `stale`/`fresh` provenance marker is likely the right shape — state
+   the choice.
+3. **Decide the scope**: does the guard apply to every metric `get_latest_value` touches, or only
+   derived `_TTM`/computed metrics (raw point-in-time facts like `shares_outstanding` have a
+   different staleness meaning than a rolling derived figure)? State the reasoning — a raw fact that
+   is merely old because the filer hasn't reported again yet is a different situation from a derived
+   figure whose *input* went missing while other inputs kept updating.
+4. **Confirm what happens to the metrics that depend on the guarded value** — `pfcf_ratio`, `ev_fcf`,
+   `pfcf_ex_sbc`, `dividend_yield`-style ratios that divide by a now-blanked figure must also blank,
+   not silently divide by whatever stale number happened to survive elsewhere. Trace every consumer
+   of `fcf_ttm` in the snapshot path specifically, since that is the reproduction case, and generalize
+   to every other `_TTM`-derived ratio the same way.
 
-1. **The fetch**, reusing `fetchNotice`'s pattern from `load.ts:194` exactly, including its lenient
-   failure mode — state what "lenient" means precisely (a missing file produces what, on screen).
-2. **The split**, as a pure, testable function mirroring `split_sections`'s exact contract from Step
-   1.1 — matching the project's established pattern (`mean.ts`, `notice.ts`, the picker-narrowing
-   rules) of keeping a reference rule in an isolated, Node-testable module.
-3. **The disclaimer's rendering**, matching Step 1.2 exactly — reuse an existing callout style from
-   the shell if one already matches (`.notice-inline` has been the vocabulary for warning-shaped
-   content since item 12; confirm whether it fits or whether the reference's disclaimer treatment is
-   visually distinct enough to need its own class).
-4. **`Placeholder.tsx`'s fate**: with this item built, its only remaining call site is gone. State
-   whether it is deleted, and confirm via a repo-wide search that nothing else references it before
-   removing it — an unused-but-undeleted placeholder component is a small paper cut, but leaving it
-   half-orphaned is worse than either keeping or removing it deliberately.
+## Step 2 — Implement
 
-## Step 3 — Implement
+Add the guard to `get_latest_value` or wherever the snapshot's per-metric lookup happens, per Step
+1's design. Do not touch the underlying TTM computation — `FCF_TTM` should still correctly be `NaN`
+for the affected quarters in `metrics_long`/`valuation_history`; this fix is entirely about what the
+**snapshot** does when asked for "the latest value" and finds only a stale one.
 
-Build the About page, replacing the shell's last placeholder.
+## Step 3 — Verify
 
-## Step 4 — Verify
-
-1. **Against the reference, exactly**: every section's heading and body text, rendered and compared
-   against `split_sections(about.md)`'s output for each `(heading, body)` pair, in file order.
-2. **The disclaimer section specifically**: confirm it renders with the distinct treatment from Step
-   1.2, and confirm every *other* section does not — the same "is this genuinely the only special
-   case" check Step 1.3 raised, now verified in the browser rather than only read from the code.
-3. **Content fidelity**: the fetched file's content matches what's checked into `content/about.md`
-   exactly (byte-for-byte), and the three factual claims the hand-off named (coverage gaps §Data tab,
-   provenance §cadence markers, quality flags §item 18) render as written — this is a content check,
-   not a claim this task should re-litigate the truth of.
-4. **The missing-file case**: temporarily rename/hide the fetched file and confirm the lenient
-   failure mode from Step 2.1 behaves as designed, then restore it and confirm the page is unchanged
-   (hash the file before/after, matching the fixture-plus-hash-restore method from item 20).
-5. **`Placeholder.tsx`'s removal** (if Step 2.4 decided to remove it): confirm the build has zero
-   references to it and the app still builds and runs every other view correctly.
-6. **Nothing else regressed**: `check-chart-width`, `check-tab-state`, `check-table-format` at
-   current baselines (36/36, 13/13, 6,107/6,107), chart-builder A/B unchanged, and the item 20/21
-   encyclopedia/coverage A/B checks unchanged — this task should touch nothing either of them reads.
-7. `npx tsc -b`, `npx eslint .`, `npx vite build` clean. Nothing outside `frontend/` (and, only if
-   Step 1.5 found a genuine content drift, `content/about.md` itself, flagged clearly rather than
-   silently edited) changed.
+1. **`APP` specifically, the reported case**: after the fix, `fcf_ttm` in the snapshot is blank (or
+   flagged stale, per Step 1.2) rather than $1.057B, and every dependent ratio (`pfcf_ratio`,
+   `ev_fcf`, `pfcf_ex_sbc`, dividend/FCF-yield-style metrics) is blank or correctly recomputed —
+   not silently wrong. Confirm the historical `valuation_history`/`metrics_long` series for `APP` is
+   **unchanged** — this fix must not touch anything except the snapshot's forward-fill behaviour.
+2. **Universe-wide diff**: capture snapshot output before and after for all cached tickers; account
+   for every value that goes from populated to blank (each should trace to a staleness gap exceeding
+   the chosen bound) and confirm nothing that was genuinely current changes.
+3. **No false positives**: a metric whose input is reported quarterly and current must not be
+   blanked by the new guard — spot-check several tickers with healthy, up-to-date data across
+   multiple profiles to confirm the guard does not fire on them.
+4. **The chosen provenance/flag mechanism (if Step 1.2 chose one)** surfaces correctly in the data
+   tab and/or snapshot section, consistent with how `ttm_source` and `ffo_gains_source` already
+   surface their provenance.
+5. **The frontend's snapshot marker (item 13)** respects the new blank/flagged state — a snapshot
+   marker must not render using a value the pipeline itself now refuses to publish as current.
+   Confirm rather than assume this composes for free.
+6. **Re-measure quality flags** and report the delta — this fix should surface as fewer plausible-
+   but-wrong snapshot values, and the report should state how many (ticker, metric) pairs changed
+   from a stale published value to an honest gap.
+7. Standing regression suite as applicable: export validator, chart-builder A/B (valuation and
+   comparison, since both read snapshot-derived figures — confirm which do), `check-chart-width`,
+   `check-tab-state`, `check-table-format`, `npx tsc -b`/`npx eslint .`/`npx vite build` if any
+   frontend file needed a change.
 
 ## Output
 
-One file, `frontend_about_page_report.md`:
+One file, `snapshot_staleness_guard_report.md`:
 
-1. The Step 1 reference reading, each point with its source line — especially the exact split
-   contract and confirmation the disclaimer is the only special case.
-2. The Step 2 design decisions, including `Placeholder.tsx`'s fate.
+1. Step 0's measurement: the staleness-gap distribution across the universe, and confirmation of
+   what `get_latest_value` currently does and why existing flags did not catch this.
+2. The Step 1 decisions: the bound with its evidence, the failure-mode/flag design, the scope, and
+   the dependent-ratio tracing.
 3. What was implemented, by file.
-4. The Step 4 verification results, especially the content-fidelity and missing-file checks.
-5. **A summary statement**: this is the last item on the rebuild list — confirm the full check suite
-   (chart width, tab state, table format, and every prior item's A/B baseline) all pass together in
-   one final run, as a closing confirmation that the rebuild is complete and self-consistent end to
-   end.
+4. The Step 3 verification, especially the `APP` before/after and the universe-wide diff accounting
+   for every changed value.
+5. The re-measured flag delta.
+6. Anything left as a follow-up — in particular, whether the same staleness question exists for
+   other derived `_TTM` metrics beyond `FCF_TTM` and whether this fix generalizes to all of them or
+   needs a second pass.
 
 No scratch files left behind.

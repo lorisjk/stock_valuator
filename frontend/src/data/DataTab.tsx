@@ -273,7 +273,7 @@ export default function DataTab({ ticker }: { ticker: string }) {
           ))}
         </fieldset>
       </div>
-      <p className="caption">
+      <p className="caption" style = {{fontSize : "13px"}}>
         {showAll
           ? "Showing every period on file."
           : `Showing the most recent ${DEFAULT_TABLE_PERIODS} periods.`}{" "}

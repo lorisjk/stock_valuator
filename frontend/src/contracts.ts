@@ -11,10 +11,19 @@
  * in the data is optional here, and a field that is nullable is `| null`.
  */
 
-export const REGISTRY_SCHEMA = 1;
-export const TICKER_SCHEMA = 1;
-/** `concept_candidates.json`, the registry export's second file. */
-export const CANDIDATES_SCHEMA = 1;
+/**
+ * Both bumped from 1 by the QoQ cycle, and both deliberately fatal rather than
+ * additive. `registry.json` v2 carries `charts.growth.modes`, which the growth
+ * chart's mode control is built from; `tickers/*.json` v2 carries `qoq_growth`
+ * beside `yoy_growth` in `facts_growth`. Against a v1 bundle the control would
+ * either be absent or offer a mode with no column behind it, and half a control
+ * is a worse failure than a refused bundle -- the same argument the file header
+ * makes for treating these two as interpreted rather than informational.
+ */
+export const REGISTRY_SCHEMA = 2;
+export const TICKER_SCHEMA = 2;
+
+export const CANDIDATES_SCHEMA = 2;
 
 /**
  * `meta.json`'s schema, as `main.py`'s APP_EXPORT_SCHEMA currently writes it.
@@ -37,12 +46,44 @@ export const META_SCHEMA = 4;
 
 export type ChartId = "fundamentals" | "valuation" | "growth";
 
+/**
+ * One growth measurement mode: `config.GROWTH_MODES`, exported verbatim.
+ *
+ * A mode is a *column*, not a set of metrics. `calculate_growth` already took a
+ * `periods` argument before there was a second column to write, so YoY and QoQ
+ * are one computation at two lags over the same 39 concepts -- which is why the
+ * catalogue is 39 entries and not 78, and why the metric labels below no longer
+ * name a mode.
+ */
+export interface GrowthMode {
+  /** Stable key for state and URLs: `"yoy"` / `"qoq"`. */
+  key: string;
+  /** The frame column this mode draws. */
+  column: string;
+  /** `calculate_growth`'s `periods`: 4 for YoY, 1 for QoQ. */
+  periods: number;
+  label: string;
+  /** The chart title's and the control's compact form: `"YoY"` / `"QoQ"`. */
+  short: string;
+  /** Markdown. The caption under the control -- QoQ's carries the seasonality warning. */
+  description: string;
+}
+
 /** What an id in a chart names, and which column of the frame holds its values. */
 export interface ChartSpec {
   /** "metric" for fundamentals/valuation, "xbrl_concept" for growth. */
   id_namespace: "metric" | "xbrl_concept";
-  /** "value" for fundamentals/valuation, "yoy_growth" for growth. */
+  /**
+   * The *primary* column, and still singular on purpose. Its one consumer is
+   * `_percent_applies` (`data/format.ts`), which asks "does this metric's
+   * percent flag describe the column I am formatting?" and is only ever asked
+   * about `value`. The growth chart's second column is `value_columns`, below.
+   */
   value_column: "value" | "yoy_growth";
+  /** Every column this chart can draw, primary first. Growth has two; the others one. */
+  value_columns?: string[];
+  /** Growth only: the modes those columns correspond to, in control order. */
+  modes?: GrowthMode[];
   /** Catalogue order. Panel order follows this, never the user's pick order. */
   metric_ids: string[];
 }
@@ -177,13 +218,34 @@ export interface Frame {
   /** Parsed once at load, never per render. */
   end: Date[];
   concept: string[];
-  /** The numeric column: `value`, or `yoy_growth` for facts_growth. */
+  /**
+   * The primary numeric column: `value`, or `yoy_growth` for facts_growth.
+   *
+   * An alias for `numeric.get(primaryColumn)`, kept as a field because every
+   * chart but growth reads exactly one column and reading it through a map
+   * lookup would be a worse spelling of the same thing.
+   */
   value: (number | null)[];
+  /**
+   * Every numeric column this frame carries, the primary one included, by name.
+   *
+   * The growth chart is why: it draws `yoy_growth` or `qoq_growth` out of the
+   * same rows depending on the mode, and the frame is loaded once for both. A
+   * map rather than a second named field for the same reason `text` is one --
+   * the shape is the convention and `load.ts`'s per-frame lists are the scope.
+   */
+  numeric: ReadonlyMap<string, readonly (number | null)[]>;
   /**
    * Row indices whose `value` was +-inf in the pipeline. The value array holds
    * `null` at these positions -- see reconstructFrame for the reasoning.
    */
   nonfiniteRows: Map<number, "Infinity" | "-Infinity">;
+  /**
+   * The same, per numeric column. `nonfiniteRows` is this map's primary-column
+   * entry; a mode reading a non-primary column needs its own, or it would
+   * silently report a QoQ infinity as a missing value.
+   */
+  nonfinite: ReadonlyMap<string, ReadonlyMap<number, "Infinity" | "-Infinity">>;
   /**
    * The non-numeric columns carried through, by column name. Empty for every
    * frame but `facts_full`, which carries `ttm_source` -- see `TEXT_COLUMNS` in

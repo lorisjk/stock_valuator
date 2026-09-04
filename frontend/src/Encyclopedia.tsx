@@ -35,9 +35,10 @@ import "./encyclopedia.css";
  * `CHART_SECTIONS` (app.py:86-91), verbatim: the id, the tab title and the
  * one-line blurb `st.caption`'d under it.
  *
- * Note `"Growth"` here against `CHART_LABELS`' `"Growth (YoY)"` in the Analysis
- * tabs — the reference keeps two spellings and this is the one that renders on
- * this page.
+ * The reference used to keep two spellings — `"Growth"` here against
+ * `CHART_LABELS`' `"Growth (YoY)"` in the Analysis tabs. They agree now: the
+ * chart draws either mode, so no tab label can name one, and both sides say
+ * `"Growth"`.
  */
 const SECTIONS: readonly { chart: ChartId; title: string; blurb: string }[] = [
   {
@@ -53,7 +54,7 @@ const SECTIONS: readonly { chart: ChartId; title: string; blurb: string }[] = [
   {
     chart: "growth",
     title: "Growth",
-    blurb: "Year-over-year change in the underlying filed figures.",
+    blurb: "Change in the underlying filed figures, year over year or quarter over quarter.",
   },
 ];
 

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from functools import lru_cache
 
 TICKERS = ["AAPL", "MSFT"]
 
@@ -2152,13 +2153,128 @@ _DERIVED_CONCEPT_CONSUMERS = {
 }
 
 
+# The growth chart's ids are XBRL concept names, and the two structures below are
+# what lets `is_hidden` answer for them without 357 hand-written PROFILE_HIDDEN
+# entries. See the growth-visibility rule inside is_hidden.
+#
+# lru_cache because filter_hidden_rows calls is_hidden once per row -- 1.15M rows
+# on the current export -- and get_concept_candidates builds a fresh three-layer
+# dict every call. Both caches are keyed on data that is module-level constant;
+# anything that mutates CONCEPT_CANDIDATES, PROFILE_CONCEPT_OVERRIDES,
+# TICKER_CONCEPT_OVERRIDES or METRICS at runtime must call `.cache_clear()`.
+
+
+@lru_cache(maxsize=None)
+def _candidate_concepts(profile: str) -> frozenset:
+    """The concept names the pipeline asks EDGAR for, for this **profile**.
+
+    Base candidates plus the profile's overrides, and deliberately **not**
+    TICKER_CONCEPT_OVERRIDES, even though get_concept_candidates applies that
+    third layer. `profile_visibility()` states the invariant this preserves:
+    *"is_hidden takes a ticker, but it uses that ticker only to look up its
+    profile ... there is no per-ticker override in that path."* The registry
+    exports one visibility row per profile on the strength of that sentence, so
+    an is_hidden that could answer differently for two tickers of one profile
+    would not make the export incomplete -- it would make it **wrong**, silently,
+    for whichever ticker the representative is not.
+
+    One entry in the tree would diverge if the ticker layer were included: NVR
+    overrides `Inventory` while resolving to `standard`, which does not fetch it.
+    NVR is not in TICKER_PROFILES and so is not in the universe at all, but the
+    shape is the point -- a ticker that needs a concept its profile does not
+    fetch needs a *profile*, and the override is a workaround for a missing one.
+    Resolving per profile hides that panel rather than showing an
+    export-contradicting one; the raw fact is still on the Raw Facts chart,
+    which is per ticker and does read the third layer.
+    """
+    resolved = set(CONCEPT_CANDIDATES)
+    resolved |= set(PROFILE_CONCEPT_OVERRIDES.get(profile, {}))
+    return frozenset(resolved)
+
+
+@lru_cache(maxsize=1)
+def _fetched_growth_concepts() -> frozenset:
+    """Growth ids that name a *fetched* concept rather than a derived series.
+
+    Exactly the ids the candidate-availability rule applies to. The split is
+    clean and is not a judgement call: of the 39 CHART_GROWTH ids, **33 appear
+    in some candidate layer and 6 appear in none** -- `EPS_TTM_CALC`, `FCF_TTM`,
+    `OperatingIncomeLoss_TTM`, `PPNR`, `CoreOperatingEarnings`, `FFO_TTM`, which
+    are the six the pipeline computes rather than fetches. Those six already
+    resolve through _DERIVED_CONCEPT_CONSUMERS and must not be tested here: they
+    are in no candidate list by construction, so the rule would hide all six for
+    every profile.
+
+    The union of all three layers, not `CONCEPT_CANDIDATES` alone: 16 of the 33
+    are sector tags that live only in PROFILE_CONCEPT_OVERRIDES, and those 16 are
+    precisely the ones this rule exists to hide.
+    """
+    layers = [set(CONCEPT_CANDIDATES)]
+    layers += [set(d) for d in PROFILE_CONCEPT_OVERRIDES.values()]
+    layers += [set(d) for d in TICKER_CONCEPT_OVERRIDES.values()]
+    raw = set().union(*layers)
+    return frozenset(m.id for m in METRICS if m.chart == CHART_GROWTH and m.id in raw)
+
+
+# Suffixes that make a row *about* a metric rather than a metric of its own, so a
+# profile that hides the metric hides these too.
+#
+# `_quarterly` was always here. The two provenance suffixes join it because the snapshot
+# publishes rows that describe a field rather than carry it -- `<field>_age_days` for a
+# value carried forward, `<field>_stale_days` for one the staleness guard withheld -- and a
+# note explaining a number a profile does not publish is noise, not provenance. Without
+# this, 190 of the staleness guard's 429 markers would land on hidden fields (61 of them
+# `avg_p_tbv_5y`, which most profiles hide outright).
+_ROW_ABOUT_SUFFIXES = ("_quarterly", "_age_days", "_stale_days")
+
+
+def _strip_row_suffix(metric_name: str) -> str:
+    for suffix in _ROW_ABOUT_SUFFIXES:
+        if metric_name.endswith(suffix):
+            return metric_name[: -len(suffix)]
+    return metric_name
+
+
 def is_hidden(ticker: str, metric_name: str) -> bool:
     profile = TICKER_PROFILES.get(ticker, DEFAULT_PROFILE)
     hidden_set = PROFILE_HIDDEN.get(profile, set())
 
-    base_name = metric_name[:-len("_quarterly")] if metric_name.endswith("_quarterly") else metric_name
+    base_name = _strip_row_suffix(metric_name)
     if metric_name in hidden_set or base_name in hidden_set:
         return True
+
+    # Growth availability, derived rather than listed.
+    #
+    # A growth panel is one XBRL concept, and a concept the pipeline never asks
+    # EDGAR for cannot produce a value for this profile -- not thinly, not for
+    # one filer, ever. So `Inventory` growth on a bank is not a data gap to be
+    # drawn as "No Data"; it is a panel that should not be offered, and
+    # get_concept_candidates already knows which.
+    #
+    # **Measured, not assumed** (growth_visibility_fix_report.md §1): across all
+    # 24 profiles x 33 fetched growth concepts, candidate membership predicts
+    # "this profile ever produces a value" with **zero** false positives and zero
+    # false negatives. The distribution has no middle -- 357 pairs sit at exactly
+    # 0% of tickers and the next lowest is 6.5% -- so no threshold had to be
+    # invented.
+    #
+    # Derived rather than listed because the alternative is 357 PROFILE_HIDDEN
+    # entries (+58% on a 616-entry structure) that would restate, by hand, what
+    # PROFILE_CONCEPT_OVERRIDES already says -- and would silently go stale the
+    # first time a profile's candidate list is widened or narrowed. This rule
+    # cannot go stale: it reads the same structure the fetch reads. It is also
+    # the rule figures.available_raw_concepts (figures.py:1081) already applies
+    # to the Raw Facts chart, so the two now agree by construction instead of
+    # by coincidence.
+    #
+    # Scoped to _fetched_growth_concepts() and nothing else. `is_hidden` is asked
+    # about every concept in the facts frame (filter_hidden_rows) and every id in
+    # metrics_long; an unscoped candidate test would hide every derived series in
+    # the export.
+    # Resolved per profile, not per ticker -- see _candidate_concepts.
+    if metric_name in _fetched_growth_concepts() and metric_name not in _candidate_concepts(profile):
+        return True
+
     consumers = _DERIVED_CONCEPT_CONSUMERS.get(metric_name) or _DERIVED_CONCEPT_CONSUMERS.get(base_name)
     if consumers:
         return all(c in hidden_set for c in consumers)
@@ -2209,11 +2325,75 @@ CHART_GROWTH = "growth"
 # What an id in a given chart actually names, and which dataframe column holds
 # its values. Declared once rather than repeated on 45 entries, but reachable
 # per metric via Metric.id_namespace / Metric.value_column.
+# The growth chart's two measurement modes. One panel catalogue, two columns:
+# `calculate_growth` already takes `periods`, so YoY and QoQ are the same
+# function on the same concept with a different lag, and the chart chooses a
+# column rather than a second set of metrics. That is why there are 39 growth
+# metrics and not 78 -- see the id/label discussion in qoq_growth_report.md.
+#
+# `periods` is the argument handed to calculate_growth and is the only number
+# that differs between the two paths; both are subject to the same
+# `prev > 0 and value > 0` condition and the same (now zero) min_base_ratio.
+#
+# `description` is what the chart's mode control shows. QoQ's says the one thing
+# a reader has to know before the panel makes sense, and it is measured rather
+# than asserted -- DECK's revenue swings from -52% to +116% around the calendar
+# with a YoY series that never leaves +8..+13%.
+GROWTH_MODES = (
+    {
+        "key": "yoy",
+        "column": "yoy_growth",
+        "periods": 4,
+        "label": "Year over year",
+        "short": "YoY",
+        "description": (
+            "Each period against the observation closest to four quarters earlier. "
+            "Like for like -- Q3 against Q3 -- so seasonality cancels."
+        ),
+    },
+    {
+        "key": "qoq",
+        "column": "qoq_growth",
+        "periods": 1,
+        "label": "Quarter over quarter",
+        "short": "QoQ",
+        "description": (
+            "Each period against the one immediately before it. **Not seasonally "
+            "adjusted**: a seasonal business shows a regular yearly cycle here that "
+            "is the calendar, not the trend."
+        ),
+    },
+)
+
+GROWTH_MODES_BY_KEY = {m["key"]: m for m in GROWTH_MODES}
+# {column: periods}, which is all main.add_growth_column needs.
+GROWTH_PERIODS = {m["column"]: m["periods"] for m in GROWTH_MODES}
+# The mode a caller gets when it does not ask for one. Everything that predates
+# this task -- figures.plot_growth, the exported `value_column`, the static
+# figure files -- resolves through here, so the default is what keeps them
+# byte-identical.
+GROWTH_DEFAULT_MODE = GROWTH_MODES[0]["key"]
+
+
+# What an id in a given chart actually names, and which dataframe column holds
+# its values. Declared once rather than repeated on 45 entries, but reachable
+# per metric via Metric.id_namespace / Metric.value_column.
+#
+# `value_column` stays singular and stays `yoy_growth`. It answers one question
+# -- "does this metric's percent flag describe *this* column of the frame I am
+# formatting?" (app.py `_percent_applies`) -- and the only column it is ever
+# asked about is `value`, the data tab's. Widening it to a set would change a
+# contract the frontend types as a literal union to fix a problem no caller has.
+# `value_columns` is the additive answer: the full list, primary first.
 CHART_SPECS = {
     CHART_FUNDAMENTALS: {"id_namespace": "metric", "value_column": "value"},
     CHART_VALUATION: {"id_namespace": "metric", "value_column": "value"},
-    CHART_GROWTH: {"id_namespace": "xbrl_concept", "value_column": "yoy_growth"},
-    
+    CHART_GROWTH: {
+        "id_namespace": "xbrl_concept",
+        "value_column": "yoy_growth",
+        "value_columns": [m["column"] for m in GROWTH_MODES],
+        "modes": [dict(m) for m in GROWTH_MODES],
+    },
 }
 
 # `label` is the string rendered onto the chart today and must stay byte-identical.
@@ -2462,8 +2642,23 @@ METRICS = [
                    "not the guarded calculate_growth used elsewhere. Requires growth above 2%; "
                    "results beyond ±30 are dropped."),
 
-    # --- growth: ids are XBRL concept names, values read from `yoy_growth`.
-    #     ref_line/percent match what build_growth draws (a 0 line, percent axis).
+    # --- growth: ids are XBRL concept names, values read from `yoy_growth` or
+    #     `qoq_growth` -- which one is the chart's mode control, not the metric's
+    #     (see GROWTH_MODES). ref_line/percent match what build_growth draws
+    #     (a 0 line, percent axis).
+    #
+    #     **No label below names a mode.** They used to end ", YoY)" and 38 of
+    #     them did; that string was true of the only column that existed and is
+    #     false the moment the reader switches the control. What stays in the
+    #     label is the *window of the underlying series* -- "(Quartal)" against
+    #     "(TTM)" -- because that is a property of the concept and does not move
+    #     with the mode. The mode is named once, on the control and in the chart
+    #     title, rather than 39 times in axis labels that cannot be kept honest.
+    #
+    #     For the same reason there are 39 entries and not 78: a `_qoq` suffix
+    #     per concept would have doubled the catalogue, doubled every profile's
+    #     visibility row and put two panels of the same concept in one picker,
+    #     to express something that is one boolean about the whole chart.
     #
     #     Per-profile visibility runs through is_hidden like everywhere else -- there
     #     is no growth-specific visibility mechanism. The three sector aggregates
@@ -2473,12 +2668,14 @@ METRICS = [
     #     the two insurance profiles. Registering the raw sector tags instead
     #     (NetInterestIncome_TTM, EarnedPremiums_TTM, ...) would have cost 22-23
     #     hide entries each, since PROFILE_HIDDEN is a negative list.
-    Metric("Revenue", CHART_GROWTH, "Revenue growth (Quartal, YoY)", 0, percent=True,
-           description="Sales in this quarter against the same quarter a year earlier.",
-           formula="Single quarter as filed, against the quarter ~365 days earlier."),
-    Metric("NetIncomeLoss", CHART_GROWTH, "Net Income Growth (Quartal, YoY)", 0, percent=True,
-           description="Quarterly profit against the same quarter a year earlier. Gappy by "
-                       "design: a loss quarter on either side produces no value at all.",
+    Metric("Revenue", CHART_GROWTH, "Revenue growth (Quartal)", 0, percent=True,
+           description="Sales in this quarter against the earlier quarter the chart's mode "
+                       "selects -- four quarters back, or the one immediately before.",
+           formula="Single quarter as filed. The lag is the mode's, not this metric's; see the "
+                   "growth mechanism note."),
+    Metric("NetIncomeLoss", CHART_GROWTH, "Net Income Growth (Quartal)", 0, percent=True,
+           description="Quarterly profit against the earlier quarter the mode selects. Gappy "
+                       "by design: a loss quarter on either side produces no value at all.",
            formula="Single quarter as filed."),
     Metric("SharesOutstanding", CHART_GROWTH, "Shares Outstanding (Stock Dilution/Repurchase)", 0, percent=True,
            description="Change in the share count -- negative means buybacks, positive means "
@@ -2487,31 +2684,140 @@ METRICS = [
                    "onto the current split basis by parse_edgar._apply_split_basis -- which "
                    "applies only splits the corporate-action feed reports and the filer's own "
                    "restatements confirm, so an uncorroborated period is left as filed."),
-    Metric("EPS_TTM_CALC", CHART_GROWTH, "EPS Growth (TTM, YoY)", 0, percent=True,
+    Metric("EPS_TTM_CALC", CHART_GROWTH, "EPS Growth (TTM)", 0, percent=True,
            description="Growth in earnings per share on a trailing-twelve-month basis -- profit "
                        "growth and share-count change combined into the number that reaches the shareholder.",
            formula="`NetIncomeLoss_TTM` / `SharesOutstanding`, the pipeline's own EPS."),
-    Metric("FCF_TTM", CHART_GROWTH, "Free Cash Flow Growth (TTM, YoY)", 0, percent=True,
+    Metric("FCF_TTM", CHART_GROWTH, "Free Cash Flow Growth (TTM)", 0, percent=True,
            description="Growth in trailing free cash flow.",
            formula="`OperatingCashFlow_TTM` − `Capex_TTM`."),
-    Metric("OperatingIncomeLoss_TTM", CHART_GROWTH, "Operating Income Growth (TTM, YoY)", 0, percent=True,
+    Metric("OperatingIncomeLoss_TTM", CHART_GROWTH, "Operating Income Growth (TTM)", 0, percent=True,
            description="Growth in trailing operating profit, before interest and tax.",
            formula="`OperatingIncomeLoss_TTM`. Hidden for `financial`: banks do not file an "
                    "operating-income line, so the panel would always be empty."),
-    Metric("StockholdersEquity", CHART_GROWTH, "Equity Growth (Quartal, YoY)", 0, percent=True,
+    Metric("StockholdersEquity", CHART_GROWTH, "Equity Growth (Quartal)", 0, percent=True,
            description="Growth in book equity -- retained profit less dividends and buybacks. "
                        "The compounding measure for a bank or insurer.",
            formula="Point-in-time `StockholdersEquity`."),
-    Metric("PPNR", CHART_GROWTH, "PPNR Growth (TTM, YoY)", 0, percent=True,
+    Metric("PPNR", CHART_GROWTH, "PPNR Growth (TTM)", 0, percent=True,
            description="Growth in a bank's pre-provision earnings power.",
            formula="`NetInterestIncome_TTM` + `NoninterestIncome_TTM` − `NoninterestExpense_TTM`."),
-    Metric("CoreOperatingEarnings", CHART_GROWTH, "Core Operating Earnings Growth (TTM, YoY)", 0, percent=True,
+    Metric("CoreOperatingEarnings", CHART_GROWTH, "Core Operating Earnings Growth (TTM)", 0, percent=True,
            description="Growth in insurance earnings excluding realised investment gains.",
            formula="`NetIncomeLoss_TTM` − `RealizedInvestmentGains_TTM`."),
-    Metric("FFO_TTM", CHART_GROWTH, "FFO Growth (TTM, YoY)", 0, percent=True,
+    Metric("FFO_TTM", CHART_GROWTH, "FFO Growth (TTM)", 0, percent=True,
            description="Growth in a REIT's funds from operations.",
            formula="`NetIncomeLoss_TTM` + `DepreciationAndAmortization_TTM` − "
                    "`GainLossOnSaleOfProperties_TTM`."),
+
+    # --- growth for every raw fact ------------------------------------------------
+    #
+    # Registered in one block because they share one justification: `add_growth_column`
+    # has always computed `yoy_growth` for *every* concept in the facts frame (main.py:
+    # growth_concepts), so none of these is a new computation -- they were being
+    # computed and thrown away at export time, where facts_growth was narrowed to the
+    # registered ids. Registering them is what makes an already-computed column
+    # reachable.
+    #
+    # "Raw fact" is `available_raw_concepts`' rule (figures.py:1081): a key of
+    # `get_concept_candidates(ticker)`, i.e. a tag the pipeline actually asks EDGAR
+    # for. The `_TTM` and `_QUARTERLY` derivations are deliberately NOT registered --
+    # see growth_expansion_report.md §2 for the panel-count and PROFILE_HIDDEN
+    # arithmetic behind that.
+    #
+    # **These carry no PROFILE_HIDDEN entries.** 17 of the 33 need none (every profile
+    # asks for them); the other 16 are sector tags that would need 357 hide entries
+    # between them, which is a 58% increase on a 616-entry negative list. That number
+    # is reported rather than paid -- growth_expansion_report.md §3. The visible
+    # consequence, stated so it is not mistaken for a bug: a retailer's growth chart
+    # now offers bank and insurer panels, and they draw "No Data".
+    Metric("CostOfRevenue", CHART_GROWTH, "Cost of Revenue Growth (Quartal)", 0, percent=True,
+           description="Growth in the direct cost of what was sold. Read next to `Revenue` growth: cost rising faster than sales is margin compression in its rawest form.",
+           formula="`CostOfRevenue`, the filed EDGAR fact. Single quarter as filed."),
+    Metric("OperatingIncomeLoss", CHART_GROWTH, "Operating Income Growth (Quartal)", 0, percent=True,
+           description="Growth in quarterly operating profit, before interest and tax. The quarterly counterpart of the TTM panel, and the more volatile of the two.",
+           formula="`OperatingIncomeLoss`, the filed EDGAR fact. Single quarter as filed."),
+    Metric("PretaxIncome", CHART_GROWTH, "Pre-tax Income Growth (Quartal)", 0, percent=True,
+           description="Growth in profit before tax -- operating profit plus financing and other items, with the tax line still to come.",
+           formula="`PretaxIncome`, the filed EDGAR fact. Single quarter as filed."),
+    Metric("IncomeTaxExpense", CHART_GROWTH, "Income Tax Expense Growth (Quartal)", 0, percent=True,
+           description="Growth in the tax charge. Moves with pre-tax income unless the effective rate changed; a divergence between the two is what `effective_tax_rate` measures.",
+           formula="`IncomeTaxExpense`, the filed EDGAR fact. Single quarter as filed."),
+    Metric("OperatingCashFlow", CHART_GROWTH, "Operating Cash Flow Growth (Quartal)", 0, percent=True,
+           description="Growth in cash generated by operations, before capital spending.",
+           formula="`OperatingCashFlow`, the filed EDGAR fact. Single quarter as filed."),
+    Metric("Capex", CHART_GROWTH, "Capital Expenditure Growth (Quartal)", 0, percent=True,
+           description="Growth in capital spending. Lumpy by nature -- a single plant or acquisition of equipment moves one quarter and not its neighbours.",
+           formula="`Capex`, the filed EDGAR fact. Single quarter as filed."),
+    Metric("DepreciationAndAmortization", CHART_GROWTH, "D&A Growth (Quartal)", 0, percent=True,
+           description="Growth in depreciation and amortisation. Follows past capital spending and acquisition accounting rather than current activity.",
+           formula="`DepreciationAndAmortization`, the filed EDGAR fact. Single quarter as filed."),
+    Metric("ResearchAndDevelopment", CHART_GROWTH, "R&D Growth (Quartal)", 0, percent=True,
+           description="Growth in research and development spending.",
+           formula="`ResearchAndDevelopment`, the filed EDGAR fact. Single quarter as filed."),
+    Metric("ShareBasedCompensation", CHART_GROWTH, "Share-based Compensation Growth (Quartal)", 0, percent=True,
+           description="Growth in the stock-compensation charge. The cash-flow-statement add-back that `pfcf_ex_sbc` subtracts again.",
+           formula="`ShareBasedCompensation`, the filed EDGAR fact. Single quarter as filed."),
+    Metric("DividendsPerShare", CHART_GROWTH, "Dividend per Share Growth (Quartal)", 0, percent=True,
+           description="Growth in the dividend declared per share. Only filers that declare one produce a value; the rest have an empty panel, which is a fact about the company.",
+           formula="`DividendsPerShare`, the filed EDGAR fact. Single quarter as filed."),
+    Metric("StockIssued", CHART_GROWTH, "Stock Issued Growth (Quartal)", 0, percent=True,
+           description="Growth in the value of stock issued in the quarter. One input to `share_count_jump_flag`.",
+           formula="`StockIssued`, the filed EDGAR fact. Single quarter as filed."),
+    Metric("StockRepurchased", CHART_GROWTH, "Stock Repurchased Growth (Quartal)", 0, percent=True,
+           description="Growth in the value of stock bought back in the quarter. The cash side of what `SharesOutstanding` shows as a count.",
+           formula="`StockRepurchased`, the filed EDGAR fact. Single quarter as filed."),
+    Metric("Assets", CHART_GROWTH, "Total Assets Growth (Quartal)", 0, percent=True,
+           description="Growth in the balance-sheet total. For a bank this is the balance sheet itself; for an operating company it is mostly a lagging indicator of investment.",
+           formula="`Assets`, the filed EDGAR fact. Point-in-time balance as filed."),
+    Metric("CashAndEquivalents", CHART_GROWTH, "Cash Growth (Quartal)", 0, percent=True,
+           description="Growth in cash and equivalents. Swings with financing and working capital rather than with trading, so a large move is a question rather than an answer.",
+           formula="`CashAndEquivalents`, the filed EDGAR fact. Point-in-time balance as filed."),
+    Metric("Goodwill", CHART_GROWTH, "Goodwill Growth (Quartal)", 0, percent=True,
+           description="Growth in goodwill. Rises on acquisitions and falls on impairment, so it is the clearest balance-sheet trace of inorganic activity -- the same signal `inorganic_contaminated` flags.",
+           formula="`Goodwill`, the filed EDGAR fact. Point-in-time balance as filed."),
+    Metric("Inventory", CHART_GROWTH, "Inventory Growth (Quartal)", 0, percent=True,
+           description="Growth in inventory. Rising faster than revenue is the classic build-up signal; `inventory_turnover` and `dio` measure the same thing as a ratio.",
+           formula="`Inventory`, the filed EDGAR fact. Point-in-time balance as filed."),
+    Metric("AccountsReceivable", CHART_GROWTH, "Receivables Growth (Quartal)", 0, percent=True,
+           description="Growth in trade receivables. Outrunning revenue growth means sales are being collected more slowly, which `dso` states in days.",
+           formula="`AccountsReceivable`, the filed EDGAR fact. Point-in-time balance as filed."),
+    Metric("AccountsPayable", CHART_GROWTH, "Payables Growth (Quartal)", 0, percent=True,
+           description="Growth in trade payables -- what the company owes suppliers. `dpo` states the same thing in days.",
+           formula="`AccountsPayable`, the filed EDGAR fact. Point-in-time balance as filed."),
+    Metric("LongTermDebt", CHART_GROWTH, "Long-term Debt Growth (Quartal)", 0, percent=True,
+           description="Growth in long-term borrowings. The denominator side of leverage; `net_debt_to_ebitda` pairs it with earnings.",
+           formula="`LongTermDebt`, the filed EDGAR fact. Point-in-time balance as filed."),
+    Metric("NetInterestIncome", CHART_GROWTH, "Net Interest Income Growth (Quartal)", 0, percent=True,
+           description="A bank's core revenue line: interest earned less interest paid. `net_interest_margin` is the same quantity against earning assets.",
+           formula="`NetInterestIncome`, the filed EDGAR fact. Single quarter as filed."),
+    Metric("NoninterestIncome", CHART_GROWTH, "Noninterest Income Growth (Quartal)", 0, percent=True,
+           description="A bank's fee and trading income -- everything that is not net interest income.",
+           formula="`NoninterestIncome`, the filed EDGAR fact. Single quarter as filed."),
+    Metric("NoninterestExpense", CHART_GROWTH, "Noninterest Expense Growth (Quartal)", 0, percent=True,
+           description="A bank's operating cost base. `efficiency_ratio` measures it against revenue.",
+           formula="`NoninterestExpense`, the filed EDGAR fact. Single quarter as filed."),
+    Metric("ProvisionForCreditLosses", CHART_GROWTH, "Credit Loss Provision Growth (Quartal)", 0, percent=True,
+           description="Growth in the charge a bank takes for expected loan losses. Rises ahead of a credit cycle rather than during it.",
+           formula="`ProvisionForCreditLosses`, the filed EDGAR fact. Single quarter as filed."),
+    Metric("EarnedPremiums", CHART_GROWTH, "Earned Premiums Growth (Quartal)", 0, percent=True,
+           description="Growth in an insurer's earned premium -- its top line.",
+           formula="`EarnedPremiums`, the filed EDGAR fact. Single quarter as filed."),
+    Metric("IncurredLosses", CHART_GROWTH, "Incurred Losses Growth (Quartal)", 0, percent=True,
+           description="Growth in claims incurred. Against `EarnedPremiums` growth this is the `loss_ratio` moving.",
+           formula="`IncurredLosses`, the filed EDGAR fact. Single quarter as filed."),
+    Metric("BenefitsLossesAndExpenses", CHART_GROWTH, "Benefits, Losses and Expenses Growth (Quartal)", 0, percent=True,
+           description="Growth in a life insurer's total benefit and expense line.",
+           formula="`BenefitsLossesAndExpenses`, the filed EDGAR fact. Single quarter as filed."),
+    Metric("NetInvestmentIncome", CHART_GROWTH, "Net Investment Income Growth (Quartal)", 0, percent=True,
+           description="Growth in the return an insurer earns on its investment portfolio. `net_investment_yield` is the same quantity against the portfolio.",
+           formula="`NetInvestmentIncome`, the filed EDGAR fact. Single quarter as filed."),
+    Metric("Investments", CHART_GROWTH, "Investment Portfolio Growth (Quartal)", 0, percent=True,
+           description="Growth in an insurer's invested assets.",
+           formula="`Investments`, the filed EDGAR fact. Point-in-time balance as filed."),
+    Metric("ClaimsReserve", CHART_GROWTH, "Claims Reserve Growth (Quartal)", 0, percent=True,
+           description="Growth in the reserve held against unpaid claims. `reserve_growth` is the fundamentals-chart version of the same series.",
+           formula="`ClaimsReserve`, the filed EDGAR fact. Point-in-time balance as filed."),
 
    
 
@@ -2525,19 +2831,61 @@ METRICS = [
 GROWTH_MECHANISM_NOTE = """
 Every growth panel is produced by the same function, with certain guards applied in order to exclude absurd values.
 
-- **4-quarter lag.** Each period is compared against the observation closest to
-  365 days earlier (tolerance ±45 days), so a quarterly series is compared like
-  for like -- Q3 against Q3 -- and seasonality is not what you are looking at.
+- **Two lags, one computation.** The chart's mode control switches which of two
+  columns is drawn. **YoY** compares each period against the observation closest
+  to 365 days earlier (tolerance ±45 days), so a quarterly series is compared
+  like for like -- Q3 against Q3 -- and seasonality cancels. **QoQ** compares it
+  against the one closest to 91 days earlier (tolerance ±11 days). Both are
+  `calculate_growth` with a different `periods` argument and are subject to
+  every guard below identically; nothing else differs.
+- **QoQ is not seasonally adjusted.** This is the one thing to know before
+  reading it. A seasonal filer shows a regular yearly cycle in QoQ that is the
+  calendar rather than the business: measured across this universe, the spread
+  between a panel's best and worst calendar quarter is a median 13.3 pp in QoQ
+  against 8.9 pp in YoY, and 24 pp against 6 pp for retailers specifically.
+  DECK's quarterly revenue growth runs -52%, -25%, +116%, +63% around the year
+  while its YoY growth never leaves +8% to +13%. Both are correct; only one of
+  them is about the business.
+- **QoQ is not the noisier series, despite that.** A quarter-to-quarter change
+  is measured over a shorter interval, so it is smaller: the median panel's QoQ
+  standard deviation is **0.58x** its YoY one, and QoQ is the more volatile of
+  the two on only 22.5% of panels. The sawtooth above is a *pattern*, not extra
+  variance.
+- **Annual-cadence series have no QoQ at all.** A filer publishing an item once
+  a year leaves no observation inside the 91 ± 11 day window, so those panels
+  are blank in QoQ and populated in YoY. 94 of 11,837 series in this export
+  (0.8%). That is the absence of a preceding quarter, not a dropped value.
 - **Both values must be positive.** If either the current or the prior figure is
   zero or negative, no growth value is produced. A percentage change across zero
   has no meaning, so the pipeline declines to invent one. This is why loss-making
   quarters leave holes in the net-income and cash-flow panels.
-- **A minimum-base guard.** The prior value must be at least 33% of the current
-  one, which caps a reported growth rate at about +200% and suppresses the
-  explosions that come from a near-zero base. Seven balance-sheet concepts --
-  Capex, Goodwill, CashAndEquivalents, Inventory, LongTermDebt,
-  ProvisionForCreditLosses and TangibleEquity -- loosen this to 5%, because
-  those legitimately grow from a small base.
+- **The minimum-base guard is off.** `calculate_growth` still takes a
+  `min_base_ratio`, and it is now **0** everywhere -- the function default and all
+  seven per-concept overrides. That parameter is a growth cap in disguise:
+  requiring the prior value to be at least *r* times the current one is exactly
+  capping growth at *1/r − 1*, so the old default of 0.33 capped every series at
+  **+203%** and the 0.05 overrides (Capex, Goodwill, CashAndEquivalents,
+  Inventory, LongTermDebt, ProvisionForCreditLosses, TangibleEquity) capped
+  theirs at **+1,900%**. With it at 0, growth from a tiny but positive base is
+  reported as computed. Measured on the current universe, that admits 33,070
+  values (3.6% of the total) that were previously blank -- every one of them above
+  +200% by construction, a quarter above +1,000%, and 282 above +100,000%. **A
+  panel with one enormous spike and a flat remainder is that base, not the
+  business**; the y-axis is shared across the panel, so a single such point
+  flattens everything else in it. The same census on the QoQ column is slightly
+  *smaller*, not larger: 3.1% of drawn values above +200% against YoY's 4.2%,
+  and 19.6% of panels carry a point above +1,000% against YoY's 23.1%. The
+  blow-ups come from a near-zero base either way, and a near-zero quarter's
+  immediate neighbour is more often near-zero too.
+- **A panel for every raw fact.** The catalogue is every concept the pipeline asks
+  EDGAR for -- `get_concept_candidates`' keys -- rather than a curated ten, plus
+  six derived series (`EPS_TTM_CALC`, `FCF_TTM`, `OperatingIncomeLoss_TTM`, `PPNR`,
+  `CoreOperatingEarnings`, `FFO_TTM`) that have no raw counterpart. The `_TTM` and
+  `_QUARTERLY` derivations of a raw fact are not registered: they are the same
+  quantity on a different window, and the window is what this chart already varies.
+  Sector-specific tags are offered to every profile, so a retailer sees bank and
+  insurer panels drawing **No Data** -- that is the catalogue being universal, not
+  a missing value.
 - **TTM versus quarterly.** Panels labelled *TTM* run on a rolling four-quarter
   sum; those labelled *Quartal* run on the single quarter as filed. Measured
   across this ticker set, a quarterly growth series is roughly 1.1--2.2x more

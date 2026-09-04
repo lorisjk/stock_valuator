@@ -35,9 +35,12 @@ DATA_FILES = {
     "valuation": "valuation_history.parquet",
     "snapshot": "current_snapshot.parquet",
 }
+# "Growth", not "Growth (YoY)": the chart draws either year-over-year or
+# quarter-over-quarter now, and the mode is named on the control and in the
+# figure title rather than on the tab, which cannot follow it.
 CHART_LABELS = {
     "fundamentals": "Fundamentals",
-    "growth": "Growth (YoY)",
+    "growth": "Growth",
     "valuation": "Valuation",
     "raw_facts": "Raw facts",
 }
@@ -86,7 +89,7 @@ NOTICE_DISMISSED_KEY = "update_notice_dismissed"
 CHART_SECTIONS = [
     (config.CHART_FUNDAMENTALS, "Fundamentals", "What the business does, independent of its share price."),
     (config.CHART_VALUATION, "Valuation", "What the market charges for a claim on that business."),
-    (config.CHART_GROWTH, "Growth", "Year-over-year change in the underlying filed figures."),
+    (config.CHART_GROWTH, "Growth", "Change in the underlying filed figures, year over year or quarter over quarter."),
     
 ]
 

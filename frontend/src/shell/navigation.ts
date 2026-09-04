@@ -37,7 +37,9 @@ export const VIEW_LABELS: Record<ViewId, string> = {
  * "the app opens on what was extracted, and the charts follow".
  *
  * The three chart labels come from `CHART_LABELS` (app.py:38) and are carried
- * verbatim -- note `"Growth (YoY)"`, not `"Growth"`. `"Data"` and `"Raw Facts"`
+ * verbatim. The growth tab reads `"Growth"`: it draws year-over-year or
+ * quarter-over-quarter depending on the chart's own mode control, so the tab
+ * cannot name a mode and the figure title does instead. `"Data"` and `"Raw Facts"`
  * are hardcoded at the call site; `CHART_LABELS` does have a `raw_facts` entry,
  * spelled `"Raw facts"` with a lowercase f, and the tab list does not use it.
  * The reference's own two spellings disagree; the tab list wins here because it
@@ -49,7 +51,7 @@ export type TabId = (typeof TABS)[number];
 export const TAB_LABELS: Record<TabId, string> = {
   data: "Data",
   raw: "Raw Facts",
-  growth: "Growth (YoY)",
+  growth: "Growth",
   fundamentals: "Fundamentals",
   valuation: "Valuation",
   comparison: "Comparison",

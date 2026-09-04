@@ -54,7 +54,7 @@ import {
 import "./shell/shell.css";
 
 /** app.py:816 — the page name, carried so the two apps answer to one thing. */
-const APP_TITLE = "Kyhestlo";
+const APP_TITLE = "xbrl-metrics";
 
 /** app.py:837-841, verbatim. */
 const INTRO =
@@ -156,9 +156,13 @@ function Workspace() {
   // per-ticker fetch is what knows whether it exists, and it already has a
   // message for the answer. Falling back here would silently rewrite the URL
   // someone shared.
-  const ticker = location.ticker ?? universe[0]?.ticker ?? "AAPL";
+ const ticker =
+  location.ticker ??
+  (universe.some((u) => u.ticker === "AAPL") ? "AAPL" : universe[0]?.ticker) ??
+  "AAPL"; 
   const profile = registry.ticker_profile[ticker] ?? registry.default_profile;
   const { view, tab } = location;
+
 
   return (
     <div className={`app${sidebarOpen ? "" : " app--collapsed"}`}>
@@ -188,7 +192,8 @@ function Workspace() {
           </header>
 
           <UpdateNotice raw={notice} />
-          <p className="intro">{INTRO}</p>
+          <p className="intro">{INTRO} 
+          </p>
 
           {view === "analysis" && (
             <nav className="tabs" aria-label="Analysis sections">

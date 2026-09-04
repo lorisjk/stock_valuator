@@ -1,0 +1,41 @@
+/*
+ * The growth mode control. Palette variables come from `.app` in shell.css --
+ * this file defines none of its own, as `outliers.css` does not.
+ */
+
+.growth-mode {
+  margin: 0.8rem 0;
+}
+
+/*
+ * One row: the group's name and its options, wrapping together at a narrow
+ * width. No border or box -- it sits in the same control stack as the window
+ * slider and the masking toggle and should read as one of them, not as a panel.
+ */
+.growth-mode__set {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.2rem 1rem;
+}
+
+.growth-mode__legend {
+  color: var(--shell-strong);
+  font-weight: 600;
+}
+
+.growth-mode__option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.growth-mode__short {
+  opacity: 0.7;
+}
+
+.growth-mode__note {
+  margin: 0.35rem 0 0;
+}

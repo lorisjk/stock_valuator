@@ -19,7 +19,7 @@ import {
   type TickerFile,
 } from "../contracts.ts";
 
-/** The numeric column of each frame. facts_growth is the odd one out. */
+/** The *primary* numeric column of each frame. facts_growth is the odd one out. */
 const VALUE_COLUMN: Record<FrameName, string> = {
   metrics_long: "value",
   valuation_history: "value",
@@ -61,6 +61,26 @@ const TEXT_COLUMNS: Partial<Record<FrameName, readonly string[]>> = {
 };
 
 /**
+ * Numeric columns beyond the primary one, by frame. Same convention as
+ * `TEXT_COLUMNS`, and same tolerance: a column named here that the export does
+ * not carry is skipped rather than thrown on.
+ *
+ * `facts_growth` carries both growth modes on the same rows -- `yoy_growth` is
+ * the primary and `qoq_growth` is here -- because the mode is a control on the
+ * chart, not a second fetch. The two are 30 kB apart in a ticker file; loading
+ * one and fetching the other on toggle would put a network round-trip behind a
+ * checkbox.
+ *
+ * `facts_full` carries `yoy_growth` too and is deliberately not listed: the data
+ * tab pivots it on `value` and reads no growth column at all (app.py's
+ * `pivot_ticker`), so listing it would allocate a 2,357-element array per ticker
+ * for nothing.
+ */
+const EXTRA_NUMERIC_COLUMNS: Partial<Record<FrameName, readonly string[]>> = {
+  facts_growth: ["qoq_growth"],
+};
+
+/**
  * `YYYY-MM-DD` -> Date, parsed as UTC midnight.
  *
  * `new Date("2024-03-31")` already parses a bare date as UTC, but going through
@@ -96,6 +116,9 @@ export function reconstructFrame(name: FrameName, block: ColumnarFrame): Frame {
   };
   const endColumn = block.data[index("end")] as string[];
   const conceptColumn = block.data[index("concept")] as string[];
+  // The primary column is `index`, not a lenient lookup: a frame arriving
+  // without the column its charts draw is contract drift, not a degraded
+  // bundle, and `facts_growth` without `yoy_growth` has to say so here.
   const valueColumn = block.data[index(VALUE_COLUMN[name])] as (number | null)[];
 
   const lengths = new Set(block.data.map((column) => column.length));
@@ -103,10 +126,27 @@ export function reconstructFrame(name: FrameName, block: ColumnarFrame): Frame {
     throw new Error(`${name}: columns have different lengths ${[...lengths].join(", ")}`);
   }
 
-  const nonfiniteRows = new Map<number, "Infinity" | "-Infinity">();
-  const sidecar = block.nonfinite?.[VALUE_COLUMN[name]];
-  if (sidecar) {
-    for (const [row, sign] of Object.entries(sidecar)) nonfiniteRows.set(Number(row), sign);
+  const readSidecar = (column: string) => {
+    const rows = new Map<number, "Infinity" | "-Infinity">();
+    const sidecar = block.nonfinite?.[column];
+    if (sidecar) {
+      for (const [row, sign] of Object.entries(sidecar)) rows.set(Number(row), sign);
+    }
+    return rows;
+  };
+  const nonfiniteRows = readSidecar(VALUE_COLUMN[name]);
+
+  const numeric = new Map<string, readonly (number | null)[]>([
+    [VALUE_COLUMN[name], valueColumn],
+  ]);
+  const nonfinite = new Map<string, ReadonlyMap<number, "Infinity" | "-Infinity">>([
+    [VALUE_COLUMN[name], nonfiniteRows],
+  ]);
+  for (const column of EXTRA_NUMERIC_COLUMNS[name] ?? []) {
+    const at = block.columns.indexOf(column);
+    if (at < 0) continue;
+    numeric.set(column, block.data[at] as (number | null)[]);
+    nonfinite.set(column, readSidecar(column));
   }
 
   const text = new Map<string, readonly (string | null)[]>();
@@ -127,7 +167,9 @@ export function reconstructFrame(name: FrameName, block: ColumnarFrame): Frame {
     // panel can say the value is infinite rather than missing; nothing in this
     // task reads it yet, and that is the deliberate part.
     value: valueColumn,
+    numeric,
     nonfiniteRows,
+    nonfinite,
     // Row `i` of every array is the same export row, this one included, which is
     // what lets a caller pair a provenance label with the value it describes
     // without a join.
