@@ -67,8 +67,12 @@ TICKER_FLOOR = 0.95       # of the universe requested by this run
 PRICE_FLOOR = 0.95        # of the tickers this run produced data for
 MAX_EXPORT_AGE_HOURS = 6  # the run that wrote it must be the one that just ran
 EXPECTED_SCHEMA = 4
-EXPECTED_REGISTRY_SCHEMA = 1
-EXPECTED_TICKER_SCHEMA = 1
+# Both bumped by the QoQ cycle: registry v2 carries charts.growth.modes, the
+# per-ticker files carry `qoq_growth` beside `yoy_growth` in facts_growth. The
+# row floors above are untouched by that -- a second growth mode is a second
+# *column* on the same rows, which is most of why the column shape was chosen.
+EXPECTED_REGISTRY_SCHEMA = 2
+EXPECTED_TICKER_SCHEMA = 2
 
 FRAMES = ["metrics_long.parquet", "valuation_history.parquet", "facts_growth.parquet",
           "facts_full.parquet", "current_snapshot.parquet", "universe.parquet"]
@@ -160,6 +164,27 @@ def main(out_dir: str, max_age_hours: float = MAX_EXPORT_AGE_HOURS) -> int:
         floor = int(BASELINE[name] * ROW_FLOOR)
         c.add(f"{name} rows", len(frames[name]) >= floor,
               f"{len(frames[name]):,}", f">= {floor:,} ({ROW_FLOOR:.0%} of {BASELINE[name]:,})")
+
+    # The growth chart's modes are columns of one frame, so a missing mode is a
+    # missing *column* -- which no row floor above can see. The frontend refuses
+    # a bundle whose `facts_growth` lacks `yoy_growth` and draws an empty chart in
+    # any mode whose column is absent, so both are checked here, and against the
+    # registry's own declaration rather than a list repeated in this file.
+    growth_modes = []
+    registry_path = os.path.join(out_dir, "registry.json")
+    if os.path.exists(registry_path):
+        with open(registry_path, encoding="utf-8") as fh:
+            growth_modes = json.load(fh).get("charts", {}).get("growth", {}).get("modes", [])
+    declared = [m["column"] for m in growth_modes]
+    have = set(frames["facts_growth.parquet"].columns)
+    c.add("facts_growth carries every declared growth mode",
+          bool(declared) and set(declared) <= have,
+          f"{sorted(have - {'ticker', 'concept', 'end'})}", f"{declared or 'modes declared'}")
+    for column in declared:
+        if column not in have:
+            continue
+        nonnull = int(frames["facts_growth.parquet"][column].notna().sum())
+        c.add(f"facts_growth `{column}` non-null", nonnull > 0, f"{nonnull:,}", "> 0")
 
     requested = meta.get("tickers_requested", 0)
     produced = meta.get("tickers_with_data", 0)

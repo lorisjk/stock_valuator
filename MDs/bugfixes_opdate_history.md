@@ -6,6 +6,51 @@ Most entries here share a theme: **the pipeline fails silently**. A missing tag 
 
 ---
 
+## 2026-09-04 — The snapshot forward-filled a metric whose input had been dead for ten quarters
+
+**AppLovin published `fcf_ttm` = $1.057bn from 2023-12-31 under a 2026 market cap.** Its
+`Capex` tag stops at 2023-12-31 while the rest of its filing runs to 2026-06-30, so
+`Capex_TTM`, `FCF_QUARTERLY` and `FCF_TTM` all stop with it. P/FCF 99.96, EV/FCF 100.40,
+`pfcf_ex_sbc` 136.39 — every one of them a current numerator over a 2.5-year-old denominator.
+`OperatingCashFlow_TTM` ($4.53bn) was correct throughout; only the one tag was missing.
+
+**The reported diagnosis was half right and the half that was wrong mattered.** The report
+said `get_latest_value` skips nulls without a bound. It does not — `MAX_LATEST_VALUE_AGE_DAYS
+= 365` has bounded it since the FFO cycle. But that bound is measured *inside the series*, so a
+concept whose rows **stop** has an age of zero and passes it untouched. And `fcf_ttm` never goes
+through `get_latest_value` at all: it is `get_latest_row(metrics["fcf"])`, one of **21 snapshot
+fields** on a path with no age test of any kind. Two mechanisms, one cause: recency measured
+against the wrong reference.
+
+**The fix is a third reference, not a tighter bound.** `MAX_LATEST_VALUE_LAG_DAYS = 365`
+measured against `newest_period(facts)` — the newest period the ticker reported *anything* for.
+Relative on purpose, on the argument `MAX_EDGAR_SHARE_LAG_DAYS` already makes: a filer who has
+not reported since March moves its own reference with it and is never punished twice. That is
+also what makes it safe on raw balance-sheet facts as well as derived `_TTM` figures — it
+detects divergence between one metric and the rest of the filing, not age.
+
+**The bound came out of an empty run.** 9,654 snapshot lookups; the lags form a quarterly
+lattice ending at 365 and **nothing between 366 and 453**, resuming at 454 and running to 5,752
+days. Every bound in [365, 453] withholds the identical 375 values — confirmed by re-running the
+acceptance harness at 366 and 453 for the same 11,108/11,108, and watching it drop to
+11,096 at 364 and 11,107 at 454. Below 365 it starts cutting into annual-cadence series: the
+kept set sits a median of 0.99 of its own reporting period behind, the withheld set 17.9.
+
+**Result, 607 tickers.** 195 values withheld directly, 451 dependents blanked with them, **646
+disappeared, 646 accounted for, 0 changed**; `metrics_long`, `valuation_history` and the facts
+frame byte-identical. 149 of 607 tickers affected, of which **115 had `fundamentals_stale =
+0`** — the existing flag called them current, because it answers a different question. Worst
+cases were older than AppLovin's: **AEP published a `dividend_yield` of 1.37% from a $1.71
+dividend filed in 2010** (5,569 days), SLB 1.67% from a $0.96 dividend filed in 2011, VRTX an
+EV built on $105m of debt last tagged in 2011.
+
+`<field>_stale_days` publishes the lag of a value that was withheld, beside `<field>_age_days`
+for one that was carried — 429 raised, 239 published after `filter_hidden_rows`, which now
+strips `_age_days`/`_stale_days` the way it always stripped `_quarterly` (`_ROW_ABOUT_SUFFIXES`).
+Full derivation in `snapshot_staleness_guard_report.md`.
+
+---
+
 ## 2026-08-22 — Per-ticker JSON: two files, not five, and the comparison axis is not needed
 
 The six parquet frames are 309 MB as JSON. The export now also writes

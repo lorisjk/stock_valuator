@@ -131,6 +131,14 @@ Registering the raw sector tags instead would have cost 22–23 entries each. It
 what fixed the REIT PEG: `pe_to_revenue_growth` was not listed as a `pe_ratio` consumer, so
 the reit profile published a PEG whose numerator it had itself decided was not meaningful.
 
+`_ROW_ABOUT_SUFFIXES` is the other half of "single authority": a row can be *about* a metric
+rather than be one, and a profile that hides the metric hides those too. `_quarterly` was
+always there; `_age_days` and `_stale_days` joined it when the snapshot's staleness guard
+started publishing them. Without the strip, 190 of that guard's 429 markers would land on
+fields their own profile hides — 61 of them `avg_p_tbv_5y`, which most profiles hide outright.
+Adding the two suffixes leaves `profile_visibility()` byte-identical, because that export is
+keyed by metric id and no id ends in either.
+
 ---
 
 ## `TTM_CONCEPTS`
