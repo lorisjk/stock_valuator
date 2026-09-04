@@ -129,7 +129,41 @@ def apply_self_relative_scale_guard(
 GROWTH_PERIOD_TOLERANCE_DAYS_PER_4Q = 45
 
 
-def calculate_growth(df: pd.DataFrame, concept: str, periods: int, result_name: str, min_base_ratio: float = 0.33) -> pd.DataFrame:
+def calculate_growth(df: pd.DataFrame, concept: str, periods: int, result_name: str, min_base_ratio: float = 0.0) -> pd.DataFrame:
+    """Growth over `periods` quarters for one concept, with two independent guards.
+
+    `periods` is the whole of the difference between the chart's two modes:
+    **4** is year-over-year, **1** is quarter-over-quarter. Both the offset and
+    the match tolerance scale with it (`periods * 365.25 / 4` days, `periods *
+    45 / 4`), so QoQ looks for an observation 91.31 +- 11.25 days back where YoY
+    looks 365.25 +- 45. Nothing else below branches on `periods`, and neither
+    guard has a per-mode variant -- which is the point: the two series are the
+    same computation, not two computations that agree.
+
+    **Only YoY cancels seasonality.** The 4-quarter lag compares Q3 against Q3;
+    the 1-quarter lag compares Q3 against Q2, so a seasonal filer produces a
+    regular sawtooth that is the calendar rather than the business. Measured on
+    this universe, a retailer's QoQ revenue swings 24 pp between its best and
+    worst calendar quarter against 6 pp for YoY, and DECK's swings 168 pp
+    against 5. That is a fact about the reader, not about the code, so it is
+    stated in GROWTH_MECHANISM_NOTE and beside the chart's mode control too.
+
+    `value > 0 and prev_value > 0` blocks growth across zero or from a
+    negative base, where a percentage change has no meaning. It is unchanged
+    and is not what `min_base_ratio` does.
+
+    `min_base_ratio` blocks growth from a *tiny but positive* base. It is a
+    growth cap in disguise: `prev >= r * value` is exactly `growth <= 1/r - 1`,
+    so the old default of 0.33 capped every series at +203% and the 0.05
+    overrides capped theirs at +1,900%.
+
+    **Set to 0 deliberately**, here and in every override, so the mechanism
+    stays in place and the decision is reversible by editing numbers rather
+    than restoring code. Measured before the change: the guard was suppressing
+    33,070 of 928,482 values (3.6%), every one of them above +200% by
+    construction, a quarter of them above +1,000% and 282 above +100,000%.
+    See growth_expansion_report.md.
+    """
     filtered_df = df[df["concept"] == concept].copy()
     filtered_df = filtered_df.sort_values(["ticker", "end"]).reset_index(drop=True)
     filtered_df["end"] = filtered_df["end"].astype("datetime64[ns]")
@@ -404,6 +438,61 @@ def get_latest_value(
 
 def get_latest_row(df: pd.DataFrame, date_col: str = "end") -> pd.DataFrame:
     return df.loc[df.groupby("ticker")[date_col].idxmax()]
+
+
+# How far behind the ticker's own newest period a snapshot value may sit.
+#
+# A *different* question from MAX_LATEST_VALUE_AGE_DAYS above, and the distinction is the
+# whole of this guard. That one measures inside one series -- how far back the snapshot had
+# to reach past trailing nulls -- so a concept whose rows stop altogether has an age of
+# zero, because its newest row *is* its value. This one measures the same value against the
+# newest period the ticker reported *anything* for, so a series that stopped while the rest
+# of the filing kept arriving is visible as what it is.
+#
+# The reference is relative on purpose, on the argument MAX_EDGAR_SHARE_LAG_DAYS already
+# makes for share counts: a filer who has simply not reported since March moves its own
+# newest period with it and is never punished for being behind the calendar. That is
+# `days_since_last_filing`'s question, and it stays there.
+#
+# 365 is the twelve-month definition MAX_LATEST_VALUE_AGE_DAYS uses, and the measured
+# distribution puts it exactly at the top of the legitimate region: over 9,654 snapshot
+# lookups the lags form a quarterly lattice that ends at 365 and does not resume until 454,
+# so every bound in [365, 453] withholds the identical 375 values. Below 365 the bound
+# starts cutting into annual-cadence series, which sit a full year behind by construction
+# for one quarter of every year. See snapshot_staleness_guard_report.md.
+MAX_LATEST_VALUE_LAG_DAYS = 365
+
+
+def newest_period(df: pd.DataFrame) -> pd.Series:
+    """The newest period each ticker reported anything for -- the staleness reference.
+
+    Across all concepts deliberately: the question this answers is "has the filing moved on
+    without this metric", and only a cross-concept reference can see that.
+    """
+    return df.groupby("ticker")["end"].max()
+
+
+def split_stale(
+    rows: pd.DataFrame,
+    reference: pd.Series,
+    max_lag_days: "int | None" = MAX_LATEST_VALUE_LAG_DAYS,
+) -> "tuple[pd.DataFrame, pd.DataFrame]":
+    """`(publishable, withheld)` for one snapshot lookup's per-ticker result.
+
+    The withheld frame carries `value_lag_days`, so the caller can publish *why* a field is
+    absent rather than leaving an unexplained blank -- the same "here is how this number was
+    obtained" signal `ttm_source`, `ffo_gains_source` and `<field>_age_days` already carry.
+
+    One function for both of `build_snapshot`'s lookup paths. They fail differently --
+    `get_latest_value` skips trailing nulls, `get_latest_row` takes the newest row whatever
+    it holds -- but a concept whose rows *stop* defeats both in the same way, so the guard
+    that catches it belongs in one place rather than two.
+    """
+    lag = (rows["ticker"].map(reference) - rows["end"]).dt.days
+    if max_lag_days is None:
+        return rows, rows.iloc[0:0].assign(value_lag_days=lag.iloc[0:0])
+    stale = lag > max_lag_days
+    return rows[~stale], rows[stale].assign(value_lag_days=lag[stale])
 
 
 def to_long_format(df: pd.DataFrame, value_col: str, concept_name: str) -> pd.DataFrame:

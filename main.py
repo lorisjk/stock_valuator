@@ -39,6 +39,8 @@ from config import (
     CHART_VALUATION,
     CHART_GROWTH,
     CHART_SPECS,
+    GROWTH_MODES,
+    GROWTH_PERIODS,
     LANGUAGE_PRIMARY,
     QUARTERLY_COUNTERPART,
     GROWTH_MECHANISM_NOTE,
@@ -59,6 +61,8 @@ from metrics import (
     calculate_rolling_harmonic_stats,
     get_latest_value,
     get_latest_row,
+    newest_period,
+    split_stale,
     to_long_format,
     apply_denominator_scale_guard,
     fill_scale_reference,
@@ -639,16 +643,26 @@ def calculate_quarterly_metrics(facts: pd.DataFrame) -> dict:
 _GROWTH_EXCLUDED_CONCEPTS = {"GainLossOnSaleOfProperties", "RealizedInvestmentGains"}
 
 
+# Every value is 0, and every entry is kept. These seven concepts were the ones
+# whose base-ratio guard was loosened from 0.33 to 0.05 because they legitimately
+# grow from a small base; the guard is now off everywhere, so the two thresholds
+# have collapsed into one number. The dict stays because a value of 0 leaves the
+# mechanism intact -- restoring the old behaviour is editing seven numbers and a
+# default, not restoring deleted code.
 GROWTH_MIN_BASE_RATIO_OVERRIDES = {
-    "Capex": 0.05,
-    "Goodwill": 0.05,
-    "CashAndEquivalents": 0.05,
-    "Inventory": 0.05,
-    "LongTermDebt": 0.05,
-    "ProvisionForCreditLosses": 0.05,
-    "TangibleEquity": 0.05,
+    "Capex": 0.0,
+    "Goodwill": 0.0,
+    "CashAndEquivalents": 0.0,
+    "Inventory": 0.0,
+    "LongTermDebt": 0.0,
+    "ProvisionForCreditLosses": 0.0,
+    "TangibleEquity": 0.0,
 }
 
+# The YoY column, kept as a named constant because several call sites outside
+# add_growth_column name it directly. The full mode table -- both columns and the
+# `periods` each is computed with -- is config.GROWTH_PERIODS, imported above so
+# the pipeline and the registry cannot declare different modes.
 GROWTH_COLUMN = "yoy_growth"
 
 
@@ -673,25 +687,53 @@ def growth_concepts(facts: pd.DataFrame) -> list[str]:
 
 
 def add_growth_column(facts: pd.DataFrame) -> pd.DataFrame:
+    """One column per growth mode: `yoy_growth` (periods=4), `qoq_growth` (1).
 
-    parts = []
-    for concept in growth_concepts(facts):
-        g = calculate_growth(
-            facts, concept, 4, GROWTH_COLUMN,
-            min_base_ratio=GROWTH_MIN_BASE_RATIO_OVERRIDES.get(concept, 0.33),
-        )
-        if g.empty:
+    **A second column, not a second row.** The frame is keyed
+    (ticker, concept, end) and every consumer relies on that being unique --
+    `filter_hidden_rows` filters it by concept, `pivot_ticker` pivots it into
+    that shape, `cadence_markers` reads one `ttm_source` per cell, and the
+    validator's row floors are measured against it. A second row per concept
+    would have had to carry a cadence discriminator through all four. A second
+    column changes none of them: the row count, the key and every floor stay
+    exactly as they were, and the merge below is the one that was already here,
+    run twice.
+
+    The two modes differ in nothing but `periods`. Same function, same
+    `prev > 0 and value > 0` condition, same per-concept `min_base_ratio`
+    (0 everywhere) -- so no guard needs a QoQ variant, and none has one.
+
+    One thing `periods` does change, silently: `calculate_growth` scales its
+    match tolerance with it, so QoQ matches within +-11.25 days of 91.31 rather
+    than +-45 of 365.25. 97.5% of consecutive observations in this export fall
+    inside that window; the ~0.8% of series a filer publishes only annually fall
+    outside it by construction and get no QoQ value at all, which is correct --
+    there is no preceding quarter to compare against.
+    """
+    concepts = growth_concepts(facts)
+
+    for column, periods in GROWTH_PERIODS.items():
+        parts = []
+        for concept in concepts:
+            g = calculate_growth(
+                facts, concept, periods, column,
+                min_base_ratio=GROWTH_MIN_BASE_RATIO_OVERRIDES.get(concept, 0.0),
+            )
+            if g.empty:
+                continue
+            g = g[["ticker", "end", column]].copy()
+            g["concept"] = concept
+            parts.append(g)
+
+        if not parts:
+            facts[column] = pd.NA
             continue
-        g = g[["ticker", "end", GROWTH_COLUMN]].copy()
-        g["concept"] = concept
-        parts.append(g)
 
-    if not parts:
-        facts[GROWTH_COLUMN] = pd.NA
-        return facts
+        growth = pd.concat(parts, ignore_index=True).drop_duplicates(
+            subset=["ticker", "concept", "end"])
+        facts = facts.merge(growth, on=["ticker", "concept", "end"], how="left")
 
-    growth = pd.concat(parts, ignore_index=True).drop_duplicates(subset=["ticker", "concept", "end"])
-    return facts.merge(growth, on=["ticker", "concept", "end"], how="left")
+    return facts
 
 
 def build_metrics_long(metrics: dict, quarterly_metrics: dict = None) -> pd.DataFrame:
@@ -1109,6 +1151,11 @@ def _resolve_share_sources(facts: pd.DataFrame, prices: pd.DataFrame) -> tuple:
 
     yf_shares = prices["shares_outstanding"]
 
+    # Not routed through build_snapshot's staleness guard: this path already measures lag
+    # against the same reference (`newest_any` below, MAX_EDGAR_SHARE_LAG_DAYS) and has a
+    # second source to fall back on, so withholding the EDGAR count here would not blank a
+    # field, it would silently switch which vendor's number `market_cap` uses. ARES is the
+    # one live case -- see snapshot_staleness_guard_report.md.
     edgar_latest = get_latest_value(facts, "SharesOutstanding")[["ticker", "value", "end"]]
     edgar_shares = prices["ticker"].map(edgar_latest.set_index("ticker")["value"])
 
@@ -1165,6 +1212,34 @@ def build_snapshot(
     # is emitted as its own concept, `<field>_age_days`, and only when it is non-zero.
     value_ages = []
 
+    # The staleness reference: the newest period this ticker reported *anything* for.
+    # Computed once, off the same frame every lookup below reads, and passed to both lookup
+    # paths -- `split_stale`'s docstring says why one guard serves both.
+    #
+    # A value more than MAX_LATEST_VALUE_LAG_DAYS behind it is not published. `<field>_age_days`
+    # cannot see this case: it measures inside one series, and the series that cause it have
+    # simply *stopped*, so their newest row is their value and their age is zero. AppLovin's
+    # `Capex` ends at 2023-12-31 while the rest of its filing runs to 2026-06-30, which made
+    # `fcf_ttm` a 2.5-year-old numerator under a current market cap -- P/FCF 98.4 against a
+    # true 23.8. The withheld value is announced as `<field>_stale_days`, so a blank field
+    # says why it is blank rather than looking like a metric that was never computed.
+    reference = newest_period(facts)
+    stale_lags = []
+
+    def _record_stale(withheld: pd.DataFrame, field: str, value_col: str) -> None:
+        # Only where a number was actually withheld. A stale row that was null anyway would
+        # have published nothing either way, and a marker on it would claim the guard is the
+        # reason a field is missing when it is not -- the same "only when it is non-zero"
+        # restraint `<field>_age_days` shows above.
+        withheld = withheld[withheld[value_col].notna()]
+        if withheld.empty:
+            return
+        stale_lags.append(pd.DataFrame({
+            "ticker": withheld["ticker"].to_numpy(),
+            "concept": f"{field}_stale_days",
+            "value": withheld["value_lag_days"].to_numpy().astype(float),
+        }))
+
     def latest_value(concept: str, field: str) -> pd.DataFrame:
         got = get_latest_value(facts, concept)
         carried = got[got["value_age_days"] > 0]
@@ -1174,7 +1249,24 @@ def build_snapshot(
                 "concept": f"{field}_age_days",
                 "value": carried["value_age_days"].to_numpy().astype(float),
             }))
+        got, withheld = split_stale(got, reference)
+        _record_stale(withheld, field, "value")
         return got.rename(columns={"value": field})
+
+    def latest_metric(frame: pd.DataFrame, field: str, column: "str | None" = None) -> pd.DataFrame:
+        """`get_latest_row` under the same guard.
+
+        This is the path the reproduction case runs through: `metrics["fcf"]` is an inner
+        merge of `OperatingCashFlow_TTM` and `Capex_TTM`, so when one input stops the frame
+        does not gain nulls, it simply *ends* -- and the newest row of a frame that ended in
+        2023 is a 2023 row, with nothing in `get_latest_row` to notice.
+        """
+        got = get_latest_row(frame)
+        if column is not None:
+            got = got.rename(columns={column: field})
+        got, withheld = split_stale(got, reference)
+        _record_stale(withheld, field, field)
+        return got
 
     eps = latest_value("EPS_TTM_CALC", "eps_ttm")
     revenue = latest_value("Revenue_TTM", "revenue_ttm")
@@ -1185,26 +1277,29 @@ def build_snapshot(
     # order-of-magnitude question, which an older year answers as well as the current one --
     # the argument `fill_scale_reference` already makes on the history side. Bounding it would
     # take the reference away from exactly the filers whose revenue is missing.
+    # Opts out of the staleness guard as well as the age bound, on the same argument: an
+    # order-of-magnitude reference does not go stale the way a published figure does, and
+    # withholding it would take the guard away from exactly the filers whose revenue stopped.
     revenue_scale = get_latest_value(
         facts, "Revenue_TTM", max_value_age_days=None
     ).rename(columns={"value": "_revenue_scale"})[["ticker", "_revenue_scale"]]
     dividends = latest_value("DividendsPerShare_TTM", "dividends_ttm")
 
-    fcf = get_latest_row(metrics["fcf"]).rename(columns={"fcf": "fcf_ttm"})
-    ebitda = get_latest_row(metrics["ebitda"]).rename(columns={"ebitda": "ebitda_ttm"})
+    fcf = latest_metric(metrics["fcf"], "fcf_ttm", "fcf")
+    ebitda = latest_metric(metrics["ebitda"], "ebitda_ttm", "ebitda")
 
     equity = latest_value("StockholdersEquity", "equity")
     debt = latest_value("LongTermDebt", "debt")
     cash = latest_value("CashAndEquivalents", "cash")
 
-    growth = get_latest_row(metrics["revenue_growth"])
+    growth = latest_metric(metrics["revenue_growth"], "yoy_growth")
 
-    nim = get_latest_row(metrics["net_interest_margin"])
-    efficiency = get_latest_row(metrics["efficiency_ratio"])
+    nim = latest_metric(metrics["net_interest_margin"], "net_interest_margin")
+    efficiency = latest_metric(metrics["efficiency_ratio"], "efficiency_ratio")
     tangible_equity = latest_value("TangibleEquity", "tangible_equity")
-    roa = get_latest_row(metrics["roa"])
-    equity_to_assets = get_latest_row(metrics["equity_to_assets"])
-    provision_ratio = get_latest_row(metrics["provision_ratio"])
+    roa = latest_metric(metrics["roa"], "roa")
+    equity_to_assets = latest_metric(metrics["equity_to_assets"], "equity_to_assets")
+    provision_ratio = latest_metric(metrics["provision_ratio"], "provision_ratio")
     ppnr_latest = latest_value("PPNR", "ppnr_ttm")
     # FFO_TTM is added to `facts` by add_derived_concepts, well before build_snapshot
     # runs, so nothing was missing -- p_ffo was simply never added here. Read from the
@@ -1214,20 +1309,20 @@ def build_snapshot(
     # and fixing that expression is a separate change that fixes both at once.
     ffo_latest = latest_value("FFO_TTM", "ffo_ttm")
     sbc_latest = latest_value("ShareBasedCompensation_TTM", "sbc_ttm")
-    combined_ratio = get_latest_row(metrics["combined_ratio"])
-    loss_ratio = get_latest_row(metrics["loss_ratio"])
-    expense_ratio = get_latest_row(metrics["expense_ratio"])
-    net_investment_yield = get_latest_row(metrics["net_investment_yield"])
-    reserve_growth = get_latest_row(metrics["reserve_growth"])
+    combined_ratio = latest_metric(metrics["combined_ratio"], "combined_ratio")
+    loss_ratio = latest_metric(metrics["loss_ratio"], "loss_ratio")
+    expense_ratio = latest_metric(metrics["expense_ratio"], "expense_ratio")
+    net_investment_yield = latest_metric(metrics["net_investment_yield"], "net_investment_yield")
+    reserve_growth = latest_metric(metrics["reserve_growth"], "reserve_growth")
     core_earnings_latest = latest_value("CoreOperatingEarnings", "core_earnings_ttm")
-    inventory_turnover = get_latest_row(metrics["inventory_turnover"])
-    dio = get_latest_row(metrics["dio"])
-    dso = get_latest_row(metrics["dso"])
-    dpo = get_latest_row(metrics["dpo"])
-    ccc = get_latest_row(metrics["cash_conversion_cycle"])
-    rd_intensity = get_latest_row(metrics["rd_intensity"])
-    capex_intensity = get_latest_row(metrics["capex_intensity"])
-    operating_leverage = get_latest_row(metrics["operating_leverage"])
+    inventory_turnover = latest_metric(metrics["inventory_turnover"], "inventory_turnover")
+    dio = latest_metric(metrics["dio"], "dio")
+    dso = latest_metric(metrics["dso"], "dso")
+    dpo = latest_metric(metrics["dpo"], "dpo")
+    ccc = latest_metric(metrics["cash_conversion_cycle"], "cash_conversion_cycle")
+    rd_intensity = latest_metric(metrics["rd_intensity"], "rd_intensity")
+    capex_intensity = latest_metric(metrics["capex_intensity"], "capex_intensity")
+    operating_leverage = latest_metric(metrics["operating_leverage"], "operating_leverage")
 
 
     for df, cols in [
@@ -1275,7 +1370,14 @@ def build_snapshot(
         sub = rolling_multiples[cols].dropna(subset=[field]) if field in rolling_multiples.columns else pd.DataFrame(columns=cols)
         if sub.empty:
             continue
-        latest = get_latest_row(sub)
+        # The same guard, for the same reason: `avg_pfcf_5y` is drawn as *the* current
+        # five-year average, and a window that ended four years ago is not one. The lag is
+        # the multiple's, so it follows whichever input stopped -- 142 of the 375 withheld
+        # values are these, and they are the downstream shadow of the other 233.
+        latest, withheld = split_stale(get_latest_row(sub), reference)
+        _record_stale(withheld, field, field)
+        if latest.empty:
+            continue
         diverges = (latest[field] - latest[median_field]).abs() / latest[median_field]
         latest[f"{field}_diverges"] = (diverges > MIN_AVG_5Y_DIVERGENCE).astype(float)
 
@@ -1360,6 +1462,11 @@ def build_snapshot(
         ages = pd.concat(value_ages, ignore_index=True)
         ages["end"] = as_of_date
         long = pd.concat([long, ages[["ticker", "end", "concept", "value"]]], ignore_index=True)
+
+    if stale_lags:
+        lags = pd.concat(stale_lags, ignore_index=True)
+        lags["end"] = as_of_date
+        long = pd.concat([long, lags[["ticker", "end", "concept", "value"]]], ignore_index=True)
 
     if peer_band_flags is not None and not peer_band_flags.empty:
         bands = peer_band_flags.copy()
@@ -1825,7 +1932,11 @@ def _write_parquet_atomic(df: pd.DataFrame, path: str) -> int:
 # produced them.
 #
 # 1: registry.json + concept_candidates.json.
-REGISTRY_SCHEMA = 1
+# 2: charts.growth gained `value_columns` and `modes` (YoY / QoQ). A bump rather
+#    than an additive field the frontend may ignore: a build that reads the mode
+#    control off this block would silently offer one mode against an older
+#    registry, and offering half a control is worse than refusing the bundle.
+REGISTRY_SCHEMA = 2
 REGISTRY_FILE = "registry.json"
 CANDIDATES_FILE = "concept_candidates.json"
 
@@ -1973,7 +2084,10 @@ def export_registry(tickers: list[str], out_dir: str) -> dict:
 # under 10 kB on a first paint.
 #
 # 1: {TICKER}.json (four chart frames) + {TICKER}.facts.json.
-TICKER_EXPORT_SCHEMA = 1
+# 2: facts_growth carries `qoq_growth` beside `yoy_growth`. Same rows, one more
+#    column -- but a reader that expects the column and does not get it draws an
+#    empty chart in QoQ mode with no way to say why, so the version gates it.
+TICKER_EXPORT_SCHEMA = 2
 TICKER_EXPORT_SUBDIR = "tickers"
 TICKER_CORE_FRAMES = ("metrics_long", "valuation_history", "facts_growth", "current_snapshot")
 TICKER_FACTS_FRAMES = ("facts_full",)
@@ -2091,8 +2205,12 @@ def export_for_app(
     # build_growth only ever draws the growth-chart concepts, and only ever reads
     # these four columns -- exporting the whole facts frame would be ~10x the rows.
     growth_ids = [m.id for m in METRICS if m.chart == CHART_GROWTH]
+    # Both mode columns, in GROWTH_MODES order, so the frontend's toggle has
+    # something to switch to. Two float columns on the same rows: +0.9 MB on
+    # disk against the 39-concept row set, and no new rows at all.
     facts_growth = facts_out.loc[
-        facts_out["concept"].isin(growth_ids), ["ticker", "concept", "end", "yoy_growth"]
+        facts_out["concept"].isin(growth_ids),
+        ["ticker", "concept", "end", *GROWTH_PERIODS],
     ].reset_index(drop=True)
 
     produced = sorted(set(metrics_long["ticker"])

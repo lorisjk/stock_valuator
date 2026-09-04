@@ -1,0 +1,409 @@
+/*
+ * Shell layout and palette.
+ *
+ * The colours are NOT invented here -- they are the ones the charts already
+ * carry. `panel.ts` in the working tree sets `paper_bgcolor`/`plot_bgcolor` to
+ * #16171d, axis and tick text to #9ca3af, titles to #f3f4f6 and grid lines to
+ * #2e303a. A light shell around dark figures would read as a rendering failure,
+ * so the shell takes the figures' palette rather than the scaffold's.
+ *
+ * That is a duplication and it is stated as one: those literals live inline in
+ * `panel.ts` and are not exported, and this item does not touch that file --
+ * the theme there is in-flight work. If it settles, these five variables are
+ * the one place the shell needs updating.
+ */
+
+.app {
+  --shell-bg: rgb(14, 17, 23);
+  --shell-panel: #1d1f27;
+  --shell-text: white;
+  --shell-strong: #f3f4f6;
+  --shell-line: #2e303a;
+  --shell-warn: #e5a94a;
+
+  display: grid;
+  grid-template-columns: 19rem 1fr;
+  min-height: 100vh;
+  background: var(--shell-bg);
+  color: var(--shell-text);
+  font: 15px/1.5 system-ui, "Segoe UI", Roboto, sans-serif;
+}
+
+.app--collapsed {
+  grid-template-columns: 0 1fr;
+}
+
+/* ------------------------------------------------------------------ sidebar */
+
+/*
+ * `.sidebar` and `.content` are pinned to explicit grid columns rather than
+ * left to auto-placement. That is load-bearing, not tidiness: a grid item with
+ * `display: none` (`.sidebar--closed`, below) is removed from the grid's item
+ * list entirely -- it does not reserve its column for later items -- so
+ * without an explicit `grid-column`, auto-placement slides `.content` into
+ * column 1 the moment the sidebar is hidden. Column 1 is `19rem` when expanded
+ * and `0` when `.app--collapsed`, so collapsing the sidebar was squeezing the
+ * *content* into a near-zero-width column: every word of the intro paragraph
+ * wrapped onto its own line, and the chart's container reported 0px wide.
+ * Confirmed by measuring a real render: `.content`'s computed width was
+ * literally `0px` after collapse, and reproduced in isolation with a two-node
+ * grid stripped of every other rule. See the report.
+ */
+.sidebar {
+  grid-column: 1;
+  border-right: 1px solid var(--shell-line);
+  background: var(--shell-panel);
+}
+
+.sidebar--closed {
+  display: none;
+}
+
+.sidebar__inner {
+  padding: 1rem 1.1rem 2rem;
+  position: sticky;
+  top: 50px;
+  display: flex; 
+  flex-direction: column;
+  gap: 11px;
+}
+
+.sidebar__close {
+  position: absolute;
+  top: -1rem;
+  right: 1.1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 0px;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  color: var(--shell-text);
+  font-size: 1.3rem;
+  line-height: 1;
+  cursor: pointer;
+  align-self: flex-end;
+}
+
+.sidebar h2 {
+  color: var(--shell-strong);
+  font-size: 1rem;
+  margin: 0.6rem 0 0.35rem;
+  font-size: 25px;
+}
+
+.sidebar hr {
+  border: 0;
+  border-top: 1px solid var(--shell-line);
+  margin: 1rem 0;
+}
+
+.radio {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.radio legend {
+  color: var(--shell-strong);
+  font-weight: 600;
+  padding: 0;
+  font-size: 25px;
+}
+
+.radio label {
+  display: block;
+  padding: 0.15rem 0;
+  cursor: pointer;
+  font-size: 18px;
+}
+
+.ticker {
+  width: 100%;
+  background: var(--shell-bg);
+  color: var(--shell-strong);
+  border: 1px solid var(--shell-line);
+  border-radius: 4px;
+  padding: 0.35rem;
+  font-size: 15px;
+}
+
+/*
+ * The as-of control (item 15). It reuses `.ticker`'s look for its date input
+ * rather than defining a second one, so the two sidebar fields cannot drift.
+ */
+.as-of__toggle {
+  display: block;
+  margin-top: 0.9rem;
+  color: var(--shell-strong);
+  cursor: pointer;
+  font-size: 17px;
+}
+
+.as-of__date {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.as-of__date > span {
+  color: var(--shell-strong);
+  font-weight: 600;
+}
+
+.as-of__date input {
+  flex: 1;
+  min-width: 0;
+  background: var(--shell-bg);
+  color: var(--shell-strong);
+  border: 1px solid var(--shell-line);
+  border-radius: 4px;
+  padding: 0.35rem;
+  font: inherit;
+}
+
+/* The native picker indicator is black-on-dark without this. */
+.as-of__date input::-webkit-calendar-picker-indicator {
+  filter: invert(0.7);
+  cursor: pointer;
+}
+
+.caption {
+  font-size: 16px;
+  opacity: 0.85;
+  margin: 0.4rem 0;
+}
+
+.caption--warn {
+  color: var(--shell-warn);
+  opacity: 1;
+}
+
+.freshness p:first-child {
+  color: var(--shell-strong);
+  font-size: 17px;
+}
+
+.ticker-combobox {
+  position: relative;
+  width: 100%;
+}
+
+.ticker-results {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  max-height: 300px;
+  overflow-y: auto;
+  background: var(--shell-panel);
+  border: 1px solid var(--shell-line);
+  border-radius: 4px;
+  z-index: 1000;
+}
+
+.ticker-option {
+  padding: 8px 12px;
+  cursor: pointer;
+  color: white;
+}
+
+.ticker-option:hover {
+  background: var(--shell-bg);
+}
+
+.ticker-option--active {
+  background: var(--shell-bg);
+}
+
+/* ------------------------------------------------------------------ content */
+
+main.content {
+  grid-column: 2;
+  height: 100vh;
+  overflow-y: auto;
+  min-width: 0;
+  padding: 0; /* kein Padding mehr hier */
+}
+
+.content__sticky {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--shell-bg);
+  padding: 1rem 3.5rem 0;
+}
+
+.content__body {
+  padding: 0 3.5rem 4rem;
+}
+
+.content__head {
+  align-items: center;
+}
+
+.content__head h1 {
+  color: var(--shell-strong);
+  font-size: 2.6rem;
+  margin: 0.4rem 0;
+}
+
+.content__head button {
+  background: var(--shell-panel);
+  color: var(--shell-strong);
+  border: 1px solid var(--shell-line);
+  border-radius: 4px;
+  font-size: 1rem;
+  padding: 0.2rem 0.5rem;
+  cursor: pointer;
+  height: fit-content;
+  position: relative;
+  top: -10px;
+  left: -50px;
+}
+
+.intro {
+  font-size: 17px;
+}
+
+
+/* --------------------------------------------------------------------- tabs */
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--shell-line);
+  margin: 1.2rem 0 1rem;
+}
+
+.tab {
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--shell-strong);
+  padding: 0.5rem 0.8rem;
+  font: inherit;
+  cursor: pointer;
+}
+
+.tab--active {
+    color: #e01e37;
+    border-bottom-color: #e01e37;
+}
+
+/* ------------------------------------------------------- notice and guard */
+
+/*
+ * A callout, not prose -- it does not inherit `.intro`'s cap and never did.
+ * It had its own separate `max-width: 62ch`, which happened to compute to the
+ * exact same pixel width as `.intro`'s (confirmed: both resolve `62ch` in the
+ * same `.app` font context), which is what made it look like the box had
+ * inherited the subtitle's constraint from a screenshot alone. It hadn't --
+ * measuring the ancestor chain showed `.content` and `.app` both carry
+ * `max-width: none`, so the two rules were always independent and only
+ * coincidentally equal. The box itself now spans `.content`'s full width, like
+ * the tabs and the chart below it; only the message text keeps a reading-width
+ * cap, on `.notice__body` specifically -- see below.
+ */
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  border: 1px solid var(--shell-line);
+  border-radius: 6px;
+  background: var(--shell-panel);
+  padding: 0.75rem 1rem;
+  margin: 0.8rem 0;
+}
+
+/*
+ * The box is full-width; the text within it is not. The current notice's own
+ * content has a 143-character line with no source line break, which at the
+ * box's full ~1200-1500px width would render as one very long unwrapped line --
+ * `62ch` (the same reading-width value `.intro` uses, reused here because it
+ * is prose in exactly the same sense) keeps the message readable regardless of
+ * how wide the surrounding callout is. `flex: 1` still lets it use the box's
+ * padding correctly and grow to fill up to that cap; it does not fight
+ * `max-width`, since flexbox clamps a flex item's final size to it.
+ */
+.notice__body {
+  white-space: pre-wrap;
+  flex: 1;
+}
+
+.notice button {
+  background: var(--shell-bg);
+  color: var(--shell-strong);
+  border: 1px solid var(--shell-line);
+  border-radius: 4px;
+  padding: 0.3rem 0.7rem;
+  font: inherit;
+}
+
+
+.notice button {
+  cursor: pointer;
+  margin-left: auto;
+}
+
+.guard,
+.loading {
+  padding: 2rem;
+  background: var(--shell-bg);
+  color: var(--shell-text);
+  min-height: 100vh;
+  font: 15px/1.5 system-ui, "Segoe UI", Roboto, sans-serif;
+}
+
+.guard h1,
+.guard h2,
+.loading h1 {
+  color: var(--shell-strong);
+}
+
+.guard__note {
+  color: var(--shell-warn);
+}
+
+.guard__detail {
+  background: var(--shell-panel);
+  border: 1px solid var(--shell-line);
+  border-radius: 4px;
+  padding: 0.6rem 0.8rem;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+/*
+ * Below this width the sidebar stops being a column and becomes an overlay --
+ * Streamlit's own default (`initial_sidebar_state="auto"`) collapses it on
+ * small screens, and the charts are already responsive while a fixed 19rem
+ * column is not. Untested in a browser; see the report.
+ */
+@media (max-width: 860px) {
+  .app,
+  .app--collapsed {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: min(19rem, 85vw);
+    z-index: 10;
+    overflow-y: auto;
+  }
+}

@@ -9,7 +9,7 @@ import plotly.express as px
 from config import (
     get_concept_candidates, is_hidden, FUNDAMENTALS_TO_PLOT, QUARTERLY_COUNTERPART, GROWTH_PANELS,
     VALUATIONS_TO_PLOT, HARMONIC_MEAN_CONCEPTS, TICKER_PROFILES, DEFAULT_PROFILE,
-    METRICS_BY_ID, CHART_VALUATION, 
+    METRICS_BY_ID, CHART_VALUATION, GROWTH_MODES,
 )
 from metrics import harmonic_mean
 
@@ -638,7 +638,13 @@ def build_growth(
     width: int | None = KEEP,
     height: int | None = KEEP,
 ) -> go.Figure | None:
-    """Build the YoY growth row. None when there is nothing to draw."""
+    """Build the growth row. None when there is nothing to draw.
+
+    `growth_column` selects the mode -- `yoy_growth` or `qoq_growth`, the two
+    columns main.add_growth_column writes. It was already a parameter before
+    there was a second column to pass to it; the default is unchanged, so every
+    existing caller and every static figure file is byte-identical.
+    """
 
     if growth_column not in facts.columns:
         print(f"[build_growth] {ticker}: column '{growth_column}' missing, nothing to build.")
@@ -676,11 +682,27 @@ def build_growth(
             ),
             row=r, col=col,
         )
-        _style_axes(fig, r, col, label, percent=True)
-        fig.add_hline(y=0, line_color="red", line_width=1, row=r, col=col)
+        # Read off the registry rather than pinned here. `percent=True` and
+        # `ref_line=0` were literals while the catalogue was ten hand-picked
+        # entries that all agreed with it; the catalogue is now 39 and the two
+        # declarations would diverge the first time one is registered with
+        # different values. The React builder already reads the registry for
+        # both (charts/growth.ts), so this is the two sides agreeing rather than
+        # happening to match.
+        metric = METRICS_BY_ID.get(concept)
+        _style_axes(fig, r, col, label, percent=bool(metric and metric.percent))
+        if metric is not None and metric.ref_line is not None:
+            fig.add_hline(y=metric.ref_line, line_color="red", line_width=1, row=r, col=col)
 
+    # The mode belongs in the title now that it is selectable: the axis labels
+    # deliberately no longer name it (config.py's growth block says why), so the
+    # title is where a reader finds out which of the two they are looking at. An
+    # unknown column falls back to the column name rather than raising -- this is
+    # a chart title, not a validation point.
+    mode = next((m for m in GROWTH_MODES if m["column"] == growth_column), None)
+    mode_label = mode["short"] if mode else growth_column
     fig.update_layout(
-        title_text=f"Growth (YoY) {ticker}",
+        title_text=f"Growth ({mode_label}) {ticker}",
         **_size(width, height, 500 * cols, 360 * rows),
         legend=dict(font=dict(size=9)),
         hovermode="x unified",

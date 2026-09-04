@@ -1,0 +1,64 @@
+/*
+ * The masking controls. Palette variables come from `.app` in shell.css -- this
+ * file defines none of its own, so the two cannot drift.
+ */
+
+.outliers {
+  margin: 0.8rem 0;
+}
+
+.outliers__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--shell-strong);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.outliers__list {
+  margin: 0.4rem 0;
+}
+
+.outliers__list > summary {
+  cursor: pointer;
+  color: var(--shell-text);
+}
+
+.outliers__head {
+  margin: 0.8rem 0 0.3rem;
+  color: var(--shell-strong);
+}
+
+/*
+ * `width: max-content` with `max-width: 100%` so a three-column table sizes to
+ * its content and scrolls inside itself rather than widening the page -- the
+ * same rule the data tab's tables use, and the same reason.
+ */
+.outliers__table {
+  width: max-content;
+  max-width: 100%;
+  display: block;
+  overflow-x: auto;
+  scrollbar-gutter: stable;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85rem;
+}
+
+.outliers__table th,
+.outliers__table td {
+  border: 1px solid var(--shell-line);
+  padding: 0.25rem 0.6rem;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.outliers__table th {
+  color: var(--shell-strong);
+  text-align: left;
+}
+
+.outliers__table td:first-child {
+  text-align: left;
+}

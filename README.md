@@ -87,7 +87,7 @@ nothing. If a figure looks wrong, the bug is for sure upstream.
 |---|---|
 | Data | the whole chain, as tables: raw facts → derived → metrics → valuation → snapshot |
 | Raw Facts | filed concepts before any metric touches them |
-| Growth (YoY) | year-over-year change in the filed figures |
+| Growth | change in the filed figures, year over year or quarter over quarter (a control on the tab) |
 | Fundamentals | business health, TTM with the quarterly series behind it |
 | Valuation | multiples over time, each with its own five-year mean and a marker for today |
 | Comparison | one metric, one line per ticker |
@@ -317,6 +317,7 @@ Tells you wheer a number rests on an assumption, the assumption is published rat
 | `ttm_source` | whether a `_TTM` value was summed from four quarters or read from one 12-month fact |
 | `ffo_gains_source` | whether FFO's real-estate-gains term was filed or imputed as zero |
 | `<field>_age_days` | a snapshot input carried forward from an earlier period, and how far back |
+| `<field>_stale_days` | a snapshot input the staleness guard **refused** to publish, and how far behind the ticker's newest period it was |
 | `avg_*_5y_n` | how many observations the five-year mean actually had |
 | `buyback_distortion_flag`, `share_count_jump_flag`, `inorganic_contaminated`, `low_tax_rate_flag`, `fcf_exceeds_ebitda` | quality flags on the periods themselves |
 | `fundamentals_stale`, `filing_likely_overdue`, `days_since_last_filing` | how current the filings are |

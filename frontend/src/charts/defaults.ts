@@ -1,13 +1,22 @@
 /**
- * What a picker starts with, and what happens to a selection when the ticker
- * changes. Pure functions over id lists -- no React, no registry lookups -- so
- * the ticker-switch rule can be verified from Node rather than by clicking.
+ * What the two controls start with, and what happens to their values when the
+ * context changes. Plain values and pure functions -- no React -- so the rules
+ * can be verified from Node rather than by clicking.
  *
- * This is the one part of the picker that is a *product* decision rather than a
- * transcription of `figures.py`, and both decisions are made here rather than
- * inside the component so there is a single place to argue with.
+ * This is the part of the UI that is a *product* decision rather than a
+ * transcription of `figures.py`, and the decisions are made here rather than
+ * inside the components so there is a single place to argue with.
+ *
+ * The picker needs a migration rule because its option set varies by ticker.
+ * **The window does not**: its range is 1-15 for every chart, ticker and
+ * profile, so a value the user sets is simply carried, and there is no
+ * `migrateYears` to go with `migrateSelection`. If item 15's as-of ever makes
+ * the range depend on the data, this is where that function would go.
  */
 import type { ChartId } from "../contracts.ts";
+import { FUNDAMENTALS_YEARS } from "./fundamentals.ts";
+import { GROWTH_YEARS } from "./growth.ts";
+import { VALUATION_YEARS } from "./valuation.ts";
 
 /**
  * The metric each tab opens on, taken from what `app.py` *meant*.
@@ -77,3 +86,44 @@ export function migrateSelection(
   if (kept.length > 0) return kept;
   return previous.length === 0 ? [] : defaultSelection(chart, offerable);
 }
+
+/* --------------------------------------------------------------- the window */
+
+/**
+ * The years slider's range, matching `st.slider("Window (years)", 1, 15, ...)`
+ * at app.py:907, :919 and :931.
+ *
+ * **The ceiling is the reference's, and it is not the data's.** Measured
+ * against the export: the frames reach back to 2005-12-31 / 2007-09-30, a span
+ * of 18.9 to 20.7 years, and a 15-year window still drops 55,972 fundamentals
+ * rows, 51,872 valuation rows and 28,321 growth rows -- 10-15% of each. It
+ * takes `years = 21` to include everything. So 15 is not "all history"; it is a
+ * choice the reference made, and this rebuild keeps it rather than inventing a
+ * setting Streamlit cannot produce. See the report -- the gap is a finding, not
+ * an accident of this range.
+ *
+ * The floor of 1 excludes exactly one value, and `years = 0` is degenerate
+ * rather than merely small: the cutoff becomes today, every period end is in
+ * the past, and all three charts return a full grid of "No Data" panels. The
+ * builders handle it without special-casing and the verification still exercises
+ * it through the API; the control simply does not offer it.
+ */
+export const YEARS_MIN = 1;
+export const YEARS_MAX = 15;
+
+/**
+ * The window each chart opens on -- **taken from the builders**, not restated.
+ *
+ * The Streamlit sliders default to 15 / 5 / 15, and `build_fundamentals`,
+ * `build_valuation` and `build_growth` default their own `years` to the same
+ * three numbers. Deriving the control's default from the builder's constant
+ * makes that agreement structural: the chart you get before touching the slider
+ * is by construction the chart the builder draws when nobody passes `years`.
+ * Restating `5` here would have made it a coincidence that holds until someone
+ * edits one of the two.
+ */
+export const DEFAULT_YEARS: Record<ChartId, number> = {
+  fundamentals: FUNDAMENTALS_YEARS,
+  valuation: VALUATION_YEARS,
+  growth: GROWTH_YEARS,
+};

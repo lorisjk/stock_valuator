@@ -264,6 +264,37 @@ Two boundaries worth keeping straight:
   business" as well as the current one — the argument `fill_scale_reference` already makes on
   the history side.
 
+### ...and it now refuses to carry one forward too far
+
+The sentence above says "reads each of its inputs through `get_latest_value`", and that was
+never the whole truth: **21 of the snapshot's fields come from `get_latest_row(metrics[...])`
+instead**, which takes the newest row of a metric frame with no age test of any kind. That is
+the path the AppLovin defect ran through — `metrics["fcf"]` is an inner merge of
+`OperatingCashFlow_TTM` and `Capex_TTM`, so when the `Capex` tag stopped in 2023 the frame did
+not gain nulls, it *ended*, and the newest row of a frame that ended in 2023 is a 2023 row.
+
+Both paths now pass through `split_stale` against `newest_period(facts)` —
+`MAX_LATEST_VALUE_LAG_DAYS`, see MDs/metrics.md for the bound and its evidence. Three things
+follow, and they are the whole of the behaviour change:
+
+- **A value more than four quarters behind the ticker's newest period is not published.** 195
+  values withheld across 149 of 607 tickers; the oldest was 5,752 days.
+- **Its dependents blank with it, for free.** Every ratio here is an expression over
+  `snap[...]` columns, so a withheld input propagates as NaN and `long.dropna(subset=["value"])`
+  removes it — 451 further values, every one traced to a withheld input, nothing traced to
+  anything else. The largest single consequence is `debt` and `cash`: 59 tickers lose `ev` and
+  with it `ev_sales`, `ev_ebitda` and `ev_fcf`.
+- **Nothing that was published moves.** 0 changed values in the universe-wide diff, and
+  `metrics_long`, `valuation_history` and the facts frame are byte-identical. This is a
+  publishing rule, not a computation.
+
+`<field>_stale_days` records the lag of a value that was withheld, next to `<field>_age_days`
+for one that was carried. Only where a number was actually withheld: a stale row that was null
+anyway would have published nothing either way. `_revenue_scale` and the share-count lookup opt
+out — the first on the argument above, the second because it already measures lag against the
+same reference (`MAX_EDGAR_SHARE_LAG_DAYS`) and has a second source to fall back on, so a guard
+there would not blank a field, it would silently switch vendors.
+
 ---
 
 ## `calculate_peer_band_flags` is anchored on the data, not the run date

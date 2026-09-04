@@ -219,6 +219,58 @@ makes.
 
 ---
 
+## The snapshot's staleness guard: a *third* question, not a tighter version of the other two
+
+`MAX_LATEST_VALUE_LAG_DAYS = 365`, `newest_period`, `split_stale`.
+
+Three different things can be wrong with "the latest value", and the project had answers to two
+of them:
+
+| question | answered by | reference |
+|---|---|---|
+| how far back past trailing nulls did this series have to be read? | `MAX_LATEST_VALUE_AGE_DAYS` | the **concept's** newest row |
+| has this filer reported recently at all? | `days_since_last_filing`, `fundamentals_stale` | today's date |
+| **has the filing moved on without this metric?** | `MAX_LATEST_VALUE_LAG_DAYS` | the **ticker's** newest period |
+
+The third has a blind spot in the first two that nothing else covers, and it is not a corner
+case. A concept whose rows *stop* has an age of **zero** — its newest row is its value — so the
+age bound cannot see it; and the filer keeps filing, so the recency flags say "current".
+AppLovin is the worked example: `Capex` ends at 2023-12-31, the rest of its filing runs to
+2026-06-30, `metrics["fcf"]` is an inner merge and therefore simply *ends* in 2023, and
+`get_latest_row` returned a 2023 numerator under a 2026 market cap — P/FCF 99.96 where the true
+figure is near 24. `days_since_last_filing` was 66 and `fundamentals_stale` 0.
+
+Measured across 607 tickers: **115 of the 149 tickers with a withheld value have
+`fundamentals_stale = 0`**, and 94 tickers flagged stale lose nothing. The two questions are
+close to orthogonal.
+
+**The reference is relative, deliberately.** A filer who has not reported since March moves its
+own newest period with it and is never punished twice — the argument `MAX_EDGAR_SHARE_LAG_DAYS`
+already makes for share counts, which is the one place in the codebase that used this reference
+before. It is also what makes the guard safe to apply to raw point-in-time facts
+(`StockholdersEquity`, `LongTermDebt`, `CashAndEquivalents`) as well as to derived `_TTM`
+figures: the thing it detects is *divergence between one metric and the rest of the filing*, not
+age.
+
+**The bound.** Over 9,654 snapshot lookups the lags form a quarterly lattice — 87–92, 179–185,
+273–280, 364–365 — and then **nothing at all between 366 and 453**, resuming at 454 and running
+out to 5,752 days. Every bound in [365, 453] withholds the identical 375 values, verified by
+re-running the acceptance harness at 366 and at 453 and getting the same 11,108/11,108. 365 is
+taken because it is the same twelve-month definition `MAX_LATEST_VALUE_AGE_DAYS` uses, not
+because it is round. Below it the bound starts cutting into annual-cadence series, which sit a
+full year behind by construction for one quarter of every year: 36 of the 114 kept lookups are
+annual, and the kept set sits a median of **0.99 of its own reporting period** behind while the
+withheld set sits **17.9** periods behind.
+
+**Two lookup paths, one guard.** `get_latest_value` skips trailing nulls; `get_latest_row` takes
+the newest row whatever it holds. They fail differently on a null but identically on a series
+that stops, so `split_stale` is called from `build_snapshot` for both rather than being pushed
+into either. It returns `(publishable, withheld)`, and the withheld half carries
+`value_lag_days` so the snapshot can publish `<field>_stale_days` — a blank that says why it is
+blank. Full derivation in `snapshot_staleness_guard_report.md`.
+
+---
+
 ## Pandas patterns worth remembering
 
 ### `groupby(...).shift(n)` and `groupby(...).rolling(n)`

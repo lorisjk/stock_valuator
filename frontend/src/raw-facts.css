@@ -1,0 +1,164 @@
+/*
+ * The raw-facts tab's controls. Palette variables come from `.app` in shell.css
+ * -- this file defines none of its own, so the two cannot drift.
+ */
+
+.raw-facts > p {
+  margin: 0.6rem 0;
+}
+
+.raw-facts__derived {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--shell-strong);
+  cursor: pointer;
+}
+
+.raw-facts__picker {
+  border: 1px solid var(--shell-line);
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem;
+  margin: 0.8rem 0;
+}
+
+.raw-facts__picker legend {
+  color: var(--shell-strong);
+}
+
+/* =========================
+   CONCEPT COMBOBOX
+   ========================= */
+
+.raw-facts__combobox {
+  position: relative;
+  width: 100%;
+  max-width: 500px;
+}
+
+.raw-facts__combobox-trigger {
+  width: 100%;
+  font-size: 16px;
+  box-sizing: border-box;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  padding: 8px 10px;
+
+  border: 1px solid var(--shell-line);
+  border-radius: 4px;
+
+  background: var(--shell-bg);
+
+  color: var(--shell-strong);
+
+  cursor: pointer;
+  text-align: left;
+}
+
+.raw-facts__combobox-trigger:hover {
+  border-color: var(--shell-strong);
+}
+
+.raw-facts__combobox-menu {
+  position: absolute;
+
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+
+  z-index: 1000;
+
+  background: var(--shell-bg);
+  border: 1px solid var(--shell-line);
+  border-radius: 4px;
+
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.raw-facts__search {
+  padding: 8px;
+  border-bottom: 1px solid var(--shell-line);
+}
+
+.raw-facts__search input {
+  width: 100%;
+  box-sizing: border-box;
+
+  padding: 7px 9px;
+
+  border: 1px solid var(--shell-line);
+  border-radius: 3px;
+
+  background: var(--shell-bg);
+  color: var(--shell-strong);
+}
+
+.raw-facts__search input:focus {
+  outline: none;
+  border-color: var(--shell-strong);
+}
+
+/* Liste innerhalb der geöffneten Combobox */
+.raw-facts__options {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* Einzelne Concept-Zeile */
+.raw-facts__option {
+  display: flex;
+  align-items: center;
+
+  gap: 8px;
+
+  padding: 7px 10px;
+
+  cursor: pointer;
+}
+
+.raw-facts__option:hover {
+  background: var(--shell-hover);
+}
+
+.raw-facts__option input {
+  flex-shrink: 0;
+}
+
+.raw-facts__option code {
+  font-size: 0.9em;
+}
+
+.raw-facts__empty {
+  padding: 12px;
+  color: var(--shell-muted);
+}
+
+
+/* =========================
+   WINDOW SLIDER
+   ========================= */
+
+.raw-facts__field {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.7rem 0;
+}
+
+.raw-facts__field > span {
+  color: var(--shell-strong);
+  font-weight: 600;
+  min-width: 8rem;
+}
+
+.raw-facts__field input[type="range"] {
+  max-width: 18rem;
+}
+
+.raw-facts__field output {
+  font-variant-numeric: tabular-nums;
+  min-width: 2ch;
+}
