@@ -86,7 +86,10 @@ function useLocation(): [Location, (next: Location) => void] {
 function Workspace() {
   const { registry, meta, notice, universe, error, loading } = useData();
   const [location, go] = useLocation();
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+const [sidebarOpen, setSidebarOpen] = useState(() => {
+  if (typeof window === "undefined") return true;
+  return window.innerWidth > 860;
+});
   // app.py:867's `as_of`, and it lives here for the reason it lives in the
   // sidebar there: one date reaches two tabs. Unchecking sets it back to null
   // and forgets the date, which is what Streamlit's unkeyed `st.date_input`
