@@ -24,8 +24,17 @@
  *   - Switching away from a ticker and back **restores** the original pick. A
  *     selection migrated in place would have been overwritten at the first
  *     switch, with no way for the user to get it back.
+ *
+ * **All hooks run before any early return.** `isFullscreen`'s state and its
+ * `fullscreenchange` effect used to sit after the `!build` / `error` guards --
+ * harmless for AAPL/MSFT, where neither guard ever fires, but a ticker whose
+ * frames fail to load (or a chart id with no builder) takes the early return on
+ * a later render than the first, which changes the hook count between renders
+ * and throws React error #300 ("rendered fewer hooks than expected"). Every
+ * hook is declared up front now, and the two guards are the last thing before
+ * the JSX so no branch above them can skip a hook the next render still calls.
  */
-import { useMemo, useState, useEffect} from "react";
+import { useMemo, useState, useEffect } from "react";
 import Plot from "react-plotly.js";
 import MetricPicker from "./MetricPicker.tsx";
 import WindowSlider from "./WindowSlider.tsx";
@@ -169,6 +178,28 @@ export default function ChartView({
   // second, silent owner.
   const [growthMode, setGrowthMode] = useState<string | undefined>(undefined);
 
+  // Fullscreen toggle for the plot. Declared here, with every other hook, and
+  // not after the `!build`/`error` guards below -- see the module docstring for
+  // why that ordering is load-bearing rather than tidiness.
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(document.fullscreenElement !== null);
+
+      // Plotly must recompute its size after the transition.
+      setTimeout(() => {
+        window.dispatchEvent(new Event("resize"));
+      }, 100);
+    };
+
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+    };
+  }, []);
+
   // The option list, from `selectMetricIds(registry, chart, ticker, null)` --
   // the same call every builder makes for its own narrowing, not a second
   // implementation of `is_hidden`. It is needed here as well as inside the
@@ -225,6 +256,8 @@ export default function ChartView({
   const notice = chart === "valuation" && emptyPanels.length > 0;
   const { facts } = useTickerFacts(ticker, notice);
 
+  // Every hook above this line runs on every render, regardless of `build` or
+  // `error` -- see the module docstring. Nothing below may declare a hook.
   if (!build) return <p role="status">The {LABELS[chart]} chart is not rebuilt yet.</p>;
   if (error) {
     return (
@@ -234,33 +267,8 @@ export default function ChartView({
     );
   }
 
-  // The picker renders before the frames arrive: its options come from the
-  // registry, which is already loaded, so a ticker switch does not blank the
-  // control while the per-ticker file is in flight.
-  const [isFullscreen, setIsFullscreen] = useState(false);
-
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      setIsFullscreen(document.fullscreenElement !== null);
-
-      // Plotly muss seine Größe nach dem Wechsel neu berechnen
-      setTimeout(() => {
-        window.dispatchEvent(new Event("resize"));
-      }, 100);
-    };
-
-    document.addEventListener("fullscreenchange", handleFullscreenChange);
-
-    return () => {
-      document.removeEventListener(
-        "fullscreenchange",
-        handleFullscreenChange,
-      );
-    };
-  }, []);
   return (
     <section>
-      
       <MetricPicker
         chart={chart}
         offerable={offerable}
@@ -332,60 +340,60 @@ export default function ChartView({
               : `No ${LABELS[chart]} data for ${ticker}.`}
         </p>
       ) : (
-<div
-  style={{
-    width: isFullscreen ? "100vw" : "100%",
-    height: isFullscreen
-      ? "100vh"
-      : `${result.figure.layout.height ?? 600}px`,
-    background: "var(--app-bg, #0e1117)",
-    position: "relative",
-  }}
->
-  <Plot
-    data={result.figure.data as never}
-    layout={{
-      ...result.figure.layout,
-      autosize: true,
-    } as never}
-    style={{
-      width: "100%",
-      height: "100%",
-    }}
-    useResizeHandler
-    config={{
-      displayModeBar: true,
-      displaylogo: false,
-      modeBarButtonsToAdd: [
-        {
-          name: "Fullscreen",
-          title: isFullscreen ? "Exit fullscreen" : "Fullscreen",
-          icon: {
-            width: 24,
-            height: 24,
-            path: `
+        <div
+          style={{
+            width: isFullscreen ? "100vw" : "100%",
+            height: isFullscreen ? "100vh" : `${result.figure.layout.height ?? 600}px`,
+            background: "var(--app-bg, #0e1117)",
+            position: "relative",
+          }}
+        >
+          <Plot
+            data={result.figure.data as never}
+            layout={
+              {
+                ...result.figure.layout,
+                autosize: true,
+              } as never
+            }
+            style={{
+              width: "100%",
+              height: "100%",
+            }}
+            useResizeHandler
+            config={{
+              displayModeBar: true,
+              displaylogo: false,
+              modeBarButtonsToAdd: [
+                {
+                  name: "Fullscreen",
+                  title: isFullscreen ? "Exit fullscreen" : "Fullscreen",
+                  icon: {
+                    width: 24,
+                    height: 24,
+                    path: `
               M3 3h7v2H5v5H3V3z
               M21 3v7h-2V5h-5V3h7z
               M3 21v-7h2v5h5v2H3z
               M21 21h-7v-2h5v-5h2v7z
             `,
-          },
-          click: (gd: HTMLElement) => {
-            const chartContainer = gd.parentElement;
+                  },
+                  click: (gd: HTMLElement) => {
+                    const chartContainer = gd.parentElement;
 
-            if (!chartContainer) return;
+                    if (!chartContainer) return;
 
-            if (document.fullscreenElement) {
-              void document.exitFullscreen();
-            } else {
-              void chartContainer.requestFullscreen();
-            }
-          },
-        },
-      ],
-    }}
-  />
-</div>
+                    if (document.fullscreenElement) {
+                      void document.exitFullscreen();
+                    } else {
+                      void chartContainer.requestFullscreen();
+                    }
+                  },
+                },
+              ],
+            }}
+          />
+        </div>
       )}
 
       {/* app.py:963. Between the chart and the outlier caption, which is where
